@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axis-agent-manager"
+version = "1.0.0"
+description = "Chat with and run agents on a local model served by Ollama or llama.cpp"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Hyrum Hendrickson" }]
+dependencies = []  # standard library only
+
+[project.scripts]
+axis = "axis.cli:main"
+
+[tool.setuptools]
+packages = ["axis"]
