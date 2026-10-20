@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axis-agent-manager"
+version = "0.1.0"
+description = "Axis lightweight AI agent manager for Ollama"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Axis" }]
+dependencies = []
+
+[project.scripts]
+axis = "axis.cli:main"
+
+[tool.setuptools]
+packages = ["axis"]
