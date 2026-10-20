@@ -9,6 +9,12 @@ Routes:
   GET    /api/agents/<name>   one agent
   PUT    /api/agents/<name>   update (or rename) an agent
   DELETE /api/agents/<name>   delete an agent
+  GET    /api/agents/<name>/files        files in the agent's folder
+  POST   /api/agents/<name>/open-folder  show the folder in Explorer/Finder
+  GET    /api/skills          list skills (built-in and custom)
+  POST   /api/skills          create a custom skill
+  PUT    /api/skills/<id>     update a custom skill
+  DELETE /api/skills/<id>     delete a custom skill (and remove it from agents)
   POST   /api/chat            stream a reply as newline-delimited JSON
 """
 
@@ -16,12 +22,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
-from . import __version__, agents, backend
+from . import __version__, agents, backend, runner, skills
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
@@ -109,6 +117,29 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(200, [a.to_dict() for a in agents.list_all()])
                 if method == "POST":
                     return self._json(201, agents.create(self._body()).to_dict())
+            if path.startswith("/api/agents/") and path.endswith("/files") and method == "GET":
+                agent = agents.load(urllib.parse.unquote(path[len("/api/agents/"):-len("/files")]))
+                return self._json(200, {"workspace": str(agent.workspace), "files": agents.list_workspace(agent)})
+            if path.startswith("/api/agents/") and path.endswith("/open-folder") and method == "POST":
+                agent = agents.load(urllib.parse.unquote(path[len("/api/agents/"):-len("/open-folder")]))
+                agent.workspace.mkdir(parents=True, exist_ok=True)
+                open_folder(agent.workspace)
+                return self._json(200, {"opened": str(agent.workspace)})
+            if path == "/api/skills":
+                if method == "GET":
+                    return self._json(200, skills.list_all())
+                if method == "POST":
+                    return self._json(201, skills.create(self._body()))
+            if path.startswith("/api/skills/"):
+                skill_id = urllib.parse.unquote(path[len("/api/skills/"):])
+                if method == "GET":
+                    return self._json(200, skills.get(skill_id))
+                if method == "PUT":
+                    return self._json(200, skills.update(skill_id, self._body()))
+                if method == "DELETE":
+                    skills.delete(skill_id)
+                    agents.remove_skill_everywhere(skill_id)
+                    return self._json(200, {"deleted": skill_id})
             if path.startswith("/api/agents/"):
                 name = urllib.parse.unquote(path[len("/api/agents/"):])
                 if method == "GET":
@@ -121,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and path == "/api/chat":
                 return self._chat()
             return self._error(404, "Not found.")
-        except agents.AgentError as exc:
+        except (agents.AgentError, skills.SkillError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError):
@@ -180,7 +211,8 @@ class Handler(BaseHTTPRequestHandler):
             requested = body.get("model") or (agent.model if agent else "") or None
             model = backend.resolve_model(conn, requested)
             emit({"model": model})
-            backend.chat(conn, model, messages, on_token=lambda t: emit({"t": t}))
+            runner.reply(conn, model, messages, emit,
+                         tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None)
             emit({"done": True})
         except ClientGone:
             return
@@ -190,6 +222,15 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"error": message})
             except ClientGone:
                 return
+
+
+def open_folder(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def find_running(port: int) -> bool:

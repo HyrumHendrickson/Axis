@@ -1,12 +1,17 @@
 """Agent storage and prompt assembly.
 
-Each agent is saved as ~/Axis/agents/<name>/agent.json and holds:
+Each agent lives in ~/Axis/agents/<name>/:
 
+    agent.json   settings
+    workspace/   the agent's own folder; every file it makes is saved here
+
+Settings:
 * system_prompt  who the agent is (sent as the system message)
 * config         a list of instructions appended to every message you send
-* skills         named instruction blocks; enabled skills are added to the
-                 system message, disabled ones are kept but not sent
+* skills         ids of skills from the skill library (see skills.py)
 * model          preferred model ("" means whichever model is loaded)
+
+Deleting an agent deletes its whole folder, including the workspace.
 """
 
 from __future__ import annotations
@@ -20,6 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import skills as skill_lib
+from .paths import axis_home
+
 DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_TEXT = 20000
@@ -28,11 +36,6 @@ MAX_ITEMS = 100
 
 class AgentError(Exception):
     pass
-
-
-def axis_home() -> Path:
-    override = os.environ.get("AXIS_HOME")
-    return Path(override).expanduser() if override else Path.home() / "Axis"
 
 
 def agents_root() -> Path:
@@ -61,32 +64,33 @@ def _text(value: Any, label: str, limit: int = MAX_TEXT) -> str:
 
 
 @dataclass
-class Skill:
-    name: str
-    instructions: str
-    enabled: bool = True
-
-
-@dataclass
 class Agent:
     name: str
     system_prompt: str = DEFAULT_PROMPT
     model: str = ""
     config: List[str] = field(default_factory=list)
-    skills: List[Skill] = field(default_factory=list)
+    skills: List[str] = field(default_factory=list)
     created: str = ""
 
     @property
     def folder(self) -> Path:
         return agents_root() / self.name
 
+    @property
+    def workspace(self) -> Path:
+        return self.folder / "workspace"
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["workspace"] = str(self.workspace)
+        return data
 
     def save(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.workspace.mkdir(exist_ok=True)
+        data = asdict(self)
         tmp = self.folder / "agent.json.tmp"
-        tmp.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.replace(tmp, self.folder / "agent.json")
 
 
@@ -104,19 +108,14 @@ def _apply(agent: Agent, data: Dict[str, Any]) -> None:
     if "skills" in data:
         items = data["skills"]
         if not isinstance(items, list) or len(items) > MAX_ITEMS:
-            raise AgentError(f"Skills must be a list of at most {MAX_ITEMS} skills.")
-        skills = []
-        for raw in items:
-            if not isinstance(raw, dict):
-                raise AgentError("Each skill needs a name and instructions.")
-            name = _text(raw.get("name"), "Skill name", 100)
-            instructions = _text(raw.get("instructions"), "Skill instructions")
-            if not name and not instructions:
-                continue
-            if not name:
-                raise AgentError("Every skill needs a name.")
-            skills.append(Skill(name, instructions, bool(raw.get("enabled", True))))
-        agent.skills = skills
+            raise AgentError(f"Skills must be a list of at most {MAX_ITEMS} skill ids.")
+        chosen: List[str] = []
+        for skill_id in items:
+            if not isinstance(skill_id, str) or not skill_lib.exists(skill_id):
+                raise AgentError(f"Unknown skill '{skill_id}'. It may have been deleted; reload the page.")
+            if skill_id not in chosen:
+                chosen.append(skill_id)
+        agent.skills = chosen
 
 
 def create(data: Dict[str, Any]) -> Agent:
@@ -141,10 +140,27 @@ def load(name: str) -> Agent:
     if not isinstance(data, dict):
         raise AgentError(f"{path} is not a valid agent file.")
     agent = Agent(name=name, created=str(data.get("created") or ""))
+    raw_skills = data.get("skills") or []
+    migrated = False
+    if isinstance(raw_skills, list) and any(isinstance(x, dict) for x in raw_skills):
+        # Axis 2.0 stored skills inside each agent; move them into the library.
+        ids = []
+        for item in raw_skills:
+            if isinstance(item, dict):
+                new_id = skill_lib.find_or_create(str(item.get("name") or ""), str(item.get("instructions") or ""))
+                if new_id and item.get("enabled", True):
+                    ids.append(new_id)
+            elif isinstance(item, str):
+                ids.append(item)
+        raw_skills, migrated = ids, True
+    data = dict(data)
+    data["skills"] = [x for x in raw_skills if isinstance(x, str) and skill_lib.exists(x)] if isinstance(raw_skills, list) else []
     try:
         _apply(agent, {k: data[k] for k in ("system_prompt", "model", "config", "skills") if k in data})
     except AgentError as exc:
         raise AgentError(f"{path}: {exc}") from exc
+    if migrated:
+        agent.save()
     return agent
 
 
@@ -209,10 +225,12 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]
         return messages
 
     system = agent.system_prompt
-    active = [s for s in agent.skills if s.enabled]
-    if active:
+    chosen = [skill_lib.get(i) for i in agent.skills if skill_lib.exists(i)]
+    if chosen:
         system += "\n\nYou have the following skills. Use them when relevant.\n"
-        system += "\n".join(f"\n## {s.name}\n{s.instructions}" for s in active)
+        system += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
+    if tool_names(agent):
+        system += "\n\n" + skill_lib.WORKSPACE_NOTE
 
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
@@ -221,3 +239,42 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]
             "content": f"{messages[-1]['content']}\n\n---\nFollow these instructions:\n{rules}",
         }
     return [{"role": "system", "content": system}] + messages
+
+
+def tool_names(agent: Optional[Agent]) -> List[str]:
+    """The actions an agent may take, from its built-in skills."""
+    if agent is None:
+        return []
+    names: List[str] = []
+    for skill_id in agent.skills:
+        if skill_id in skill_lib.BUILTIN_IDS:
+            for t in skill_lib.get(skill_id)["tools"]:
+                if t not in names:
+                    names.append(t)
+    return names
+
+
+def remove_skill_everywhere(skill_id: str) -> None:
+    for agent in list_all():
+        if skill_id in agent.skills:
+            agent.skills = [s for s in agent.skills if s != skill_id]
+            agent.save()
+
+
+def list_workspace(agent: Agent, limit: int = 300) -> List[Dict[str, Any]]:
+    root = agent.workspace
+    if not root.is_dir():
+        return []
+    files: List[Dict[str, Any]] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != ".axis-tmp")
+        for f in sorted(filenames):
+            full = Path(dirpath) / f
+            try:
+                size = full.stat().st_size
+            except OSError:
+                continue
+            files.append({"path": full.relative_to(root).as_posix(), "size": size})
+            if len(files) >= limit:
+                return files
+    return files

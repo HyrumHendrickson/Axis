@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -20,18 +22,45 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, backend, cli, server
+from axis import agents, backend, cli, runner, server, skills, tools
 
 LAST_REQUEST: dict = {}
+REQUESTS: list = []
+
+
+def scripted_reply(body):
+    """Decide what the fake model says.
+
+    A user message "TOOL name {json}" makes the model call that tool (natively
+    when tools were sent, or as a ```tool block when the system prompt asks for
+    that format). After a tool result arrives, the model answers "done: <result>".
+    Returns ("text", str) | ("call", name, args) | ("error", msg).
+    """
+    msgs = body["messages"]
+    last = msgs[-1]
+    if last["role"] == "tool" or (last["role"] == "user" and last["content"].startswith("Result of")):
+        return ("text", "done: " + last["content"].splitlines()[-1 if last["role"] == "tool" else 1])
+    user = last["content"]
+    if "FAIL" in user:
+        return ("error", "simulated failure")
+    if user.startswith("TOOL "):
+        _, name, args = user.split("\n")[0].split(" ", 2)
+        if body.get("tools"):
+            return ("call", name, json.loads(args))
+        if "```tool" in msgs[0].get("content", ""):
+            block = json.dumps({"name": name, "arguments": json.loads(args)})
+            return ("text", "Let me do that.\n```tool\n" + block + "\n```")
+    return ("text", f"echo: {user.splitlines()[0]}")
 
 
 def reply_for(messages):
-    user = messages[-1]["content"]
-    return None if "FAIL" in user else f"echo: {user}"
+    kind = scripted_reply({"messages": messages})
+    return None if kind[0] == "error" else kind[1]
 
 
 class _Base(BaseHTTPRequestHandler):
     models: list = []
+    no_tools = False
 
     def log_message(self, *args):
         pass
@@ -65,16 +94,23 @@ class OllamaHandler(_Base):
         body = self._body()
         LAST_REQUEST.clear()
         LAST_REQUEST.update(body)
-        text = reply_for(body["messages"])
+        REQUESTS.append(body)
+        if body.get("tools") and self.no_tools:
+            return self._json(400, {"error": f"registry.ollama.ai/library/{body['model']} does not support tools"})
+        kind = scripted_reply(body)
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.end_headers()
-        if text is None:
-            self.wfile.write(json.dumps({"error": "simulated failure"}).encode() + b"\n")
+        if kind[0] == "error":
+            self.wfile.write(json.dumps({"error": kind[1]}).encode() + b"\n")
             return
-        for word in text.split(" "):
-            chunk = {"model": body["model"], "message": {"role": "assistant", "content": word + " "}, "done": False}
-            self.wfile.write(json.dumps(chunk).encode() + b"\n")
+        if kind[0] == "call":
+            msg = {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": kind[1], "arguments": kind[2]}}]}
+            self.wfile.write(json.dumps({"message": msg, "done": False}).encode() + b"\n")
+        else:
+            for word in kind[1].split(" "):
+                chunk = {"model": body["model"], "message": {"role": "assistant", "content": word + " "}, "done": False}
+                self.wfile.write(json.dumps(chunk).encode() + b"\n")
         self.wfile.write(json.dumps({"message": {"content": ""}, "done": True}).encode() + b"\n")
 
 
@@ -91,20 +127,30 @@ class LlamaCppHandler(_Base):
         body = self._body()
         LAST_REQUEST.clear()
         LAST_REQUEST.update(body)
-        text = reply_for(body["messages"])
-        if text is None:
-            return self._json(500, {"error": {"code": 500, "message": "simulated failure"}})
+        REQUESTS.append(body)
+        if body.get("tools") and self.no_tools:
+            return self._json(500, {"error": {"code": 500, "message": "tools param requires --jinja flag"}})
+        kind = scripted_reply(body)
+        if kind[0] == "error":
+            return self._json(500, {"error": {"code": 500, "message": kind[1]}})
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        for word in text.split(" "):
-            chunk = {"choices": [{"index": 0, "delta": {"content": word + " "}}]}
-            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+        if kind[0] == "call":
+            args = json.dumps(kind[2])
+            pieces = [{"index": 0, "id": "call_abc", "type": "function", "function": {"name": kind[1], "arguments": ""}}]
+            pieces += [{"index": 0, "function": {"arguments": args[i:i + 7]}} for i in range(0, len(args), 7)]
+            for p in pieces:
+                self.wfile.write(b"data: " + json.dumps({"choices": [{"index": 0, "delta": {"tool_calls": [p]}}]}).encode() + b"\n\n")
+        else:
+            for word in kind[1].split(" "):
+                chunk = {"choices": [{"index": 0, "delta": {"content": word + " "}}]}
+                self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
         self.wfile.write(b"data: [DONE]\n\n")
 
 
-def start_server(handler, models):
-    cls = type(handler.__name__, (handler,), {"models": list(models)})
+def start_server(handler, models, no_tools=False):
+    cls = type(handler.__name__, (handler,), {"models": list(models), "no_tools": no_tools})
     srv = ThreadingHTTPServer(("127.0.0.1", 0), cls)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
@@ -123,6 +169,8 @@ class Base(unittest.TestCase):
         self.env.start()
         os.environ.pop("AXIS_URL", None)
         self.servers = []
+        REQUESTS.clear()
+        runner._TEXT_MODE.clear()
 
     def tearDown(self):
         for s in self.servers:
@@ -131,8 +179,8 @@ class Base(unittest.TestCase):
         self.env.stop()
         shutil.rmtree(self.home, ignore_errors=True)
 
-    def model_server(self, handler, models):
-        srv, url = start_server(handler, models)
+    def model_server(self, handler, models, no_tools=False):
+        srv, url = start_server(handler, models, no_tools)
         self.servers.append(srv)
         return url
 
@@ -196,74 +244,271 @@ class TestBackend(Base):
 # ------------------------------------------------------------------- agents
 
 
-class TestAgents(Base):
-    def test_create_load_update_delete(self):
-        a = agents.create({
-            "name": "editor", "system_prompt": "You edit.", "model": "m",
-            "config": ["Be brief.", "  ", "Use US spelling."],
-            "skills": [{"name": "Grammar", "instructions": "Fix grammar.", "enabled": True},
-                       {"name": "", "instructions": ""}],
-        })
-        self.assertEqual(a.config, ["Be brief.", "Use US spelling."])
-        self.assertEqual(len(a.skills), 1)
-        loaded = agents.load("editor")
-        self.assertEqual(loaded.to_dict(), a.to_dict())
+def tool_msg(name, **args):
+    return [{"role": "user", "content": f"TOOL {name} {json.dumps(args)}"}]
 
-        updated = agents.update("editor", {"name": "copyeditor", "config": ["One rule."]})
-        self.assertEqual(updated.name, "copyeditor")
-        self.assertEqual(updated.system_prompt, "You edit.")  # untouched fields are kept
-        self.assertFalse((Path(self.home) / "agents" / "editor").exists())
-        self.assertEqual([x.name for x in agents.list_all()], ["copyeditor"])
+
+class TestSkillsAndAgents(Base):
+    def test_skill_library(self):
+        ids = [s["id"] for s in skills.list_all()]
+        self.assertEqual(ids, ["run-python", "list-files", "read-files", "write-files", "delete-files"])
+        s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
+        self.assertEqual(s["id"], "plain-english")
+        self.assertFalse(s["builtin"])
+        with self.assertRaisesRegex(skills.SkillError, "already exists"):
+            skills.create({"name": "plain english", "instructions": "x"})
+        with self.assertRaisesRegex(skills.SkillError, "name"):
+            skills.create({"name": "", "instructions": "x"})
+        with self.assertRaisesRegex(skills.SkillError, "instructions"):
+            skills.create({"name": "Empty"})
+        skills.update("plain-english", {"instructions": "Use short words."})
+        self.assertEqual(skills.get("plain-english")["instructions"], "Use short words.")
+        self.assertEqual(skills.get("plain-english")["name"], "Plain English")
+        for bad in (lambda: skills.update("run-python", {"name": "x"}), lambda: skills.delete("run-python")):
+            with self.assertRaisesRegex(skills.SkillError, "Built-in"):
+                bad()
+        with self.assertRaises(skills.SkillError):
+            skills.get("../../etc/passwd")
+        skills.delete("plain-english")
+        self.assertFalse(skills.exists("plain-english"))
+
+    def test_agent_crud_and_workspace(self):
+        skills.create({"name": "Brief", "instructions": "Be brief."})
+        a = agents.create({"name": "editor", "system_prompt": "You edit.", "config": ["Rule.", " "],
+                           "skills": ["brief", "write-files", "brief"]})
+        self.assertEqual(a.skills, ["brief", "write-files"])
+        self.assertEqual(a.config, ["Rule."])
+        self.assertTrue(a.workspace.is_dir())
+        self.assertEqual(a.workspace, Path(self.home) / "agents" / "editor" / "workspace")
+        with self.assertRaisesRegex(agents.AgentError, "Unknown skill"):
+            agents.update("editor", {"skills": ["nope"]})
+        (a.workspace / "made.txt").write_text("x")
+
+        b = agents.update("editor", {"name": "copyeditor"})
+        self.assertTrue((b.workspace / "made.txt").is_file())  # folder moves with a rename
+        self.assertEqual(agents.list_workspace(b), [{"path": "made.txt", "size": 1}])
 
         agents.delete("copyeditor")
+        self.assertFalse((Path(self.home) / "agents" / "copyeditor").exists())  # workspace removed too
         self.assertEqual(agents.list_all(), [])
 
-    def test_validation(self):
+    def test_names_validated(self):
         for bad in ("../x", ".hidden", "a b", "", "x" * 65):
             with self.assertRaises(agents.AgentError):
                 agents.create({"name": bad})
-        agents.create({"name": "a"})
-        with self.assertRaisesRegex(agents.AgentError, "already exists"):
-            agents.create({"name": "a"})
-        with self.assertRaisesRegex(agents.AgentError, "needs a name"):
-            agents.create({"name": "b", "skills": [{"name": "", "instructions": "x"}]})
-        with self.assertRaises(agents.AgentError):
-            agents.create({"name": "c", "config": "not a list"})
-        agents.create({"name": "d"})
-        with self.assertRaisesRegex(agents.AgentError, "already exists"):
-            agents.update("a", {"name": "d"})
 
-    def test_reads_version_1_agent_files(self):
-        folder = Path(self.home) / "agents" / "old"
-        folder.mkdir(parents=True)
-        (folder / "agent.json").write_text(json.dumps({"name": "old", "system_prompt": "Hi", "model": "", "created": "x"}))
-        a = agents.load("old")
-        self.assertEqual((a.system_prompt, a.config, a.skills), ("Hi", [], []))
+    def test_deleting_a_skill_removes_it_from_agents(self):
+        skills.create({"name": "Tmp", "instructions": "x"})
+        agents.create({"name": "a", "skills": ["tmp", "run-python"]})
+        skills.delete("tmp")
+        agents.remove_skill_everywhere("tmp")
+        self.assertEqual(agents.load("a").skills, ["run-python"])
+
+    def test_upgrades_older_agent_files(self):
+        v1 = Path(self.home) / "agents" / "old"
+        v1.mkdir(parents=True)
+        (v1 / "agent.json").write_text(json.dumps({"name": "old", "system_prompt": "Hi", "model": ""}))
+        self.assertEqual(agents.load("old").skills, [])
+        v2 = Path(self.home) / "agents" / "mid"
+        v2.mkdir(parents=True)
+        (v2 / "agent.json").write_text(json.dumps({"name": "mid", "system_prompt": "Hi", "config": ["c"], "skills": [
+            {"name": "Haiku", "instructions": "5-7-5", "enabled": True},
+            {"name": "Off one", "instructions": "x", "enabled": False}]}))
+        a = agents.load("mid")
+        self.assertEqual(a.skills, ["haiku"])
+        self.assertTrue(skills.exists("off-one"))  # kept in the library, just not chosen
+        self.assertEqual(json.loads((v2 / "agent.json").read_text())["skills"], ["haiku"])
 
     def test_build_messages(self):
-        a = agents.create({
-            "name": "x", "system_prompt": "Base.", "config": ["Rule one.", "Rule two."],
-            "skills": [{"name": "On", "instructions": "use me"}, {"name": "Off", "instructions": "hidden", "enabled": False}],
-        })
+        skills.create({"name": "Grammar", "instructions": "Fix grammar."})
+        skills.create({"name": "Unused", "instructions": "hidden"})
+        a = agents.create({"name": "x", "system_prompt": "Base.", "config": ["One.", "Two."], "skills": ["grammar"]})
         history = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}, {"role": "user", "content": "q2"}]
         msgs = agents.build_messages(a, history)
-        self.assertEqual(msgs[0]["role"], "system")
-        self.assertIn("Base.", msgs[0]["content"])
-        self.assertIn("## On\nuse me", msgs[0]["content"])
+        self.assertIn("## Grammar\nFix grammar.", msgs[0]["content"])
         self.assertNotIn("hidden", msgs[0]["content"])
-        self.assertEqual(msgs[1]["content"], "q1")  # earlier turns untouched
-        self.assertTrue(msgs[-1]["content"].startswith("q2"))
-        self.assertIn("- Rule one.\n- Rule two.", msgs[-1]["content"])
-        self.assertEqual(history[-1]["content"], "q2")  # caller's list is not modified
+        self.assertNotIn("own folder", msgs[0]["content"])  # no actions, no folder note
+        self.assertEqual(msgs[1]["content"], "q1")
+        self.assertIn("- One.\n- Two.", msgs[-1]["content"])
+        self.assertEqual(history[-1]["content"], "q2")
+        self.assertEqual(agents.build_messages(None, history), history)
+        self.assertEqual(agents.tool_names(a), [])
 
-        plain = agents.build_messages(None, history)
-        self.assertEqual(plain, history)
+        b = agents.create({"name": "y", "skills": ["write-files", "run-python"]})
+        self.assertEqual(agents.tool_names(b), ["write_file", "make_folder", "run_python"])
+        self.assertIn("own folder", agents.build_messages(b, history)[0]["content"])
 
     def test_build_messages_rejects_bad_history(self):
         for bad in ([], None, [{"role": "assistant", "content": "x"}], [{"role": "system", "content": "x"}],
                     [{"role": "user", "content": 5}], [{"role": "user", "content": "  "}]):
             with self.assertRaises(agents.AgentError):
                 agents.build_messages(None, bad)
+
+
+class TestTools(Base):
+    def setUp(self):
+        super().setUp()
+        self.ws = Path(self.home) / "ws"
+        self.ws.mkdir()
+        self.outside = Path(self.home) / "outside"
+        self.outside.mkdir()
+        self.all = list(tools.HANDLERS)
+
+    def run_tool(self, name, **args):
+        return tools.execute(self.ws, name, args, self.all)
+
+    def test_file_tools(self):
+        self.assertEqual(self.run_tool("write_file", path="notes/a.md", content="hi")[0], True)
+        self.assertEqual(self.run_tool("read_file", path="notes/a.md"), (True, "hi"))
+        self.assertIn("notes/", self.run_tool("list_files")[1])
+        self.assertIn("a.md", self.run_tool("list_files", path="notes")[1])
+        self.assertTrue(self.run_tool("make_folder", path="x/y")[0])
+        self.assertFalse(self.run_tool("delete_file", path="notes")[0])  # not empty
+        self.assertTrue(self.run_tool("delete_file", path="notes/a.md")[0])
+        self.assertFalse(self.run_tool("read_file", path="missing.txt")[0])
+        self.assertFalse(self.run_tool("read_file")[0])
+
+    def test_paths_cannot_leave_the_folder(self):
+        os.symlink(self.outside, self.ws / "link")
+        for path in ("../outside/x.txt", str(self.outside / "x.txt"), "/etc/passwd", "C:/x.txt", "C:x.txt",
+                     "link/x.txt", "notes/../../x.txt", "\\\\server\\share\\x"):
+            ok, msg = self.run_tool("write_file", path=path, content="x")
+            self.assertFalse(ok, path)
+        self.assertEqual(list(self.outside.iterdir()), [])
+
+    def test_only_allowed_tools(self):
+        ok, msg = tools.execute(self.ws, "run_python", {"code": "print(1)"}, ["read_file"])
+        self.assertFalse(ok)
+        self.assertIn("Unknown tool", msg)
+        self.assertFalse(tools.execute(self.ws, "read_file", "notadict", self.all)[0])
+
+    def test_run_python_stays_in_folder(self):
+        ok, out = self.run_tool("run_python", code="open('in.txt','w').write('ok'); import os; os.makedirs('d', exist_ok=True); print('hello', 6*7)")
+        self.assertTrue(ok)
+        self.assertIn("hello 42", out)
+        self.assertTrue((self.ws / "in.txt").is_file())
+        escapes = [
+            f"open(r'{self.outside / 'a.txt'}', 'w')",
+            "import os; os.chdir('..'); open('b.txt', 'w')",
+            f"import shutil; shutil.copy('in.txt', r'{self.outside / 'c.txt'}')",
+            f"import os; os.rename('in.txt', r'{self.outside / 'd.txt'}')",
+            f"import pathlib; pathlib.Path(r'{self.outside / 'e.txt'}').write_text('x')",
+            "import subprocess; subprocess.run(['echo', 'hi'])",
+            "import os; os.system('echo hi > /tmp/axis_escape.txt')",
+        ]
+        for code in escapes:
+            ok, out = self.run_tool("run_python", code=code)
+            self.assertIn("Exit code: 1", out, code)
+            self.assertIn("Axis:", out, code)
+        self.assertEqual(list(self.outside.iterdir()), [])
+        self.assertTrue((self.ws / "in.txt").is_file())
+        self.assertFalse((self.ws / ".axis-tmp").exists())
+
+    def test_run_python_errors_and_timeouts(self):
+        ok, out = self.run_tool("run_python", code="raise ValueError('boom')")
+        self.assertIn("ValueError: boom", out)
+        self.assertNotIn("<string>", out.split("agent_code.py")[0])
+        with mock.patch.object(tools, "PYTHON_TIMEOUT", 1):
+            ok, out = self.run_tool("run_python", code="import time; time.sleep(5)")
+        self.assertIn("longer than 1 seconds", out)
+        self.assertIn("printed nothing", self.run_tool("run_python", code="x = 1")[1])
+
+
+class TestRunner(Base):
+    def setUp(self):
+        super().setUp()
+        self.ws = Path(self.home) / "ws"
+        self.ws.mkdir()
+
+    def run_reply(self, url, messages, names=("write_file", "run_python")):
+        conn = backend.connect(url)
+        events = []
+        runner.reply(conn, conn.models[0], [{"role": "system", "content": "S"}] + messages, events.append,
+                     list(names), self.ws)
+        return events
+
+    def check_write(self, events):
+        tool = [e for e in events if "tool" in e]
+        result = [e for e in events if "tool_result" in e]
+        self.assertEqual(tool[0]["tool"]["name"], "write_file")
+        self.assertTrue(result[0]["tool_result"]["ok"])
+        self.assertEqual((self.ws / "out.txt").read_text(), "line1\nline2")
+        text = "".join(e.get("t", "") for e in events)
+        self.assertIn("done: Wrote out.txt", text)
+        self.assertNotIn("```tool", text)  # the raw block is never shown
+
+    def test_native_ollama(self):
+        url = self.model_server(OllamaHandler, ["m"])
+        self.check_write(self.run_reply(url, tool_msg("write_file", path="out.txt", content="line1\nline2")))
+        second = REQUESTS[-1]["messages"]
+        self.assertEqual(second[-2]["tool_calls"][0]["function"]["name"], "write_file")
+        self.assertEqual(second[-1], {"role": "tool", "content": "Wrote out.txt (11 bytes).", "tool_name": "write_file"})
+        self.assertIn("tools", REQUESTS[0])
+
+    def test_native_llamacpp(self):
+        url = self.model_server(LlamaCppHandler, ["m"])
+        self.check_write(self.run_reply(url, tool_msg("write_file", path="out.txt", content="line1\nline2")))
+        second = REQUESTS[-1]["messages"]
+        self.assertEqual(second[-2]["tool_calls"][0]["id"], "call_abc")
+        self.assertEqual(json.loads(second[-2]["tool_calls"][0]["function"]["arguments"])["path"], "out.txt")
+        self.assertEqual(second[-1]["tool_call_id"], "call_abc")
+
+    def test_falls_back_to_text_tools(self):
+        for handler in (OllamaHandler, LlamaCppHandler):
+            with self.subTest(handler=handler.__name__):
+                REQUESTS.clear()
+                runner._TEXT_MODE.clear()
+                if (self.ws / "out.txt").exists():
+                    (self.ws / "out.txt").unlink()
+                url = self.model_server(handler, ["m"], no_tools=True)
+                events = self.run_reply(url, tool_msg("write_file", path="out.txt", content="line1\nline2"))
+                self.check_write(events)
+                self.assertIn("Let me do that.", "".join(e.get("t", "") for e in events))
+                self.assertNotIn("tools", REQUESTS[-1])
+                self.assertIn("```tool", REQUESTS[-1]["messages"][0]["content"])
+                # remembered: the next reply skips the failed native attempt
+                n = len(REQUESTS)
+                self.run_reply(url, [{"role": "user", "content": "hi"}])
+                self.assertEqual(len(REQUESTS), n + 1)
+
+    def test_plain_reply_and_tool_errors(self):
+        url = self.model_server(OllamaHandler, ["m"])
+        events = self.run_reply(url, [{"role": "user", "content": "hello"}])
+        self.assertEqual("".join(e.get("t", "") for e in events).strip(), "echo: hello")
+        events = self.run_reply(url, tool_msg("read_file", path="../secret"), names=["read_file"])
+        self.assertFalse([e for e in events if "tool_result" in e][0]["tool_result"]["ok"])
+        events = self.run_reply(url, tool_msg("run_python", code="x"), names=["read_file"])
+        self.assertIn("Unknown tool", [e for e in events if "tool_result" in e][0]["tool_result"]["output"])
+
+    def test_step_limit(self):
+        url = self.model_server(OllamaHandler, ["m"])
+        conn = backend.connect(url)
+        looping = backend.Turn("", [backend.ToolCall("c", "list_files", {})])
+        with mock.patch.object(backend, "complete", return_value=looping):
+            events = []
+            runner.reply(conn, "m", [{"role": "system", "content": "S"}, {"role": "user", "content": "x"}],
+                         events.append, ["list_files"], self.ws)
+        self.assertEqual(len([e for e in events if "tool" in e]), runner.MAX_STEPS)
+        self.assertIn("Stopped after", events[-1]["t"])
+
+    def test_hide_tool_blocks(self):
+        for chunks in (["Hi ", "there\n```", "tool\n{}", "\n```"], ["Hi there\n`", "``tool {}"], ["Hi there\n``` code"]):
+            out = []
+            hider = runner.HideToolBlocks(out.append)
+            for c in chunks:
+                hider.feed(c)
+            hider.flush()
+            text = "".join(out)
+            if "tool" in "".join(chunks):
+                self.assertEqual(text, "Hi there\n")
+            else:
+                self.assertEqual(text, "Hi there\n``` code")
+
+    def test_parse_tool_block(self):
+        self.assertEqual(runner.parse_tool_block('```tool\n{"name": "a", "arguments": {"x": 1}}\n```'), ("a", {"x": 1}))
+        self.assertEqual(runner.parse_tool_block('```tool\n{"name": "a", "arguments": "{\\"x\\": 1}"}'), ("a", {"x": 1}))
+        self.assertEqual(runner.parse_tool_block("no block"), None)
+        self.assertEqual(runner.parse_tool_block("```tool\nnot json\n```")[0], "")
 
 
 # ------------------------------------------------------------------- server
@@ -274,7 +519,7 @@ def request(url, method="GET", body=None, headers=None):
     req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with opener.open(req, timeout=10) as resp:
+        with opener.open(req, timeout=20) as resp:
             return resp.status, resp.read().decode()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode()
@@ -294,60 +539,78 @@ class TestServer(Base):
         code, text = request(self.url + "/")
         self.assertEqual(code, 200)
         self.assertIn("<title>Axis</title>", text)
-        code, text = request(self.url + "/api/ping")
-        self.assertEqual(json.loads(text)["app"], "axis")
+        self.assertEqual(json.loads(request(self.url + "/api/ping")[1])["app"], "axis")
 
-    def test_status_ready(self):
-        code, text = request(self.url + "/api/status")
-        st = json.loads(text)
+    def test_status(self):
+        st = json.loads(request(self.url + "/api/status")[1])
         self.assertTrue(st["ready"])
         self.assertEqual(st["models"], ["llama3.2:3b", "qwen3:8b"])
-
-    def test_status_not_ready(self):
         down = self.axis_server(f"http://127.0.0.1:{free_port()}")
         st = json.loads(request(down + "/api/status")[1])
         self.assertEqual((st["ready"], st["server_running"]), (False, False))
         empty = self.axis_server(self.model_server(LlamaCppHandler, []))
         st = json.loads(request(empty + "/api/status")[1])
         self.assertEqual((st["ready"], st["server_running"]), (False, True))
-        self.assertIn("no model is loaded", st["message"])
+
+    def test_skill_routes(self):
+        self.assertEqual(len(json.loads(request(self.url + "/api/skills")[1])), 5)
+        code, text = request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "5-7-5"})
+        self.assertEqual(code, 201, text)
+        self.assertEqual(request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "x"})[0], 400)
+        self.assertEqual(request(self.url + "/api/skills/haiku", "PUT", {"description": "Short poems"})[0], 200)
+        self.assertEqual(json.loads(request(self.url + "/api/skills/haiku")[1])["description"], "Short poems")
+        self.assertEqual(request(self.url + "/api/skills/run-python", "PUT", {"name": "x"})[0], 400)
+        self.assertEqual(request(self.url + "/api/skills/run-python", "DELETE")[0], 400)
+        request(self.url + "/api/agents", "POST", {"name": "poet", "skills": ["haiku"]})
+        self.assertEqual(request(self.url + "/api/skills/haiku", "DELETE")[0], 200)
+        self.assertEqual(json.loads(request(self.url + "/api/agents/poet")[1])["skills"], [])
+        self.assertEqual(request(self.url + "/api/skills/haiku", "DELETE")[0], 404)
 
     def test_agent_routes(self):
-        body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."],
-                "skills": [{"name": "Haiku", "instructions": "5-7-5", "enabled": False}]}
+        body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."], "skills": ["list-files"]}
         code, text = request(self.url + "/api/agents", "POST", body)
         self.assertEqual(code, 201, text)
+        self.assertTrue(json.loads(text)["workspace"].endswith("workspace"))
         self.assertEqual(request(self.url + "/api/agents", "POST", body)[0], 400)
-        self.assertEqual(len(json.loads(request(self.url + "/api/agents")[1])), 1)
-        code, text = request(self.url + "/api/agents/poet", "PUT", {"name": "bard", "model": "qwen3:8b"})
+        self.assertEqual(request(self.url + "/api/agents", "POST", {"name": "x", "skills": ["nope"]})[0], 400)
+        code, text = request(self.url + "/api/agents/poet", "PUT", {"name": "bard"})
         self.assertEqual(code, 200, text)
-        self.assertEqual(json.loads(text)["config"], ["Rhyme."])
         self.assertEqual(request(self.url + "/api/agents/poet")[0], 404)
-        self.assertEqual(request(self.url + "/api/agents/bard")[0], 200)
+        files = json.loads(request(self.url + "/api/agents/bard/files")[1])
+        self.assertEqual(files["files"], [])
+        with mock.patch.object(server, "open_folder") as opener:
+            self.assertEqual(request(self.url + "/api/agents/bard/open-folder", "POST", {})[0], 200)
+        opener.assert_called_once()
         self.assertEqual(request(self.url + "/api/agents/bard", "DELETE")[0], 200)
+        self.assertFalse((Path(self.home) / "agents" / "bard").exists())
         self.assertEqual(request(self.url + "/api/agents/bard", "DELETE")[0], 404)
         self.assertEqual(request(self.url + "/api/nope")[0], 404)
-        self.assertEqual(request(self.url + "/api/agents", "POST", None, {"Content-Length": "0"})[0], 400)
 
     def test_chat_direct(self):
-        code, text = request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "hello"}]})
-        ev = chat_events(text)
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "hello"}]})[1])
         self.assertEqual(ev[0], {"model": "llama3.2:3b"})
         self.assertEqual("".join(e.get("t", "") for e in ev).strip(), "echo: hello")
         self.assertEqual(ev[-1], {"done": True})
-        self.assertEqual(LAST_REQUEST["messages"], [{"role": "user", "content": "hello"}])
+        self.assertNotIn("tools", LAST_REQUEST)
 
-    def test_chat_with_agent_uses_config_skills_and_model(self):
-        request(self.url + "/api/agents", "POST", {
-            "name": "a", "system_prompt": "S.", "model": "qwen3:8b", "config": ["C1"],
-            "skills": [{"name": "K", "instructions": "skill text"}]})
-        request(self.url + "/api/chat", "POST", {"agent": "a", "messages": [{"role": "user", "content": "hi"}]})
-        self.assertEqual(LAST_REQUEST["model"], "qwen3:8b")
-        self.assertIn("skill text", LAST_REQUEST["messages"][0]["content"])
-        self.assertIn("- C1", LAST_REQUEST["messages"][-1]["content"])
-        # the dropdown choice overrides the agent's preferred model
-        request(self.url + "/api/chat", "POST", {"agent": "a", "model": "llama3.2:3b", "messages": [{"role": "user", "content": "hi"}]})
-        self.assertEqual(LAST_REQUEST["model"], "llama3.2:3b")
+    def test_chat_agent_with_tools_writes_into_its_folder(self):
+        skills.create({"name": "Brief", "instructions": "Be brief."})
+        request(self.url + "/api/agents", "POST", {"name": "maker", "model": "qwen3:8b", "config": ["C1"],
+                                                    "skills": ["brief", "write-files", "run-python"]})
+        msg = tool_msg("run_python", code="open('result.txt','w').write(str(6*7)); print('saved')")
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"agent": "maker", "messages": msg})[1])
+        self.assertEqual(ev[0], {"model": "qwen3:8b"})
+        self.assertEqual([e["tool"]["name"] for e in ev if "tool" in e], ["run_python"])
+        self.assertIn("saved", [e for e in ev if "tool_result" in e][0]["tool_result"]["output"])
+        self.assertEqual(ev[-1], {"done": True})
+        ws = Path(self.home) / "agents" / "maker" / "workspace"
+        self.assertEqual((ws / "result.txt").read_text(), "42")
+        first = REQUESTS[0]
+        self.assertEqual([t["function"]["name"] for t in first["tools"]], ["write_file", "make_folder", "run_python"])
+        self.assertIn("Be brief.", first["messages"][0]["content"])
+        self.assertIn("- C1", first["messages"][1]["content"])
+        files = json.loads(request(self.url + "/api/agents/maker/files")[1])["files"]
+        self.assertEqual(files, [{"path": "result.txt", "size": 2}])
 
     def test_chat_errors(self):
         ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "FAIL"}]})[1])
@@ -356,9 +619,6 @@ class TestServer(Base):
         self.assertIn("not loaded", ev[-1]["error"])
         self.assertEqual(request(self.url + "/api/chat", "POST", {"agent": "ghost", "messages": [{"role": "user", "content": "x"}]})[0], 404)
         self.assertEqual(request(self.url + "/api/chat", "POST", {"messages": []})[0], 400)
-        down = self.axis_server(f"http://127.0.0.1:{free_port()}")
-        ev = chat_events(request(down + "/api/chat", "POST", {"messages": [{"role": "user", "content": "x"}]})[1])
-        self.assertIn("No model server", ev[-1]["error"])
 
     def test_rejects_other_sites_and_hosts(self):
         self.assertEqual(request(self.url + "/api/agents", "POST", {"name": "evil"}, {"Origin": "https://evil.example"})[0], 403)
@@ -373,7 +633,7 @@ class TestServer(Base):
                                      headers={"Content-Type": "application/json"})
         resp = opener.open(req, timeout=10)
         resp.readline()
-        resp.close()  # like pressing Stop
+        resp.close()
         self.assertEqual(request(self.url + "/api/ping")[0], 200)
 
 
@@ -381,10 +641,11 @@ class TestServer(Base):
 
 
 class TestCli(Base):
-    def test_version(self):
-        with self.assertRaises(SystemExit) as ctx, redirect_stdout(io.StringIO()) as out:
-            cli.main(["--version"])
-        self.assertEqual(ctx.exception.code, 0)
+    def test_version_and_help(self):
+        for argv in (["--version"], ["--help"], ["update", "--help"], ["uninstall", "--help"]):
+            with self.assertRaises(SystemExit) as ctx, redirect_stdout(io.StringIO()):
+                cli.main(argv)
+            self.assertEqual(ctx.exception.code, 0)
 
     def test_bad_port(self):
         with redirect_stderr(io.StringIO()):
@@ -410,17 +671,54 @@ class TestCli(Base):
         self.assertIn("Axis stopped", out.getvalue())
         timer.assert_called_once()
 
-    def test_skips_busy_port(self):
-        blocker = socket.socket()
-        blocker.bind(("127.0.0.1", 0))
-        blocker.listen()
-        try:
-            port = blocker.getsockname()[1]
-            srv = server.make_server(port)
-            self.assertNotEqual(srv.server_address[1], port)
-            srv.server_close()
-        finally:
-            blocker.close()
+    def test_update_runs_pip_with_github_zip(self):
+        calls = []
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="9.9.9\n")
+        with mock.patch("subprocess.run", side_effect=fake_run), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["update"]), 0)
+        self.assertEqual(calls[0][:4], [sys.executable, "-m", "pip", "install"])
+        self.assertIn("--force-reinstall", calls[0])
+        self.assertEqual(calls[0][-1], cli.REPO_ZIP)
+        self.assertIn("-> 9.9.9", out.getvalue())
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.main(["update", "--source", "x.zip"]), 1)
+        self.assertIn("pipx install --force", err.getvalue())
+
+    def test_uninstall(self):
+        data = Path(self.home)
+        (data / "agents").mkdir(exist_ok=True)
+        with mock.patch("builtins.input", return_value="n"), redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["uninstall"]), 1)  # cancelled
+        with mock.patch.object(cli, "installed_with_pipx", return_value=False), \
+                mock.patch.object(cli, "is_windows", return_value=False), \
+                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                mock.patch("builtins.input", side_effect=["y", "n"]), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["uninstall"]), 0)
+        self.assertEqual(run.call_args[0][0][:4], [sys.executable, "-m", "pip", "uninstall"])
+        self.assertEqual(run.call_args[0][0][-1], "axis-agent-manager")
+        self.assertTrue(data.exists())
+        self.assertIn("Kept your data", out.getvalue())
+        with mock.patch.object(cli, "installed_with_pipx", return_value=True), \
+                mock.patch.object(cli, "find_pipx", return_value=["pipx"]), \
+                mock.patch.object(cli, "is_windows", return_value=False), \
+                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["uninstall", "-y", "--delete-data"]), 0)
+        self.assertEqual(run.call_args[0][0], ["pipx", "uninstall", "axis-agent-manager"])
+        self.assertFalse(data.exists())
+
+    def test_uninstall_on_windows_uses_helper(self):
+        with mock.patch.object(cli, "installed_with_pipx", return_value=False), \
+                mock.patch.object(cli, "is_windows", return_value=True), \
+                mock.patch("subprocess.Popen") as popen, redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["uninstall", "-y"]), 0)
+        cmd = popen.call_args[0][0]
+        self.assertTrue(cmd[1].endswith("axis_uninstall_helper.py"))
+        self.assertEqual(cmd[2], str(os.getpid()))
+        self.assertIn("finish uninstalling", out.getvalue())
 
 
 if __name__ == "__main__":

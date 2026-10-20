@@ -14,7 +14,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 DEFAULT_URLS = ("http://127.0.0.1:11434", "http://127.0.0.1:8080")
 PROBE_TIMEOUT = 3.0
@@ -160,9 +160,42 @@ def resolve_model(backend: Backend, requested: Optional[str]) -> str:
 # --------------------------------------------------------------------------- chat
 
 
-def _stream_ollama(backend: Backend, model: str, messages: list) -> Iterator[str]:
+class ToolsUnsupported(BackendError):
+    """The server or model rejected the tools parameter."""
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: Any  # dict when valid, otherwise the raw text the model produced
+    raw: str = ""
+
+
+@dataclass
+class Turn:
+    text: str
+    tool_calls: List[ToolCall] = field(default_factory=list)
+
+
+def _parse_args(raw: Any) -> Any:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
+
+
+def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn) -> Iterator[str]:
     # keep_alive -1 keeps the model loaded until the user stops it (ollama stop <model>).
-    body = {"model": model, "messages": messages, "stream": True, "keep_alive": -1}
+    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True, "keep_alive": -1}
+    if tools:
+        body["tools"] = tools
     with _open(backend.url + "/api/chat", body, timeout=GENERATE_TIMEOUT) as resp:
         for raw in resp:
             line = raw.decode("utf-8", errors="replace").strip()
@@ -171,51 +204,101 @@ def _stream_ollama(backend: Backend, model: str, messages: list) -> Iterator[str
             chunk = json.loads(line)
             if chunk.get("error"):
                 raise BackendError(str(chunk["error"]))
-            text = (chunk.get("message") or {}).get("content") or ""
+            message = chunk.get("message") or {}
+            for call in message.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                n = len(turn.tool_calls)
+                turn.tool_calls.append(ToolCall(str(call.get("id") or f"call_{n}"), str(fn.get("name") or ""),
+                                                _parse_args(fn.get("arguments")), json.dumps(fn.get("arguments"))))
+            text = message.get("content") or ""
             if text:
                 yield text
             if chunk.get("done"):
                 return
 
 
-def _stream_openai(backend: Backend, model: str, messages: list) -> Iterator[str]:
-    body = {"model": model, "messages": messages, "stream": True}
-    with _open(backend.url + "/v1/chat/completions", body, timeout=GENERATE_TIMEOUT) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                return
-            chunk = json.loads(data)
-            if chunk.get("error"):
-                err = chunk["error"]
-                raise BackendError(str(err.get("message") if isinstance(err, dict) else err))
-            for choice in chunk.get("choices") or []:
-                text = (choice.get("delta") or {}).get("content") or ""
-                if text:
-                    yield text
+def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn) -> Iterator[str]:
+    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if tools:
+        body["tools"] = tools
+    partial: Dict[int, Dict[str, str]] = {}
+    try:
+        with _open(backend.url + "/v1/chat/completions", body, timeout=GENERATE_TIMEOUT) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                chunk = json.loads(data)
+                if chunk.get("error"):
+                    err = chunk["error"]
+                    raise BackendError(str(err.get("message") if isinstance(err, dict) else err))
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    for call in delta.get("tool_calls") or []:
+                        slot = partial.setdefault(int(call.get("index") or 0), {"id": "", "name": "", "args": ""})
+                        slot["id"] = call.get("id") or slot["id"]
+                        fn = call.get("function") or {}
+                        slot["name"] += fn.get("name") or ""
+                        slot["args"] += fn.get("arguments") or ""
+                    text = delta.get("content") or ""
+                    if text:
+                        yield text
+    finally:
+        for i in sorted(partial):
+            slot = partial[i]
+            turn.tool_calls.append(ToolCall(slot["id"] or f"call_{i}", slot["name"], _parse_args(slot["args"]), slot["args"]))
 
 
-def chat(
+def complete(
     backend: Backend,
     model: str,
     messages: list,
     on_token: Optional[Callable[[str], None]] = None,
-) -> str:
-    """Send a conversation and return the full reply, streaming tokens to on_token."""
+    tools: Optional[list] = None,
+) -> Turn:
+    """Send a conversation; stream text to on_token; return the text and any tool calls."""
     stream = _stream_ollama if backend.kind == "ollama" else _stream_openai
+    turn = Turn("")
     parts: List[str] = []
     try:
-        for text in stream(backend, model, messages):
+        for text in stream(backend, model, messages, tools, turn):
             parts.append(text)
             if on_token:
                 on_token(text)
     except urllib.error.HTTPError as exc:
-        raise BackendError(f"Server error ({exc.code}): {_http_error_message(exc)}") from exc
+        message = _http_error_message(exc)
+        if tools and exc.code in (400, 500, 501) and "tool" in message.lower():
+            raise ToolsUnsupported(message) from exc
+        raise BackendError(f"Server error ({exc.code}): {message}") from exc
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
         raise ServerUnavailable(f"Lost connection to the model server at {backend.url}: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise BackendError("The model server sent a response Axis could not read.") from exc
-    return "".join(parts)
+    turn.text = "".join(parts)
+    return turn
+
+
+def chat(backend: Backend, model: str, messages: list, on_token: Optional[Callable[[str], None]] = None) -> str:
+    """Send a conversation and return the full reply, streaming tokens to on_token."""
+    return complete(backend, model, messages, on_token).text
+
+
+def assistant_message(backend: Backend, turn: Turn) -> Dict[str, Any]:
+    """The assistant turn (with its tool calls) in the server's own format."""
+    if backend.kind == "ollama":
+        calls = [{"function": {"name": c.name, "arguments": c.arguments if isinstance(c.arguments, dict) else {}}}
+                 for c in turn.tool_calls]
+        return {"role": "assistant", "content": turn.text, "tool_calls": calls}
+    calls = [{"id": c.id, "type": "function",
+              "function": {"name": c.name, "arguments": c.raw if c.raw else json.dumps(c.arguments)}}
+             for c in turn.tool_calls]
+    return {"role": "assistant", "content": turn.text or None, "tool_calls": calls}
+
+
+def tool_message(backend: Backend, call: ToolCall, result: str) -> Dict[str, Any]:
+    if backend.kind == "ollama":
+        return {"role": "tool", "content": result, "tool_name": call.name}
+    return {"role": "tool", "tool_call_id": call.id, "content": result}

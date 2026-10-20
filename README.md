@@ -4,8 +4,9 @@ Axis is a small app for chatting with a local AI model and with agents you desig
 
 * see whether your model server is running and which models are on,
 * chat with a model directly,
-* create agents with their own system prompt, config (instructions added to every message), and skills, and
-* chat with those agents.
+* make skills, including built-in actions that let agents run Python and create, read and list files,
+* create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
+* chat with those agents. Each agent has its own folder, and every file it makes stays there.
 
 Axis does **not** download, start, or stop models. You start a model yourself with **Ollama** or **llama.cpp**; until a model is on, the page shows what to start and keeps chat locked.
 
@@ -22,11 +23,13 @@ you start the model  ──►  run axis  ──►  browser opens at http://127
 2. [Windows setup](#windows-setup)
 3. [Mac setup](#mac-setup)
 4. [Every-day use: turning the model on and off](#every-day-use-turning-the-model-on-and-off)
-5. [Using Axis](#using-axis)
-6. [Settings](#settings)
-7. [Troubleshooting](#troubleshooting)
-8. [Updating and uninstalling](#updating-and-uninstalling)
-9. [Running the tests](#running-the-tests)
+5. [Commands](#commands)
+6. [Using Axis](#using-axis)
+7. [Skills](#skills)
+8. [Agent folders](#agent-folders)
+9. [Settings](#settings)
+10. [Troubleshooting](#troubleshooting)
+11. [Running the tests](#running-the-tests)
 
 ---
 
@@ -279,6 +282,21 @@ Notes on Ollama:
 
 ---
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `axis` | Starts the Axis web app and opens it in your browser |
+| `axis update` | Downloads the latest Axis from GitHub and installs it over the current version |
+| `axis uninstall` | Removes the Axis program. It asks whether to delete your data too. |
+| `axis --version` | Prints the installed version |
+
+`axis update` replaces the program only; your agents, skills and agent files are kept. If Axis is open in another window during an update, stop it with Ctrl+C and run `axis` again to use the new version. Advanced: `axis update --source <ZIP file, folder or URL>` installs from somewhere other than GitHub.
+
+`axis uninstall` asks two questions: whether to remove Axis, and whether to delete your data folder (`Axis` in your home folder) as well. `axis uninstall --yes` removes the program without asking and keeps your data; add `--delete-data` to delete the data too. On Windows the removal finishes a few seconds after the command returns, because Windows cannot delete a program while it is running; details are written to `axis-uninstall.log` in your temp folder.
+
+---
+
 ## Using Axis
 
 Run `axis` in a terminal. Axis starts a small website that only this computer can reach and opens it in your browser. Closing the browser tab does not stop Axis; closing the terminal window (or pressing Ctrl+C in it) does. Running `axis` again while it is already running just opens the page again.
@@ -302,19 +320,20 @@ Click **New agent** in the sidebar. An agent has:
 
 | Part | What it does |
 |---|---|
-| Name | Letters, numbers, `-` and `_`. You can rename an agent later; its chat history moves with it. |
+| Name | Letters, numbers, `-` and `_`. You can rename an agent later; its chat history and folder move with it. |
 | Preferred model | The model the agent uses when it is on. Leave empty to use whichever model is on. You can still switch models in the chat. |
 | System prompt | Who the agent is and how it behaves. Sent at the start of every conversation. |
 | Config | A list of instructions added to the end of **every message** you send the agent, for rules it must not forget (for example, "Answer in one sentence."). |
-| Skills | Named blocks of instructions, each with an **On** switch. Skills that are on are added to the system prompt; skills that are off are kept but not sent. |
+| Skills | Tick the skills this agent may use (see [Skills](#skills)). **Manage skills** opens the Skills page. |
+| Folder | Shown once the agent is created: where its files are kept, a list of them, and **Open folder** to see them in Explorer or Finder. |
 
-Click **Create agent** (or **Save agent**) to save, **Chat with agent** to start talking, and **Delete agent** to remove it. The text under the message box in an agent chat shows how many config instructions and skills are active.
+Click **Create agent** (or **Save agent**) to save, **Chat with agent** to start talking, and **Delete agent** to remove it. **Deleting an agent deletes its folder and every file in it.**
 
-Agents are saved as `Axis/agents/<name>/agent.json` in your home folder (`C:\Users\<you>\Axis` on Windows, `/Users/<you>/Axis` on Mac). Agents made with Axis 1.0 open without changes.
+When an agent uses an action, the chat shows a line such as "Wrote notes/plan.md" or "Ran Python". Click it to see the code, the file contents, or the result.
 
 #### What the model receives
 
-For an agent with the system prompt "You are a copy editor.", one skill switched on, and two config instructions, sending "their going home" produces:
+For an agent with the system prompt "You are a copy editor.", one custom skill, and two config instructions, sending "their going home" produces:
 
 ```
 system:  You are a copy editor.
@@ -332,7 +351,60 @@ user:    their going home
          - Use US spelling.
 ```
 
-The config block is attached to your newest message each time you send one; it is not shown in the chat.
+The config block is attached to your newest message each time you send one; it is not shown in the chat. Agents with built-in action skills also receive a short note that their files live in their own folder, plus the definitions of their actions.
+
+---
+
+## Skills
+
+Click **Skills** in the sidebar to see and manage the skill library. Every agent picks from the same library in its settings.
+
+### Built-in actions
+
+These let an agent do things, not just write text. Each one works only inside that agent's own folder.
+
+| Skill | The agent can |
+|---|---|
+| Run Python | Write a Python program and run it (calculations, data work, processing files). Up to 60 seconds per run. |
+| List files | See the files and folders in its folder |
+| Read files | Read text files in its folder |
+| Make files | Create or overwrite text files, and make folders |
+| Delete files | Delete files and empty folders |
+
+Built-in skills cannot be edited or deleted.
+
+**Which models can use actions.** Actions work best with models trained for tool use, for example `llama3.1`, `llama3.2`, `qwen2.5` and `qwen3` in Ollama. Axis uses the model's native tool calling when the server supports it. If the server or model refuses tools (for example `does not support tools` in Ollama, or an older llama.cpp started without `--jinja`), Axis switches automatically to a plain-text format that any model can follow, though small models follow it less reliably. Larger models (7B and up) are noticeably more dependable at multi-step work. An agent may take up to 10 actions per reply.
+
+**Run Python uses your own Python**, the one Axis was installed with, so packages you have installed there (for example `pip install pandas`) are available to agent code.
+
+### Your skills
+
+Click **New skill** and give it a name, a one-line description (shown when choosing skills), and instructions, for example a house style, a checklist, or a way of answering. Use **Edit** and **Delete** on each card. Each card shows which agents use it. Deleting a skill removes it from every agent that used it.
+
+Skills made in Axis 2.0 (inside an individual agent) move into the library automatically the first time that agent is opened.
+
+---
+
+## Agent folders
+
+Each agent's files live in its own folder:
+
+```
+Axis/                       in your home folder
+├── agents/
+│   └── maker/
+│       ├── agent.json      the agent's settings
+│       └── workspace/      the agent's folder: every file it makes goes here
+└── skills/                 your custom skills, one .json file each
+```
+
+How Axis keeps files in the agent's folder:
+
+* The file actions refuse any path outside the folder, including `..`, absolute paths such as `C:\` or `/Users`, and links that point outside.
+* Run Python starts in the folder, and blocks writing, renaming or deleting files anywhere else and starting other programs. Code can still *read* files elsewhere (for example to import installed packages).
+* Renaming an agent moves its folder; deleting an agent deletes its folder.
+
+This guard is designed to keep the agent's ordinary work in its folder. It is not a security sandbox against code written deliberately to escape it, so review what an agent is doing when you give it Run Python.
 
 ---
 
@@ -352,7 +424,8 @@ Environment variables:
 | Variable | Effect | Default |
 |---|---|---|
 | `AXIS_URL` | Model server address | Tries `127.0.0.1:11434` (Ollama), then `127.0.0.1:8080` (llama.cpp) |
-| `AXIS_HOME` | Where agents are saved | `Axis` in your home folder |
+| `AXIS_HOME` | Where agents, skills and agent files are saved | `Axis` in your home folder |
+| `AXIS_PYTHON` | Python used by the Run Python action | The Python Axis was installed with |
 
 Example for a llama.cpp server on a non-default port:
 
@@ -380,26 +453,11 @@ The page only answers requests from this computer, and only from its own page, s
 | `py` is not recognized (Windows) | Reinstall Python with "Add python.exe to PATH" checked, or use `python` instead of `py` |
 | `ollama` is not recognized | Open a new terminal after installing; on Windows confirm Ollama appears in the tray |
 | Replies are very slow | Use a smaller model (for example `llama3.2:1b`) or close other programs to free memory |
+| An agent describes an action but nothing happens | The model is not calling tools. Use a tool-capable model (see [Skills](#skills)), and make sure the skill is ticked in the agent's settings. |
+| `Unknown tool '...'` in a step | The agent tried an action whose skill is not ticked. Tick it in **Edit agent**, or ignore it. |
+| Run Python says a package is missing | Install it for the Python that runs Axis, e.g. `py -m pip install pandas` (Windows) or `python3 -m pip install pandas` (Mac) |
+| `axis update` fails | Check your internet connection. You can also reinstall by hand: `pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip` |
 | Chats disappeared | Conversations are stored per browser and per port. Use the same browser and the default port. |
-
----
-
-## Updating and uninstalling
-
-To update, get the new version and install over the old one with `--force`:
-
-```bash
-pipx install --force ./Axis-main.zip                                          # from a new ZIP
-pipx install --force git+https://github.com/HyrumHendrickson/Axis.git         # from GitHub
-```
-
-To uninstall:
-
-```bash
-pipx uninstall axis-agent-manager
-```
-
-Uninstalling Axis does not delete your agents. To remove them, delete the `Axis` folder in your home folder. Ollama and llama.cpp are uninstalled separately (Windows: Settings → Apps; Mac: drag Ollama out of Applications, or `brew uninstall llama.cpp`).
 
 ---
 
@@ -415,13 +473,17 @@ python -m unittest discover -s tests -v      # Windows: py -m unittest discover 
 
 ```
 axis/
-  cli.py          the `axis` command: starts the server and opens the browser
+  cli.py          the `axis`, `axis update` and `axis uninstall` commands
   server.py       local web server and JSON API
-  agents.py       agent storage and how messages are assembled
-  backend.py      detects Ollama or llama.cpp, lists models, streams replies
+  agents.py       agent storage, agent folders, and how messages are assembled
+  skills.py       the skill library (built-in actions and your skills)
+  tools.py        the actions, kept inside each agent's folder
+  runner.py       lets an agent use its actions while replying
+  backend.py      detects Ollama or llama.cpp, lists models, streams replies and tool calls
+  paths.py        where Axis keeps its data
   web/index.html  the page (HTML, CSS and JavaScript in one file)
 tests/
-  test_axis.py    tests for the backend, agents, API and launcher
+  test_axis.py    tests for all of the above, using fake model servers
 ```
 
 ## License

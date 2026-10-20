@@ -122,6 +122,35 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .form-actions .spacer { flex: 1; }
 .form-error { color: var(--bad); margin: 0 0 12px; }
 
+/* ---------- tool steps ---------- */
+.step { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin: 10px 0; font-size: 14px; }
+.step > summary { cursor: pointer; padding: 7px 12px; display: flex; gap: 8px; align-items: center; list-style: none; }
+.step > summary::-webkit-details-marker { display: none; }
+.step > summary::before { content: "\25B8"; color: var(--muted); font-size: 11px; transition: transform .15s; }
+.step[open] > summary::before { transform: rotate(90deg); }
+.step.running > summary { color: var(--muted); }
+.step.failed > summary { color: var(--bad); }
+.step-body { padding: 0 12px 10px; }
+.step-body pre { margin: 6px 0 0; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow-x: auto; font: 12.5px/1.45 var(--mono); max-height: 320px; overflow-y: auto; white-space: pre-wrap; }
+.step-label { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* ---------- skills ---------- */
+.skill-group { margin-bottom: 28px; }
+.skill-group > h3 { font: 400 20px/1.3 var(--serif); margin: 0 0 4px; }
+.skill-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 10px; background: var(--surface); }
+.skill-card h4 { margin: 0; font-size: 15px; display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+.skill-card p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+.skill-card .instr { white-space: pre-wrap; color: var(--ink); font-size: 13px; margin-top: 8px; border-left: 3px solid var(--line); padding-left: 10px; }
+.tag { font: 600 12px/1 var(--sans); color: var(--accent); }
+.pick { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; background: var(--surface); cursor: pointer; }
+.pick input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+.pick span { display: block; color: var(--muted); font-size: 13px; }
+.subhead { font-weight: 600; font-size: 14px; margin: 14px 0 8px; }
+.files { list-style: none; padding: 0; margin: 8px 0 0; font: 13px/1.7 var(--mono); max-height: 260px; overflow-y: auto; }
+.files li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.files small { color: var(--muted); font-family: var(--sans); }
+.path { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
+
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 
@@ -152,6 +181,7 @@ const DIRECT = "";              // chat target id for the plain model chat
 const S = {
   status: null,                 // last /api/status result
   agents: [],
+  skills: [],                   // the skill library
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
   streaming: null,              // { controller, target }
@@ -282,6 +312,10 @@ async function loadAgents() {
   renderNav();
 }
 function agentByName(name) { return S.agents.find((a) => a.name === name); }
+async function loadSkills() {
+  try { S.skills = await api("/api/skills"); } catch (e) { toast(e.message); }
+}
+const skillById = (id) => S.skills.find((s) => s.id === id);
 
 function go(view) {
   S.view = view;
@@ -295,6 +329,7 @@ function renderNav() {
     h("button", { class: "nav-item", "aria-current": current ? "true" : "false", onclick }, label, h("small", {}, sub));
   fill($("nav"), 
     item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT })),
+    item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
     S.agents.length
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
@@ -320,6 +355,7 @@ function menuButton() {
 
 function renderMain() {
   if (S.view.kind === "edit") return renderEditor();
+  if (S.view.kind === "skills") return renderSkills();
   renderChat();
 }
 
@@ -396,17 +432,46 @@ function composer(target, agent) {
     : h("button", { class: "btn primary", id: "send", disabled: !!S.streaming, onclick: () => send(target) }, "Send");
   let hint = "Enter to send, Shift+Enter for a new line.";
   if (agent) {
-    const on = agent.skills.filter((s) => s.enabled).length;
+    const on = agent.skills.filter(skillById).length;
     hint += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
+    if (agent.skills.some((id) => (skillById(id) || {}).builtin))
+      hint += " Actions work best with models that support tools, such as llama3.1, llama3.2, qwen2.5 or qwen3.";
   }
   return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn), h("div", { class: "composer-hint" }, hint));
 }
 
+const STEP_TEXT = {
+  run_python: ["Running Python", "Ran Python"],
+  list_files: ["Listing files", "Listed files"],
+  read_file: ["Reading", "Read"],
+  write_file: ["Writing", "Wrote"],
+  make_folder: ["Making folder", "Made folder"],
+  delete_file: ["Deleting", "Deleted"],
+};
+function stepView(p) {
+  const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
+  const target = p.args && typeof p.args.path === "string" && p.args.path ? " " + p.args.path : "";
+  const state = p.output === undefined ? "running" : (p.ok ? "done" : "failed");
+  const label = (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
+  const body = h("div", { class: "step-body" });
+  if (p.args && typeof p.args.code === "string") body.append(h("div", { class: "step-label" }, "Code"), h("pre", {}, p.args.code));
+  if (p.args && typeof p.args.content === "string")
+    body.append(h("div", { class: "step-label" }, "Content"), h("pre", {}, p.args.content.length > 4000 ? p.args.content.slice(0, 4000) + "\n\u2026" : p.args.content));
+  if (p.args && typeof p.args.raw === "string") body.append(h("div", { class: "step-label" }, "Arguments"), h("pre", {}, p.args.raw));
+  if (p.output !== undefined) body.append(h("div", { class: "step-label" }, "Result"), h("pre", {}, p.output));
+  return h("details", { class: "step " + state }, h("summary", {}, label), body);
+}
+function partsView(parts) {
+  return parts.map((p) => {
+    if (p.type === "tool") return stepView(p);
+    const d = h("div", { class: "msg ai" }); d.innerHTML = markdown(p.text); return d;
+  });
+}
 function messageView(m) {
   if (m.role === "user") return h("div", { class: "msg user" }, m.content);
-  const body = h("div", { class: "msg ai" });
-  body.innerHTML = markdown(m.content);
-  return h("div", {}, body, h("div", { class: "msg-tools" }, h("button", { class: "link", onclick: () => copyText(m.content) }, "Copy")));
+  const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: m.content }];
+  return h("div", {}, partsView(parts),
+    m.content.trim() ? h("div", { class: "msg-tools" }, h("button", { class: "link", onclick: () => copyText(m.content) }, "Copy")) : null);
 }
 
 function renderThread(target, agent, model) {
@@ -435,14 +500,17 @@ async function send(target) {
   S.streaming = { controller, target };
   renderChat();                                  // shows the new message and the Stop button
   const inner = $("thread-inner");
-  const body = h("div", { class: "msg ai typing" });
-  inner.append(h("div", {}, body)); scrollDown();
+  const live = h("div", {}, h("div", { class: "msg ai typing" }));
+  inner.append(live); scrollDown();
 
-  let reply = "", error = null, frame = 0;
-  const paint = () => { frame = 0; body.classList.remove("typing"); body.innerHTML = markdown(reply); scrollDown(); };
+  const parts = []; let error = null, frame = 0;
+  const textOf = () => parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+  const paint = () => { frame = 0; fill(live, partsView(parts)); scrollDown(); };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(paint); };
   try {
+    const history = msgs.map((m) => ({ role: m.role, content: m.content }));
     const res = await fetch("/api/chat", { method: "POST", signal: controller.signal,
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: target || null, model, messages: msgs }) });
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: target || null, model, messages: history }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -454,7 +522,16 @@ async function send(target) {
         const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
         if (!line) continue;
         const ev = JSON.parse(line);
-        if (ev.t) { reply += ev.t; if (!frame) frame = requestAnimationFrame(paint); }
+        if (ev.t) {
+          const last = parts[parts.length - 1];
+          if (last && last.type === "text") last.text += ev.t; else parts.push({ type: "text", text: ev.t });
+          schedule();
+        }
+        if (ev.tool) { parts.push({ type: "tool", id: ev.tool.id, name: ev.tool.name, args: ev.tool.args }); schedule(); }
+        if (ev.tool_result) {
+          const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_result.id);
+          if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; schedule(); }
+        }
         if (ev.error) error = ev.error;
       }
     }
@@ -463,15 +540,18 @@ async function send(target) {
   }
   if (frame) cancelAnimationFrame(frame);
   S.streaming = null;
+  for (const p of parts) if (p.type === "tool" && p.output === undefined) { p.ok = false; p.output = "Stopped before this finished."; }
 
+  const reply = textOf();
+  const got = reply.trim() || parts.some((p) => p.type === "tool");
   const saved = getHistory(target);
-  if (reply.trim()) saved.push({ role: "assistant", content: reply });
+  if (got) saved.push({ role: "assistant", content: reply, parts });
   else if (saved.length && saved[saved.length - 1].role === "user") saved.pop();   // nothing came back: undo the message
   setHistory(target, saved);
 
   if (S.view.kind !== "chat" || S.view.agent !== target) return;
   renderChat();
-  if (!reply.trim()) $("input").value = text;
+  if (!got) $("input").value = text;
   if (error) { $("thread-inner").append(h("div", { class: "msg error", role: "alert" }, error)); scrollDown(); refreshStatus(); }
 }
 
@@ -498,30 +578,25 @@ function renderEditor() {
   };
   draft.config.forEach(addConfig);
 
-  const skillList = h("div", {});
-  const addSkill = (s) => {
-    const enabled = h("input", { type: "checkbox", checked: s.enabled, onchange: () => card.classList.toggle("off", !enabled.checked) });
-    const card = h("div", { class: "skill" + (s.enabled ? "" : " off") },
-      h("div", { class: "row" },
-        h("input", { type: "text", class: "s-name", value: s.name, "aria-label": "Skill name", placeholder: "Skill name" }),
-        h("label", { class: "switch" }, enabled, "On"),
-        h("button", { class: "btn small danger", type: "button", onclick: () => card.remove() }, "Remove")),
-      (() => { const t = h("textarea", { class: "s-text", rows: 3, "aria-label": "Skill instructions", placeholder: "What the agent should know or do for this skill" }); t.value = s.instructions; return t; })());
-    card._enabled = enabled;
-    skillList.append(card); return card;
-  };
-  draft.skills.forEach(addSkill);
+  const chosen = new Set(draft.skills);
+  const pickList = (builtin) => S.skills.filter((sk) => sk.builtin === builtin).map((sk) =>
+    h("label", { class: "pick" },
+      h("input", { type: "checkbox", class: "skill-pick", value: sk.id, checked: chosen.has(sk.id) }),
+      h("div", {}, sk.name, h("span", {}, sk.description || sk.instructions.slice(0, 140)))));
+  const custom = pickList(false);
+  const skillPicker = h("div", {},
+    h("div", { class: "subhead" }, "Actions"),
+    h("p", { class: "hint" }, "Let the agent work with files in its own folder."),
+    pickList(true),
+    h("div", { class: "subhead" }, "Your skills"),
+    custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
 
   const collect = () => ({
     name: name.value.trim(),
     model: model.value.trim(),
     system_prompt: prompt.value,
     config: [...configList.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean),
-    skills: [...skillList.children].map((c) => ({
-      name: c.querySelector(".s-name").value.trim(),
-      instructions: c.querySelector(".s-text").value.trim(),
-      enabled: c._enabled.checked,
-    })).filter((s) => s.name || s.instructions),
+    skills: [...skillPicker.querySelectorAll(".skill-pick")].filter((i) => i.checked).map((i) => i.value),
   });
 
   const save = async () => {
@@ -541,7 +616,7 @@ function renderEditor() {
   };
 
   const remove = async () => {
-    if (!confirm(`Delete ${existing.name}? Its settings and chat history will be removed.`)) return;
+    if (!confirm(`Delete ${existing.name}? Its settings, chat history and every file in its folder will be removed.`)) return;
     try {
       await api("/api/agents/" + encodeURIComponent(existing.name), { method: "DELETE" });
       localStorage.removeItem(historyKey(existing.name));
@@ -565,9 +640,10 @@ function renderEditor() {
       configList),
     h("div", { class: "section" },
       h("div", { class: "section-head" }, h("h3", {}, "Skills"),
-        h("button", { class: "btn small", type: "button", onclick: () => addSkill({ name: "", instructions: "", enabled: true }).querySelector(".s-name").focus() }, "Add skill")),
-      h("p", { class: "hint" }, "Named sets of instructions the agent can draw on. Switch a skill off to keep it without using it."),
-      skillList),
+        h("button", { class: "btn small", type: "button", onclick: () => go({ kind: "skills" }) }, "Manage skills")),
+      h("p", { class: "hint" }, "Choose what this agent can do. Skills are added to its instructions."),
+      skillPicker),
+    existing ? workspaceSection(existing) : null,
     h("div", { class: "form-actions" },
       h("button", { class: "btn primary", type: "submit" }, existing ? "Save agent" : "Create agent"),
       existing ? h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: existing.name }) }, "Chat with agent") : null,
@@ -581,9 +657,99 @@ function renderEditor() {
   if (!existing) name.focus();
 }
 
+function workspaceSection(agent) {
+  const list = h("ul", { class: "files" }, h("li", {}, "Loading\u2026"));
+  const show = async () => {
+    try {
+      const d = await api("/api/agents/" + encodeURIComponent(agent.name) + "/files");
+      fill(list, d.files.length
+        ? d.files.map((f) => h("li", {}, h("span", {}, f.path), h("small", {}, f.size < 1024 ? f.size + " B" : (f.size / 1024).toFixed(1) + " KB")))
+        : h("li", {}, h("small", {}, "No files yet.")));
+    } catch (e) { fill(list, h("li", {}, h("small", {}, e.message))); }
+  };
+  show();
+  return h("div", { class: "section" },
+    h("div", { class: "section-head" }, h("h3", {}, "Folder"),
+      h("div", { style: "display:flex;gap:8px" },
+        h("button", { class: "btn small", type: "button", onclick: show }, "Refresh"),
+        h("button", { class: "btn small", type: "button", onclick: async () => {
+          try { await api("/api/agents/" + encodeURIComponent(agent.name) + "/open-folder", { method: "POST" }); }
+          catch (e) { toast(e.message); }
+        } }, "Open folder"))),
+    h("p", { class: "hint" }, "Every file this agent makes is saved here. Deleting the agent deletes this folder."),
+    h("div", { class: "path" }, agent.workspace),
+    list);
+}
+
+/* ---------------------------------------------------------------- skills */
+function renderSkills() {
+  const builtin = S.skills.filter((sk) => sk.builtin);
+  const custom = S.skills.filter((sk) => !sk.builtin);
+  const usedBy = (id) => S.agents.filter((a) => a.skills.includes(id)).map((a) => a.name);
+  const users = (id) => { const u = usedBy(id); return u.length ? "Used by " + u.join(", ") : "Not used by any agent"; };
+
+  const editor = (sk, onDone) => {
+    const err = h("p", { class: "form-error", role: "alert", hidden: true });
+    const name = h("input", { type: "text", value: sk ? sk.name : "", maxlength: 80, placeholder: "for example: Plain English", "aria-label": "Skill name" });
+    const desc = h("input", { type: "text", value: sk ? sk.description : "", maxlength: 300, placeholder: "One line shown when choosing skills", "aria-label": "Description" });
+    const instr = h("textarea", { rows: 5, placeholder: "What the agent should do when using this skill", "aria-label": "Instructions" });
+    instr.value = sk ? sk.instructions : "";
+    const save = async () => {
+      err.hidden = true;
+      const data = { name: name.value, description: desc.value, instructions: instr.value };
+      try {
+        if (sk) await api("/api/skills/" + encodeURIComponent(sk.id), { method: "PUT", body: data });
+        else await api("/api/skills", { method: "POST", body: data });
+        await loadSkills(); toast(sk ? "Skill saved" : "Skill created"); onDone();
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+    };
+    const form = h("form", { class: "form skill-card", onsubmit: (e) => { e.preventDefault(); save(); } }, err,
+      h("div", { class: "field" }, h("label", {}, "Name"), name),
+      h("div", { class: "field" }, h("label", {}, "Description"), desc),
+      h("div", { class: "field" }, h("label", {}, "Instructions"), instr),
+      h("div", { class: "form-actions" },
+        h("button", { class: "btn primary", type: "submit" }, sk ? "Save skill" : "Create skill"),
+        h("button", { class: "btn", type: "button", onclick: onDone }, "Cancel")));
+    setTimeout(() => name.focus(), 0);
+    return form;
+  };
+
+  const customCard = (sk) => {
+    const card = h("div", { class: "skill-card" },
+      h("h4", {}, sk.name, h("span", { style: "display:flex;gap:12px" },
+        h("button", { class: "link", onclick: () => card.replaceWith(editor(sk, renderSkills)) }, "Edit"),
+        h("button", { class: "link", style: "color:var(--bad)", onclick: async () => {
+          if (!confirm(`Delete the skill ${sk.name}? Agents using it will stop using it.`)) return;
+          try { await api("/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
+                await Promise.all([loadSkills(), loadAgents()]); toast("Skill deleted"); renderSkills(); }
+          catch (e) { toast(e.message); }
+        } }, "Delete"))),
+      sk.description ? h("p", {}, sk.description) : null,
+      h("div", { class: "instr" }, sk.instructions),
+      h("p", {}, users(sk.id)));
+    return card;
+  };
+
+  const newSlot = h("div", {});
+  $("main").replaceChildren(
+    h("div", { class: "bar" }, menuButton(), h("h2", {}, "Skills"),
+      h("button", { class: "btn small primary", onclick: () => fill(newSlot, editor(null, renderSkills)) }, "New skill")),
+    h("div", { class: "editor" }, h("div", { class: "form" },
+      newSlot,
+      h("div", { class: "skill-group" }, h("h3", {}, "Your skills"),
+        h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
+        custom.length ? custom.map(customCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
+      h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
+        h("p", { class: "hint" }, "These let an agent work with files. Each agent can only reach its own folder."),
+        builtin.map((sk) => h("div", { class: "skill-card" },
+          h("h4", {}, sk.name, h("span", { class: "tag" }, "Built in")),
+          h("p", {}, sk.description),
+          h("p", {}, users(sk.id))))))));
+}
+
 /* ------------------------------------------------------------------ start */
 (async function start() {
-  await Promise.all([refreshStatus(), loadAgents()]);
+  await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
   renderMain();
   setInterval(refreshStatus, 4000);
 })();
