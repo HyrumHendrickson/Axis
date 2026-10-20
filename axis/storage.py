@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,9 @@ class AxisPaths:
     logs: Path
     agents: Path
     processes_file: Path
+
+
+AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def get_paths() -> AxisPaths:
@@ -55,10 +59,10 @@ def validate_agent_name(name: str) -> str:
     cleaned = name.strip()
     if not cleaned:
         raise ValueError("agent name cannot be empty")
-    if any(ch in cleaned for ch in r'\\/:*?"<>|'):
-        raise ValueError("agent name contains invalid characters")
-    if cleaned == ".Axis":
-        raise ValueError("agent name cannot be .Axis")
+    if cleaned in {".", "..", ".Axis"}:
+        raise ValueError("agent name is reserved")
+    if not AGENT_NAME_PATTERN.fullmatch(cleaned):
+        raise ValueError("agent name must match ^[A-Za-z0-9][A-Za-z0-9._-]*$")
     return cleaned
 
 

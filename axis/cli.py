@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .ollama import OllamaError, chat, list_downloaded_models, list_online_models, pull_model, remove_model
-from .runtime import is_running, load_processes, save_processes, start_agent_process, stop_agent_process, utc_now
+from .runtime import edit_processes, is_running, start_agent_process, stop_agent_process, utc_now
 from .storage import agent_dir, ensure_layout, get_paths, read_json, validate_agent_name, write_json
 
 
@@ -53,15 +53,25 @@ def cmd_delete(args: argparse.Namespace) -> int:
     if not root.exists():
         print(f"Agent '{name}' does not exist")
         return 1
+    try:
+        root.relative_to(paths.home)
+    except ValueError:
+        print("Refusing to delete path outside Axis home")
+        return 1
+    if root == paths.home:
+        print("Refusing to delete Axis home directory")
+        return 1
+    if root.is_symlink():
+        print("Refusing to delete symlinked agent directories")
+        return 1
 
-    processes = load_processes(paths)
-    info = processes.get(name)
-    if isinstance(info, dict):
-        pid = int(info.get("pid", 0))
-        if is_running(pid):
-            stop_agent_process(pid)
-        processes.pop(name, None)
-        save_processes(paths, processes)
+    with edit_processes(paths) as processes:
+        info = processes.get(name)
+        if isinstance(info, dict):
+            pid = int(info.get("pid", 0))
+            if is_running(pid):
+                stop_agent_process(pid)
+            processes.pop(name, None)
 
     shutil.rmtree(root)
     print(f"Deleted agent '{name}'")
@@ -89,17 +99,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"Agent '{name}' does not exist")
         return 1
 
-    processes = load_processes(paths)
-    current = processes.get(name)
-    if isinstance(current, dict):
-        pid = int(current.get("pid", 0))
-        if is_running(pid):
-            print(f"Agent '{name}' already running (pid {pid})")
-            return 0
+    with edit_processes(paths) as processes:
+        current = processes.get(name)
+        if isinstance(current, dict):
+            pid = int(current.get("pid", 0))
+            if is_running(pid):
+                print(f"Agent '{name}' already running (pid {pid})")
+                return 0
 
-    pid = start_agent_process(paths, name)
-    processes[name] = {"pid": pid, "started_at": utc_now()}
-    save_processes(paths, processes)
+        pid = start_agent_process(paths, name)
+        processes[name] = {"pid": pid, "started_at": utc_now()}
     print(f"Started agent '{name}' (pid {pid})")
     return 0
 
@@ -109,16 +118,15 @@ def cmd_stop(args: argparse.Namespace) -> int:
     ensure_layout(paths)
     name = validate_agent_name(args.name)
 
-    processes = load_processes(paths)
-    info = processes.get(name)
-    if not isinstance(info, dict):
-        print(f"Agent '{name}' is not running")
-        return 0
+    with edit_processes(paths) as processes:
+        info = processes.get(name)
+        if not isinstance(info, dict):
+            print(f"Agent '{name}' is not running")
+            return 0
 
-    pid = int(info.get("pid", 0))
-    stop_agent_process(pid)
-    processes.pop(name, None)
-    save_processes(paths, processes)
+        pid = int(info.get("pid", 0))
+        stop_agent_process(pid)
+        processes.pop(name, None)
     print(f"Stopped agent '{name}'")
     return 0
 
@@ -126,29 +134,28 @@ def cmd_stop(args: argparse.Namespace) -> int:
 def cmd_ps(_: argparse.Namespace) -> int:
     paths = get_paths()
     ensure_layout(paths)
-    processes = load_processes(paths)
-    if not processes:
-        print("No running agents")
-        return 0
+    with edit_processes(paths) as processes:
+        if not processes:
+            print("No running agents")
+            return 0
 
-    stale: list[str] = []
-    print("AGENT\tPID\tSTATUS\tSTARTED")
-    for name, info in sorted(processes.items()):
-        if not isinstance(info, dict):
-            stale.append(name)
-            continue
-        pid = int(info.get("pid", 0))
-        started = str(info.get("started_at", "-"))
-        running = is_running(pid)
-        status = "running" if running else "stale"
-        print(f"{name}\t{pid}\t{status}\t{started}")
-        if not running:
-            stale.append(name)
+        stale: list[str] = []
+        print("AGENT\tPID\tSTATUS\tSTARTED")
+        for name, info in sorted(processes.items()):
+            if not isinstance(info, dict):
+                stale.append(name)
+                continue
+            pid = int(info.get("pid", 0))
+            started = str(info.get("started_at", "-"))
+            running = is_running(pid)
+            status = "running" if running else "stale"
+            print(f"{name}\t{pid}\t{status}\t{started}")
+            if not running:
+                stale.append(name)
 
-    if stale:
-        for name in stale:
-            processes.pop(name, None)
-        save_processes(paths, processes)
+        if stale:
+            for name in stale:
+                processes.pop(name, None)
     return 0
 
 
@@ -232,12 +239,27 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
-    model = args.model.strip()
+    target = args.model.strip()
+    model = target
+    personality = "You are a concise and helpful assistant."
+    paths = get_paths()
+    ensure_layout(paths)
+    try:
+        maybe_agent = validate_agent_name(target)
+        root = agent_dir(paths, maybe_agent)
+        if root.exists():
+            _, config = _load_agent_config(paths, maybe_agent)
+            model = str(config.get("model") or target)
+            personality = str(config.get("personality") or personality)
+    except ValueError:
+        pass
+
     if not model:
         print("Model name is required")
         return 1
     print(f"Starting chat with '{model}'. Type 'exit' or 'quit' to stop.")
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, str]] = [{"role": "system", "content": personality}]
+    max_messages = 24
     while True:
         try:
             prompt = input("you> ").strip()
@@ -249,6 +271,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
         if prompt.lower() in {"exit", "quit"}:
             break
         messages.append({"role": "user", "content": prompt})
+        messages = messages[:1] + messages[-max_messages:]
         try:
             response = chat(model=model, messages=messages)
         except OllamaError as exc:
@@ -322,7 +345,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 
 def cmd_update(_: argparse.Namespace) -> int:
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "axis-agent-manager"]
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "git+https://github.com/HyrumHendrickson/Axis.git"]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         print("Axis update failed")
@@ -415,6 +438,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+        return 130
     except ValueError as exc:
         print(f"Error: {exc}")
         return 2

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,7 +24,7 @@ def _request(path: str, method: str = "GET", body: dict[str, Any] | None = None,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw) if raw else {}
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise OllamaError("could not reach Ollama at 127.0.0.1:11434; start it first") from exc
     except json.JSONDecodeError as exc:
         raise OllamaError("received invalid response from Ollama") from exc
@@ -51,7 +50,7 @@ def pull_model(name: str) -> None:
             raw = resp.read().decode("utf-8", errors="replace")
             if raw:
                 json.loads(raw)
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise OllamaError(f"failed to pull model '{name}'") from exc
     except json.JSONDecodeError as exc:
         raise OllamaError("unexpected response while pulling model") from exc
@@ -74,20 +73,23 @@ def chat(model: str, messages: list[dict[str, str]], timeout: int = 300) -> str:
 
 
 def list_online_models(limit: int = 100) -> list[str]:
-    url = "https://ollama.com/library"
+    url = f"https://registry.ollama.ai/v2/_catalog?n={max(1, limit)}"
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise OllamaError("failed to reach ollama.com library") from exc
+    except json.JSONDecodeError as exc:
+        raise OllamaError("failed to parse online model list") from exc
 
-    found = re.findall(r'href="/library/([a-zA-Z0-9_.-]+)"', html)
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for model in found:
-        if model not in seen:
-            ordered.append(model)
-            seen.add(model)
-        if len(ordered) >= limit:
+    repositories = payload.get("repositories")
+    if not isinstance(repositories, list):
+        return []
+    models: list[str] = []
+    for repo in repositories:
+        if not isinstance(repo, str):
+            continue
+        models.append(repo.removeprefix("library/"))
+        if len(models) >= limit:
             break
-    return ordered
+    return models

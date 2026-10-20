@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .ollama import OllamaError, chat
-from .storage import agent_dir, ensure_layout, get_paths, read_json, write_json
+from .storage import agent_dir, ensure_layout, get_paths, read_json
 
 
 def now_utc() -> str:
@@ -38,13 +38,8 @@ def process_tasks(agent_path: Path, config: dict) -> int:
         if result_file.exists():
             continue
 
-        prompt = task_file.read_text(encoding="utf-8", errors="replace")
-        payload = {
-            "agent": agent_path.name,
-            "task": task_file.name,
-            "processed_at": now_utc(),
-        }
         try:
+            prompt = task_file.read_text(encoding="utf-8", errors="replace")
             response = chat(
                 model=model,
                 messages=[
@@ -52,14 +47,21 @@ def process_tasks(agent_path: Path, config: dict) -> int:
                     {"role": "user", "content": prompt},
                 ],
             )
-            payload["ok"] = True
-            payload["response"] = response
+            payload = {
+                "agent": agent_path.name,
+                "task": task_file.name,
+                "processed_at": now_utc(),
+                "ok": True,
+                "response": response,
+            }
+            result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            handled += 1
         except OllamaError as exc:
-            payload["ok"] = False
-            payload["error"] = str(exc)
-
-        result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        handled += 1
+            print(f"{now_utc()} task '{task_file.name}' failed transiently: {exc}")
+            continue
+        except Exception as exc:
+            print(f"{now_utc()} task '{task_file.name}' failed: {exc}")
+            continue
 
     return handled
 
@@ -80,9 +82,12 @@ def run_loop(agent_name: str, interval: float) -> None:
         raise SystemExit(f"Agent '{agent_name}' does not exist")
 
     while True:
-        config = load_agent_config(agent_path)
-        process_tasks(agent_path, config)
-        heartbeat(agent_name)
+        try:
+            config = load_agent_config(agent_path)
+            process_tasks(agent_path, config)
+            heartbeat(agent_name)
+        except Exception as exc:
+            print(f"{now_utc()} worker loop error: {exc}")
         time.sleep(interval)
 
 
