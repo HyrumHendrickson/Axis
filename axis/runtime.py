@@ -42,6 +42,10 @@ def start_agent_process(paths: AxisPaths, agent_name: str) -> int:
     log_path = paths.logs / f"{agent_name}.log"
     cmd = [sys.executable, "-m", "axis.worker", "--agent", agent_name]
     log_handle = log_path.open("a", encoding="utf-8")
+    package_root = str(Path(__file__).resolve().parent.parent)
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = package_root if not existing else f"{package_root}{os.pathsep}{existing}"
 
     kwargs: dict[str, object] = {
         "stdout": log_handle,
@@ -49,6 +53,7 @@ def start_agent_process(paths: AxisPaths, agent_name: str) -> int:
         "stdin": subprocess.DEVNULL,
         "cwd": str(paths.home),
         "close_fds": True,
+        "env": env,
     }
 
     if os.name == "nt":

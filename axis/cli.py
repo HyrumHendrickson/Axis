@@ -113,7 +113,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
     info = processes.get(name)
     if not isinstance(info, dict):
         print(f"Agent '{name}' is not running")
-        return 1
+        return 0
 
     pid = int(info.get("pid", 0))
     stop_agent_process(pid)
