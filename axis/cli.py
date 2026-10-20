@@ -6,9 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .ollama import OllamaError, list_downloaded_models, list_online_models, pull_model, remove_model
+from .ollama import OllamaError, chat, list_downloaded_models, list_online_models, pull_model, remove_model
 from .runtime import is_running, load_processes, save_processes, start_agent_process, stop_agent_process, utc_now
-from .storage import agent_dir, ensure_layout, get_paths, validate_agent_name, write_json
+from .storage import agent_dir, ensure_layout, get_paths, read_json, validate_agent_name, write_json
 
 
 def _agents(paths) -> list[str]:
@@ -167,6 +167,98 @@ def cmd_edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_agent_config(paths, name: str) -> tuple[Path, dict]:
+    root = agent_dir(paths, name)
+    if not root.exists():
+        raise ValueError(f"Agent '{name}' does not exist")
+    config_path = root / "config.json"
+    config = read_json(config_path, {})
+    if not isinstance(config, dict):
+        config = {}
+    return config_path, config
+
+
+def cmd_model_set(args: argparse.Namespace) -> int:
+    paths = get_paths()
+    ensure_layout(paths)
+    name = validate_agent_name(args.name)
+    model = args.model.strip()
+    if not model:
+        print("Model name is required")
+        return 1
+    try:
+        config_path, config = _load_agent_config(paths, name)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    config["name"] = name
+    config["model"] = model
+    config.setdefault("personality", "You are a concise and helpful assistant.")
+    write_json(config_path, config)
+    print(f"Agent '{name}' model set to '{model}'")
+    return 0
+
+
+def cmd_model_show(args: argparse.Namespace) -> int:
+    paths = get_paths()
+    ensure_layout(paths)
+    name = validate_agent_name(args.name)
+    try:
+        _, config = _load_agent_config(paths, name)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    model = str(config.get("model") or "llama3.2:3b")
+    print(model)
+    return 0
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    model = args.model.strip()
+    prompt = " ".join(args.prompt).strip()
+    if not model:
+        print("Model name is required")
+        return 1
+    if not prompt:
+        print("Prompt is required")
+        return 1
+    try:
+        response = chat(model=model, messages=[{"role": "user", "content": prompt}])
+    except OllamaError as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(response)
+    return 0
+
+
+def cmd_chat(args: argparse.Namespace) -> int:
+    model = args.model.strip()
+    if not model:
+        print("Model name is required")
+        return 1
+    print(f"Starting chat with '{model}'. Type 'exit' or 'quit' to stop.")
+    messages: list[dict[str, str]] = []
+    while True:
+        try:
+            prompt = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not prompt:
+            continue
+        if prompt.lower() in {"exit", "quit"}:
+            break
+        messages.append({"role": "user", "content": prompt})
+        try:
+            response = chat(model=model, messages=messages)
+        except OllamaError as exc:
+            print(f"Error: {exc}")
+            return 1
+        messages.append({"role": "assistant", "content": response})
+        print(f"{model}> {response}")
+    return 0
+
+
 def cmd_list_downloaded(_: argparse.Namespace) -> int:
     try:
         models = list_downloaded_models()
@@ -295,6 +387,25 @@ def build_parser() -> argparse.ArgumentParser:
     edit_parser = sub.add_parser("edit", help="Print paths to agent config and tools")
     edit_parser.add_argument("name")
     edit_parser.set_defaults(func=cmd_edit)
+
+    model_parser = sub.add_parser("model", help="Set or show an agent model")
+    model_sub = model_parser.add_subparsers(dest="model_command", required=True)
+    model_set_parser = model_sub.add_parser("set", help="Set an agent model")
+    model_set_parser.add_argument("name")
+    model_set_parser.add_argument("model")
+    model_set_parser.set_defaults(func=cmd_model_set)
+    model_show_parser = model_sub.add_parser("show", help="Show an agent model")
+    model_show_parser.add_argument("name")
+    model_show_parser.set_defaults(func=cmd_model_show)
+
+    ask_parser = sub.add_parser("ask", help="Send one prompt to a model")
+    ask_parser.add_argument("model")
+    ask_parser.add_argument("prompt", nargs="+")
+    ask_parser.set_defaults(func=cmd_ask)
+
+    chat_parser = sub.add_parser("chat", help="Open an interactive conversation with a model")
+    chat_parser.add_argument("model")
+    chat_parser.set_defaults(func=cmd_chat)
 
     return parser
 

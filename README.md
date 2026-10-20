@@ -62,6 +62,16 @@ axis download llama3.2:3b
 # start the agent worker
 axis start demo
 
+# set and check the agent's selected model
+axis model set demo llama3.2:3b
+axis model show demo
+
+# send a one-shot request to a model
+axis ask llama3.2:3b "Summarize the benefits of unit tests"
+
+# open an interactive conversation with a model
+axis chat llama3.2:3b
+
 # drop a task file in:
 # ~/Axis/demo/workshop/tasks/my-task.txt
 
@@ -86,9 +96,13 @@ axis delete demo
 - `axis list agents`
 - `axis create <agent>`
 - `axis edit <agent>`
+- `axis model set <agent> <model>`
+- `axis model show <agent>`
 - `axis start <agent>`
 - `axis stop <agent>`
 - `axis delete <agent>`
+- `axis ask <model> <prompt>`
+- `axis chat <model>`
 
 ## Storage layout
 
