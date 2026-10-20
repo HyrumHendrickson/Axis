@@ -21,6 +21,12 @@ python -m pip install .
 python -m pip install git+https://github.com/HyrumHendrickson/Axis.git
 ```
 
+### Option 3 (Windows): one copy-paste install + PATH fix
+
+```powershell
+$py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }; & $py -m pip install --user git+https://github.com/HyrumHendrickson/Axis.git; $scripts = & $py -c "import os,site,sysconfig; paths=[os.path.normpath(site.USER_BASE + r'\\Scripts'), os.path.normpath(sysconfig.get_path('scripts', scheme='nt_user') or '')]; print(';'.join(dict.fromkeys([p for p in paths if p])))"; $userPath = [Environment]::GetEnvironmentVariable('Path','User'); $parts = @($userPath -split ';' | Where-Object { $_ }); foreach ($p in ($scripts -split ';' | Where-Object { $_ })) { if ($parts -notcontains $p) { $parts += $p } }; [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User'); $env:Path = ((@($parts) + @($env:Path -split ';' | Where-Object { $_ -and ($parts -notcontains $_) })) | Select-Object -Unique) -join ';'; axis --help
+```
+
 Verify install:
 
 ```bash
@@ -33,11 +39,10 @@ If `axis` is not found, use:
 python -m axis --help
 ```
 
-On Windows with `--user` installs, add your user Scripts directory to PATH and open a new terminal:
+On Windows, if `axis` is still not found in an older terminal session, reopen the terminal or use:
 
 ```powershell
-$scripts = python -c "import site; print(site.USER_BASE + r'\\Scripts')"
-[Environment]::SetEnvironmentVariable('Path', $env:Path + ';' + $scripts, 'User')
+python -m axis --help
 ```
 
 ## Quick start (MVP flow)
