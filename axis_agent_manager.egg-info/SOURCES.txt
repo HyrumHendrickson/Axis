@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+axis/__init__.py
+axis/cli.py
+axis/ollama.py
+axis/runtime.py
+axis/storage.py
+axis/worker.py
+axis_agent_manager.egg-info/PKG-INFO
+axis_agent_manager.egg-info/SOURCES.txt
+axis_agent_manager.egg-info/dependency_links.txt
+axis_agent_manager.egg-info/entry_points.txt
+axis_agent_manager.egg-info/top_level.txt
