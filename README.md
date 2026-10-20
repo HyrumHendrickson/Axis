@@ -45,6 +45,12 @@ On Windows, if `axis` is still not found in an older terminal session, reopen th
 python -m axis --help
 ```
 
+Update to latest version from GitHub:
+
+```bash
+axis update
+```
+
 ## Quick start (MVP flow)
 
 ```bash
@@ -127,5 +133,5 @@ For each task file without an existing result, Axis calls Ollama chat and writes
 ## Troubleshooting
 
 - If model commands fail, verify Ollama is running.
-- If `axis create <name>` fails, use a simple folder-safe name (no `\\ / : * ? \" < > |`).
+- If `axis create <name>` fails, use a safe name matching `^[A-Za-z0-9][A-Za-z0-9._-]*$` (avoid `.` and `..`).
 - Use `axis ps` to identify stale or running agents.

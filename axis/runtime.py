@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import ctypes
+import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .storage import AxisPaths, read_json, write_json
+from .storage import AxisPaths, write_json
 
 
 def utc_now() -> str:
@@ -18,6 +22,8 @@ def utc_now() -> str:
 def is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _is_running_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -29,13 +35,90 @@ def is_running(pid: int) -> bool:
     return True
 
 
+def _is_running_windows(pid: int) -> bool:
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.GetExitCodeProcess.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        err = ctypes.get_last_error()
+        if err == 5:
+            return True
+        return False
+    try:
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        if not ok:
+            return False
+        return int(code.value) == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def load_processes(paths: AxisPaths) -> dict[str, dict[str, str | int]]:
-    data = read_json(paths.processes_file, {})
+    if not paths.processes_file.exists():
+        return {}
+    try:
+        raw = paths.processes_file.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        backup = paths.processes_file.with_name(f"{paths.processes_file.name}.corrupt-{int(time.time())}")
+        try:
+            shutil.copy2(paths.processes_file, backup)
+        except OSError:
+            pass
+        return {}
     return data if isinstance(data, dict) else {}
 
 
 def save_processes(paths: AxisPaths, data: dict[str, dict[str, str | int]]) -> None:
     write_json(paths.processes_file, data)
+
+
+@contextmanager
+def edit_processes(paths: AxisPaths, timeout_seconds: float = 5.0):
+    with _processes_lock(paths, timeout_seconds=timeout_seconds):
+        data = load_processes(paths)
+        if not isinstance(data, dict):
+            data = {}
+        yield data
+        save_processes(paths, data)
+
+
+@contextmanager
+def _processes_lock(paths: AxisPaths, timeout_seconds: float = 5.0, poll_seconds: float = 0.05):
+    lock_path = paths.processes_file.with_suffix(f"{paths.processes_file.suffix}.lock")
+    deadline = time.time() + timeout_seconds
+    fd: int | None = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise RuntimeError("timed out waiting for process state lock")
+            time.sleep(poll_seconds)
+
+    try:
+        if fd is not None:
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def start_agent_process(paths: AxisPaths, agent_name: str) -> int:
@@ -61,8 +144,11 @@ def start_agent_process(paths: AxisPaths, agent_name: str) -> int:
     else:
         kwargs["preexec_fn"] = os.setsid
 
-    proc = subprocess.Popen(cmd, **kwargs)
-    return int(proc.pid)
+    try:
+        proc = subprocess.Popen(cmd, **kwargs)
+        return int(proc.pid)
+    finally:
+        log_handle.close()
 
 
 def stop_agent_process(pid: int, grace_seconds: float = 8.0) -> None:
