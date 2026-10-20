@@ -23,16 +23,33 @@ Axis is a lightweight CLI for managing local Ollama-based agents.
 ### Option 1: Install from this repository
 
 ```bash
-pip install .
+python -m pip install .
 ```
 
 ### Option 2: Install directly from GitHub
 
 ```bash
-pip install git+https://github.com/HyrumHendrickson/Axis.git
+python -m pip install git+https://github.com/HyrumHendrickson/Axis.git
 ```
 
-After install, the `axis` command is available.
+Verify install:
+
+```bash
+axis --help
+```
+
+If `axis` is not found, use:
+
+```bash
+python -m axis --help
+```
+
+On Windows with `--user` installs, add your user Scripts directory to PATH and open a new terminal:
+
+```powershell
+$scripts = python -c "import site; print(site.USER_BASE + r'\\Scripts')"
+[Environment]::SetEnvironmentVariable('Path', $env:Path + ';' + $scripts, 'User')
+```
 
 ## Quick start (MVP flow)
 

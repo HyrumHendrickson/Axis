@@ -2,6 +2,7 @@ LICENSE
 README.md
 pyproject.toml
 axis/__init__.py
+axis/__main__.py
 axis/cli.py
 axis/ollama.py
 axis/runtime.py
