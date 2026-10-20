@@ -268,6 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
     get_parser = sub.add_parser("get", help="Download a model")
     get_parser.add_argument("name")
     get_parser.set_defaults(func=cmd_get)
+    download_parser = sub.add_parser("download", help="Download a model")
+    download_parser.add_argument("name")
+    download_parser.set_defaults(func=cmd_get)
 
     remove_parser = sub.add_parser("remove", help="Remove a downloaded model")
     remove_parser.add_argument("name")
@@ -299,7 +302,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 2
 
 
 if __name__ == "__main__":
