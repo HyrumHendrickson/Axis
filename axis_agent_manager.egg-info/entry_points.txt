@@ -1,0 +1,2 @@
+[console_scripts]
+axis = axis.cli:main
