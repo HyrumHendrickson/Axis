@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "axis-agent-manager"
-version = "1.0.0"
-description = "Chat with and run agents on a local model served by Ollama or llama.cpp"
+version = "2.0.0"
+description = "A local web app for chatting with agents on a model served by Ollama or llama.cpp"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -17,3 +17,6 @@ axis = "axis.cli:main"
 
 [tool.setuptools]
 packages = ["axis"]
+
+[tool.setuptools.package-data]
+axis = ["web/*.html"]

@@ -13,12 +13,14 @@ import socket
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import cli
+from axis import agents, backend, cli, server
 
 LAST_REQUEST: dict = {}
 
@@ -114,23 +116,7 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run_cli(*argv, stdin=None):
-    out, err = io.StringIO(), io.StringIO()
-    patches = []
-    if stdin is not None:
-        patches.append(mock.patch("sys.stdin", io.StringIO(stdin)))
-    for p in patches:
-        p.start()
-    try:
-        with redirect_stdout(out), redirect_stderr(err):
-            code = cli.main(list(argv))
-    finally:
-        for p in patches:
-            p.stop()
-    return code, out.getvalue(), err.getvalue()
-
-
-class AxisTestCase(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
         self.env = mock.patch.dict(os.environ, {"AXIS_HOME": self.home})
@@ -145,258 +131,296 @@ class AxisTestCase(unittest.TestCase):
         self.env.stop()
         shutil.rmtree(self.home, ignore_errors=True)
 
-    def server(self, handler, models):
+    def model_server(self, handler, models):
         srv, url = start_server(handler, models)
         self.servers.append(srv)
         return url
 
+    def axis_server(self, model_url):
+        srv = server.make_server(0, model_url)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.servers.append(srv)
+        return srv.url
 
-class TestGate(AxisTestCase):
+
+# ------------------------------------------------------------------ backend
+
+
+class TestBackend(Base):
     def test_no_server(self):
-        url = f"http://127.0.0.1:{free_port()}"
-        for argv in (["status"], ["ask", "hi"], ["chat"]):
-            code, _, err = run_cli("--url", url, *argv)
-            self.assertEqual(code, 1, argv)
-            self.assertIn("No model server is running", err)
+        with self.assertRaises(backend.ServerUnavailable):
+            backend.connect(f"http://127.0.0.1:{free_port()}")
 
-    def test_ollama_running_but_no_model(self):
-        url = self.server(OllamaHandler, [])
-        code, _, err = run_cli("--url", url, "ask", "hi")
-        self.assertEqual(code, 1)
-        self.assertIn("no model is loaded", err)
-        self.assertIn("ollama run", err)
-
-    def test_llamacpp_running_but_no_model(self):
-        url = self.server(LlamaCppHandler, [])
-        code, _, err = run_cli("--url", url, "status")
-        self.assertEqual(code, 1)
-        self.assertIn("no model is loaded", err)
-
-    def test_env_url_and_bare_host(self):
-        url = self.server(OllamaHandler, ["llama3.2:3b"])
-        with mock.patch.dict(os.environ, {"AXIS_URL": url.replace("http://", "")}):
-            code, out, _ = run_cli("status")
-        self.assertEqual(code, 0)
-        self.assertIn("Ollama", out)
-
-
-class TestOllama(AxisTestCase):
-    def setUp(self):
-        super().setUp()
-        self.url = self.server(OllamaHandler, ["llama3.2:3b", "qwen3:8b"])
-
-    def test_status(self):
-        code, out, _ = run_cli("--url", self.url, "status")
-        self.assertEqual(code, 0)
-        self.assertIn("llama3.2:3b   (default)", out)
-        self.assertIn("qwen3:8b", out)
-
-    def test_ask_streams_and_keeps_model_loaded(self):
-        code, out, _ = run_cli("--url", self.url, "ask", "hello", "world")
-        self.assertEqual(code, 0)
-        self.assertIn("echo: hello world", out)
-        self.assertEqual(LAST_REQUEST["model"], "llama3.2:3b")
-        self.assertEqual(LAST_REQUEST["keep_alive"], -1)
-
-    def test_ask_from_stdin(self):
-        code, out, _ = run_cli("--url", self.url, "ask", stdin="piped text\n")
-        self.assertEqual(code, 0)
-        self.assertIn("echo: piped text", out)
-
-    def test_ask_specific_model_and_latest_alias(self):
-        code, _, _ = run_cli("--url", self.url, "ask", "-m", "qwen3:8b", "x")
-        self.assertEqual(code, 0)
-        self.assertEqual(LAST_REQUEST["model"], "qwen3:8b")
-
-    def test_ask_model_not_loaded(self):
-        code, _, err = run_cli("--url", self.url, "ask", "-m", "mistral", "x")
-        self.assertEqual(code, 1)
-        self.assertIn("not loaded", err)
-
-    def test_server_error_reported(self):
-        code, _, err = run_cli("--url", self.url, "ask", "FAIL")
-        self.assertEqual(code, 1)
-        self.assertIn("simulated failure", err)
-
-    def test_chat_session(self):
-        script = "first\n/model\n/clear\nsecond\n/help\n/exit\n"
-        with mock.patch("builtins.input", side_effect=script.splitlines()):
-            code, out, _ = run_cli("--url", self.url, "chat")
-        self.assertEqual(code, 0)
-        self.assertIn("echo: first", out)
-        self.assertIn("echo: second", out)
-        self.assertIn("Conversation cleared.", out)
-        # after /clear only system + "second" are sent
-        self.assertEqual([m["role"] for m in LAST_REQUEST["messages"]], ["system", "user"])
-
-    def test_chat_keeps_history(self):
-        with mock.patch("builtins.input", side_effect=["one", "two", EOFError()]):
-            code, _, _ = run_cli("--url", self.url, "chat")
-        self.assertEqual(code, 0)
-        roles = [m["role"] for m in LAST_REQUEST["messages"]]
-        self.assertEqual(roles, ["system", "user", "assistant", "user"])
-
-    def test_chat_error_does_not_end_session(self):
-        with mock.patch("builtins.input", side_effect=["FAIL", "ok", "/quit"]):
-            code, out, err = run_cli("--url", self.url, "chat")
-        self.assertEqual(code, 0)
-        self.assertIn("simulated failure", err)
-        self.assertIn("echo: ok", out)
-
-
-class TestLlamaCpp(AxisTestCase):
-    def setUp(self):
-        super().setUp()
-        self.url = self.server(LlamaCppHandler, ["Llama-3.2-3B-Instruct-Q4_K_M.gguf"])
-
-    def test_status(self):
-        code, out, _ = run_cli("--url", self.url, "status")
-        self.assertEqual(code, 0)
-        self.assertIn("llama.cpp", out)
-
-    def test_ask(self):
-        code, out, _ = run_cli("--url", self.url, "ask", "hi there")
-        self.assertEqual(code, 0)
-        self.assertIn("echo: hi there", out)
-        self.assertNotIn("keep_alive", LAST_REQUEST)
-
-    def test_http_error(self):
-        code, _, err = run_cli("--url", self.url, "ask", "FAIL")
-        self.assertEqual(code, 1)
-        self.assertIn("simulated failure", err)
-
-
-class TestAgents(AxisTestCase):
-    def test_crud(self):
-        code, out, _ = run_cli("agent", "create", "writer", "-p", "You write haiku.")
-        self.assertEqual(code, 0, out)
-        code, _, err = run_cli("agent", "create", "writer")
-        self.assertEqual(code, 1)
-        self.assertIn("already exists", err)
-
-        code, out, _ = run_cli("agent", "list")
-        self.assertIn("writer", out)
-        code, out, _ = run_cli("agent", "show", "writer")
-        self.assertIn("You write haiku.", out)
-
-        code, out, _ = run_cli("agent", "edit", "writer", "-m", "qwen3:8b", "-p", "New prompt")
-        self.assertEqual(code, 0)
-        code, out, _ = run_cli("agent", "show", "writer")
-        self.assertIn("qwen3:8b", out)
-        self.assertIn("New prompt", out)
-        run_cli("agent", "edit", "writer", "--clear-model")
-        code, out, _ = run_cli("agent", "show", "writer")
-        self.assertIn("whichever model is loaded", out)
-
-        code, _, _ = run_cli("agent", "edit", "writer")
-        self.assertEqual(code, 1)
-
-        with mock.patch("builtins.input", return_value="n"):
-            code, _, _ = run_cli("agent", "delete", "writer")
-        self.assertEqual(code, 1)
-        code, _, _ = run_cli("agent", "delete", "writer", "-y")
-        self.assertEqual(code, 0)
-        code, out, _ = run_cli("agent", "list")
-        self.assertIn("No agents yet", out)
-
-    def test_invalid_and_missing_names(self):
-        for bad in ("../x", ".hidden", "a b", ""):
-            code, _, err = run_cli("agent", "create", bad)
-            self.assertEqual(code, 1, bad)
-            self.assertIn("Invalid agent name", err)
-        code, _, err = run_cli("agent", "show", "ghost")
-        self.assertEqual(code, 1)
-        self.assertIn("does not exist", err)
-
-    def test_agent_management_needs_no_server(self):
-        with mock.patch.dict(os.environ, {"AXIS_URL": f"http://127.0.0.1:{free_port()}"}):
-            code, _, _ = run_cli("agent", "create", "offline")
-        self.assertEqual(code, 0)
-
-    def test_ask_and_chat_as_agent(self):
-        url = self.server(OllamaHandler, ["llama3.2:3b", "qwen3:8b"])
-        run_cli("agent", "create", "poet", "-p", "Be poetic.", "-m", "qwen3:8b")
-        code, out, _ = run_cli("--url", url, "ask", "-a", "poet", "moon")
-        self.assertEqual(code, 0)
-        self.assertEqual(LAST_REQUEST["model"], "qwen3:8b")
-        self.assertEqual(LAST_REQUEST["messages"][0]["content"], "Be poetic.")
-        # -m overrides the agent's model
-        run_cli("--url", url, "ask", "-a", "poet", "-m", "llama3.2:3b", "x")
-        self.assertEqual(LAST_REQUEST["model"], "llama3.2:3b")
-        with mock.patch("builtins.input", side_effect=["hi", "/exit"]):
-            code, out, _ = run_cli("--url", url, "chat", "-a", "poet")
-        self.assertIn("agent 'poet'", out)
-
-    def test_agent_model_not_loaded(self):
-        url = self.server(OllamaHandler, ["llama3.2:3b"])
-        run_cli("agent", "create", "picky", "-m", "mistral")
-        code, _, err = run_cli("--url", url, "ask", "-a", "picky", "x")
-        self.assertEqual(code, 1)
-        self.assertIn("'mistral' is not loaded", err)
-
-
-class TestRun(AxisTestCase):
-    def test_run_once(self):
+    def test_server_without_model(self):
         for handler in (OllamaHandler, LlamaCppHandler):
-            with self.subTest(handler=handler.__name__):
-                url = self.server(handler, ["model-a"])
-                name = "w" + handler.__name__.lower()
-                run_cli("agent", "create", name)
-                tasks = Path(self.home) / "agents" / name / "tasks"
-                results = Path(self.home) / "agents" / name / "results"
-                (tasks / "one.txt").write_text("summarize this", encoding="utf-8")
-                (tasks / "two.md").write_text("FAIL please", encoding="utf-8")
-                (tasks / "empty.txt").write_text("   ", encoding="utf-8")
-                (tasks / "ignore.json").write_text("{}", encoding="utf-8")
+            url = self.model_server(handler, [])
+            with self.assertRaisesRegex(backend.BackendError, "no model is loaded"):
+                backend.connect(url)
 
-                code, out, err = run_cli("--url", url, "run", name, "--once")
-                self.assertEqual(code, 0, err)
-                self.assertIn("echo: summarize this", (results / "one.md").read_text(encoding="utf-8"))
-                self.assertTrue((tasks / "done" / "one.txt").exists())
-                self.assertTrue((tasks / "failed" / "two.md").exists())
-                self.assertTrue((results / "two.error.txt").exists())
-                self.assertTrue((tasks / "failed" / "empty.txt").exists())
-                self.assertTrue((tasks / "ignore.json").exists())
+    def test_detects_ollama_before_openai_route(self):
+        conn = backend.connect(self.model_server(OllamaHandler, ["llama3.2:3b"]))
+        self.assertEqual((conn.kind, conn.models), ("ollama", ["llama3.2:3b"]))
 
-                # a second task with the same name does not overwrite the first result
-                (tasks / "one.txt").write_text("again", encoding="utf-8")
-                run_cli("--url", url, "run", name, "--once")
-                self.assertEqual(len(list(results.glob("one*.md"))), 2)
-                self.assertEqual(len(list((tasks / "done").glob("one*.txt"))), 2)
+    def test_detects_llamacpp(self):
+        conn = backend.connect(self.model_server(LlamaCppHandler, ["x.gguf"]))
+        self.assertEqual(conn.kind, "openai")
 
-    def test_run_refuses_without_model(self):
-        run_cli("agent", "create", "idle")
-        url = self.server(OllamaHandler, [])
-        code, _, err = run_cli("--url", url, "run", "idle", "--once")
-        self.assertEqual(code, 1)
-        self.assertIn("no model is loaded", err)
+    def test_env_url_without_scheme(self):
+        url = self.model_server(OllamaHandler, ["m"])
+        with mock.patch.dict(os.environ, {"AXIS_URL": url.replace("http://", "")}):
+            self.assertEqual(backend.connect(None).url, url)
 
-    def test_run_missing_agent(self):
-        url = self.server(OllamaHandler, ["m"])
-        code, _, err = run_cli("--url", url, "run", "ghost", "--once")
-        self.assertEqual(code, 1)
-        self.assertIn("does not exist", err)
+    def test_resolve_model(self):
+        conn = backend.Backend("ollama", "u", ["llama3.2:3b", "qwen:latest"])
+        self.assertEqual(backend.resolve_model(conn, None), "llama3.2:3b")
+        self.assertEqual(backend.resolve_model(conn, "qwen"), "qwen:latest")
+        with self.assertRaisesRegex(backend.BackendError, "not loaded"):
+            backend.resolve_model(conn, "mistral")
 
-    def test_run_loop_stops_on_ctrl_c(self):
-        url = self.server(OllamaHandler, ["m"])
-        run_cli("agent", "create", "loop")
-        with mock.patch("axis.worker.time.sleep", side_effect=KeyboardInterrupt):
-            code, out, _ = run_cli("--url", url, "run", "loop")
-        self.assertEqual(code, 0)
-        self.assertIn("Stopped.", out)
+    def test_chat_streams_both_backends(self):
+        for handler in (OllamaHandler, LlamaCppHandler):
+            conn = backend.connect(self.model_server(handler, ["m"]))
+            tokens = []
+            reply = backend.chat(conn, "m", [{"role": "user", "content": "hi"}], tokens.append)
+            self.assertEqual(reply.strip(), "echo: hi")
+            self.assertGreater(len(tokens), 1)
+            self.assertEqual("keep_alive" in LAST_REQUEST, handler is OllamaHandler)
+
+    def test_chat_errors(self):
+        for handler in (OllamaHandler, LlamaCppHandler):
+            conn = backend.connect(self.model_server(handler, ["m"]))
+            with self.assertRaisesRegex(backend.BackendError, "simulated failure"):
+                backend.chat(conn, "m", [{"role": "user", "content": "FAIL"}])
 
 
-class TestParser(AxisTestCase):
-    def test_version_and_help(self):
-        for argv in (["--version"], ["--help"], ["agent", "--help"]):
-            with self.assertRaises(SystemExit) as ctx, redirect_stdout(io.StringIO()):
-                cli.main(argv)
-            self.assertEqual(ctx.exception.code, 0)
+# ------------------------------------------------------------------- agents
 
-    def test_missing_command(self):
-        with self.assertRaises(SystemExit) as ctx, redirect_stderr(io.StringIO()):
-            cli.main([])
-        self.assertEqual(ctx.exception.code, 2)
+
+class TestAgents(Base):
+    def test_create_load_update_delete(self):
+        a = agents.create({
+            "name": "editor", "system_prompt": "You edit.", "model": "m",
+            "config": ["Be brief.", "  ", "Use US spelling."],
+            "skills": [{"name": "Grammar", "instructions": "Fix grammar.", "enabled": True},
+                       {"name": "", "instructions": ""}],
+        })
+        self.assertEqual(a.config, ["Be brief.", "Use US spelling."])
+        self.assertEqual(len(a.skills), 1)
+        loaded = agents.load("editor")
+        self.assertEqual(loaded.to_dict(), a.to_dict())
+
+        updated = agents.update("editor", {"name": "copyeditor", "config": ["One rule."]})
+        self.assertEqual(updated.name, "copyeditor")
+        self.assertEqual(updated.system_prompt, "You edit.")  # untouched fields are kept
+        self.assertFalse((Path(self.home) / "agents" / "editor").exists())
+        self.assertEqual([x.name for x in agents.list_all()], ["copyeditor"])
+
+        agents.delete("copyeditor")
+        self.assertEqual(agents.list_all(), [])
+
+    def test_validation(self):
+        for bad in ("../x", ".hidden", "a b", "", "x" * 65):
+            with self.assertRaises(agents.AgentError):
+                agents.create({"name": bad})
+        agents.create({"name": "a"})
+        with self.assertRaisesRegex(agents.AgentError, "already exists"):
+            agents.create({"name": "a"})
+        with self.assertRaisesRegex(agents.AgentError, "needs a name"):
+            agents.create({"name": "b", "skills": [{"name": "", "instructions": "x"}]})
+        with self.assertRaises(agents.AgentError):
+            agents.create({"name": "c", "config": "not a list"})
+        agents.create({"name": "d"})
+        with self.assertRaisesRegex(agents.AgentError, "already exists"):
+            agents.update("a", {"name": "d"})
+
+    def test_reads_version_1_agent_files(self):
+        folder = Path(self.home) / "agents" / "old"
+        folder.mkdir(parents=True)
+        (folder / "agent.json").write_text(json.dumps({"name": "old", "system_prompt": "Hi", "model": "", "created": "x"}))
+        a = agents.load("old")
+        self.assertEqual((a.system_prompt, a.config, a.skills), ("Hi", [], []))
+
+    def test_build_messages(self):
+        a = agents.create({
+            "name": "x", "system_prompt": "Base.", "config": ["Rule one.", "Rule two."],
+            "skills": [{"name": "On", "instructions": "use me"}, {"name": "Off", "instructions": "hidden", "enabled": False}],
+        })
+        history = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}, {"role": "user", "content": "q2"}]
+        msgs = agents.build_messages(a, history)
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertIn("Base.", msgs[0]["content"])
+        self.assertIn("## On\nuse me", msgs[0]["content"])
+        self.assertNotIn("hidden", msgs[0]["content"])
+        self.assertEqual(msgs[1]["content"], "q1")  # earlier turns untouched
+        self.assertTrue(msgs[-1]["content"].startswith("q2"))
+        self.assertIn("- Rule one.\n- Rule two.", msgs[-1]["content"])
+        self.assertEqual(history[-1]["content"], "q2")  # caller's list is not modified
+
+        plain = agents.build_messages(None, history)
+        self.assertEqual(plain, history)
+
+    def test_build_messages_rejects_bad_history(self):
+        for bad in ([], None, [{"role": "assistant", "content": "x"}], [{"role": "system", "content": "x"}],
+                    [{"role": "user", "content": 5}], [{"role": "user", "content": "  "}]):
+            with self.assertRaises(agents.AgentError):
+                agents.build_messages(None, bad)
+
+
+# ------------------------------------------------------------------- server
+
+
+def request(url, method="GET", body=None, headers=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=10) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
+def chat_events(text):
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+class TestServer(Base):
+    def setUp(self):
+        super().setUp()
+        self.model_url = self.model_server(OllamaHandler, ["llama3.2:3b", "qwen3:8b"])
+        self.url = self.axis_server(self.model_url)
+
+    def test_page_and_ping(self):
+        code, text = request(self.url + "/")
+        self.assertEqual(code, 200)
+        self.assertIn("<title>Axis</title>", text)
+        code, text = request(self.url + "/api/ping")
+        self.assertEqual(json.loads(text)["app"], "axis")
+
+    def test_status_ready(self):
+        code, text = request(self.url + "/api/status")
+        st = json.loads(text)
+        self.assertTrue(st["ready"])
+        self.assertEqual(st["models"], ["llama3.2:3b", "qwen3:8b"])
+
+    def test_status_not_ready(self):
+        down = self.axis_server(f"http://127.0.0.1:{free_port()}")
+        st = json.loads(request(down + "/api/status")[1])
+        self.assertEqual((st["ready"], st["server_running"]), (False, False))
+        empty = self.axis_server(self.model_server(LlamaCppHandler, []))
+        st = json.loads(request(empty + "/api/status")[1])
+        self.assertEqual((st["ready"], st["server_running"]), (False, True))
+        self.assertIn("no model is loaded", st["message"])
+
+    def test_agent_routes(self):
+        body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."],
+                "skills": [{"name": "Haiku", "instructions": "5-7-5", "enabled": False}]}
+        code, text = request(self.url + "/api/agents", "POST", body)
+        self.assertEqual(code, 201, text)
+        self.assertEqual(request(self.url + "/api/agents", "POST", body)[0], 400)
+        self.assertEqual(len(json.loads(request(self.url + "/api/agents")[1])), 1)
+        code, text = request(self.url + "/api/agents/poet", "PUT", {"name": "bard", "model": "qwen3:8b"})
+        self.assertEqual(code, 200, text)
+        self.assertEqual(json.loads(text)["config"], ["Rhyme."])
+        self.assertEqual(request(self.url + "/api/agents/poet")[0], 404)
+        self.assertEqual(request(self.url + "/api/agents/bard")[0], 200)
+        self.assertEqual(request(self.url + "/api/agents/bard", "DELETE")[0], 200)
+        self.assertEqual(request(self.url + "/api/agents/bard", "DELETE")[0], 404)
+        self.assertEqual(request(self.url + "/api/nope")[0], 404)
+        self.assertEqual(request(self.url + "/api/agents", "POST", None, {"Content-Length": "0"})[0], 400)
+
+    def test_chat_direct(self):
+        code, text = request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "hello"}]})
+        ev = chat_events(text)
+        self.assertEqual(ev[0], {"model": "llama3.2:3b"})
+        self.assertEqual("".join(e.get("t", "") for e in ev).strip(), "echo: hello")
+        self.assertEqual(ev[-1], {"done": True})
+        self.assertEqual(LAST_REQUEST["messages"], [{"role": "user", "content": "hello"}])
+
+    def test_chat_with_agent_uses_config_skills_and_model(self):
+        request(self.url + "/api/agents", "POST", {
+            "name": "a", "system_prompt": "S.", "model": "qwen3:8b", "config": ["C1"],
+            "skills": [{"name": "K", "instructions": "skill text"}]})
+        request(self.url + "/api/chat", "POST", {"agent": "a", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(LAST_REQUEST["model"], "qwen3:8b")
+        self.assertIn("skill text", LAST_REQUEST["messages"][0]["content"])
+        self.assertIn("- C1", LAST_REQUEST["messages"][-1]["content"])
+        # the dropdown choice overrides the agent's preferred model
+        request(self.url + "/api/chat", "POST", {"agent": "a", "model": "llama3.2:3b", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(LAST_REQUEST["model"], "llama3.2:3b")
+
+    def test_chat_errors(self):
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "FAIL"}]})[1])
+        self.assertIn("simulated failure", ev[-1]["error"])
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"model": "mistral", "messages": [{"role": "user", "content": "x"}]})[1])
+        self.assertIn("not loaded", ev[-1]["error"])
+        self.assertEqual(request(self.url + "/api/chat", "POST", {"agent": "ghost", "messages": [{"role": "user", "content": "x"}]})[0], 404)
+        self.assertEqual(request(self.url + "/api/chat", "POST", {"messages": []})[0], 400)
+        down = self.axis_server(f"http://127.0.0.1:{free_port()}")
+        ev = chat_events(request(down + "/api/chat", "POST", {"messages": [{"role": "user", "content": "x"}]})[1])
+        self.assertIn("No model server", ev[-1]["error"])
+
+    def test_rejects_other_sites_and_hosts(self):
+        self.assertEqual(request(self.url + "/api/agents", "POST", {"name": "evil"}, {"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(request(self.url + "/api/status", headers={"Host": "evil.example"})[0], 403)
+        port = self.url.rsplit(":", 1)[1]
+        self.assertEqual(request(self.url + "/api/agents", "POST", {"name": "ok"}, {"Origin": f"http://localhost:{port}"})[0], 201)
+
+    def test_stop_mid_stream_does_not_break_server(self):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(self.url + "/api/chat", method="POST",
+                                     data=json.dumps({"messages": [{"role": "user", "content": "a b c d e f"}]}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        resp = opener.open(req, timeout=10)
+        resp.readline()
+        resp.close()  # like pressing Stop
+        self.assertEqual(request(self.url + "/api/ping")[0], 200)
+
+
+# ---------------------------------------------------------------------- cli
+
+
+class TestCli(Base):
+    def test_version(self):
+        with self.assertRaises(SystemExit) as ctx, redirect_stdout(io.StringIO()) as out:
+            cli.main(["--version"])
+        self.assertEqual(ctx.exception.code, 0)
+
+    def test_bad_port(self):
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["--port", "70000", "--no-browser"]), 2)
+
+    def test_detects_running_axis(self):
+        url = self.axis_server(None)
+        port = int(url.rsplit(":", 1)[1])
+        self.assertTrue(server.find_running(port))
+        self.assertFalse(server.find_running(free_port()))
+        with redirect_stdout(io.StringIO()) as out, mock.patch("webbrowser.open") as wb:
+            self.assertEqual(cli.main(["--port", str(port)]), 0)
+        self.assertIn("already running", out.getvalue())
+        wb.assert_called_once()
+
+    def test_starts_and_stops(self):
+        port = free_port()
+        with redirect_stdout(io.StringIO()) as out, \
+                mock.patch.object(server.AxisServer, "serve_forever", side_effect=KeyboardInterrupt), \
+                mock.patch("threading.Timer") as timer:
+            self.assertEqual(cli.main(["--port", str(port)]), 0)
+        self.assertIn(f"http://127.0.0.1:{port}", out.getvalue())
+        self.assertIn("Axis stopped", out.getvalue())
+        timer.assert_called_once()
+
+    def test_skips_busy_port(self):
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen()
+        try:
+            port = blocker.getsockname()[1]
+            srv = server.make_server(port)
+            self.assertNotEqual(srv.server_address[1], port)
+            srv.server_close()
+        finally:
+            blocker.close()
 
 
 if __name__ == "__main__":

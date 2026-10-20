@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axis</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%232448a8%22/%3E%3Cpath d=%22M6 22h20%22 stroke=%22white%22 stroke-width=%223%22 stroke-linecap=%22round%22/%3E%3Cpath d=%22M16 6v16%22 stroke=%22white%22 stroke-width=%223%22 stroke-linecap=%22round%22/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #e9edf1; --panel: #f6f8fa; --surface: #ffffff; --ink: #18222e; --muted: #5d6976;
+  --line: #d3dae2; --accent: #2448a8; --accent-ink: #ffffff; --accent-soft: #e3e9f8;
+  --ok: #1f7a4d; --bad: #b23a2a; --warn: #8f6400; --code: #eef1f5;
+  --serif: "Palatino Linotype", "Book Antiqua", Palatino, "URW Palladio L", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10151b; --panel: #151c24; --surface: #1b242e; --ink: #e2e8ef; --muted: #8e9aa8;
+    --line: #2a3542; --accent: #8aa7f2; --accent-ink: #0f1622; --accent-soft: #223152;
+    --ok: #4cc38a; --bad: #f07a68; --warn: #e0b64c; --code: #121920;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+button, input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app { display: grid; grid-template-columns: 272px 1fr; height: 100%; }
+
+/* ---------- sidebar ---------- */
+.side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { padding: 22px 20px 0; }
+.brand h1 { font: 400 30px/1 var(--serif); letter-spacing: .02em; margin: 0; }
+.axisline { height: 3px; margin: 14px 0 0; border-radius: 2px; background: var(--muted); transition: background .4s; }
+.axisline.ok { background: var(--ok); } .axisline.bad { background: var(--bad); } .axisline.warn { background: var(--warn); }
+.status { padding: 14px 20px 18px; border-bottom: 1px solid var(--line); }
+.status-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+.status-detail { color: var(--muted); font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.status-models { list-style: none; padding: 0; margin: 6px 0 0; font: 13px/1.6 var(--mono); }
+.nav { flex: 1; overflow-y: auto; padding: 12px 10px 20px; }
+.nav h2 { font: 600 13px/1 var(--sans); color: var(--muted); margin: 18px 10px 8px; display: flex; justify-content: space-between; align-items: center; }
+.nav-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.nav-item:hover { background: var(--accent-soft); }
+.nav-item[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.nav-item small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-empty { color: var(--muted); font-size: 13px; padding: 4px 10px; }
+
+/* ---------- buttons ---------- */
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn.small { padding: 3px 10px; font-size: 13px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 13px; font-weight: 600; }
+
+/* ---------- main ---------- */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.bar { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.bar h2 { font: 400 22px/1.2 var(--serif); margin: 0; flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+.bar label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+select { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 8px; max-width: 240px; }
+.menu-btn { display: none; }
+.note { padding: 8px 24px; font-size: 13px; color: var(--warn); background: var(--surface); border-bottom: 1px solid var(--line); }
+
+.thread { flex: 1; overflow-y: auto; padding: 24px; }
+.thread-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.msg { max-width: 100%; }
+.msg.user { align-self: flex-end; background: var(--accent-soft); padding: 10px 14px; border-radius: 12px 12px 2px 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 85%; }
+.msg.ai { overflow-wrap: anywhere; }
+.msg.ai > :first-child { margin-top: 0; } .msg.ai > :last-child { margin-bottom: 0; }
+.msg.ai pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow-x: auto; font: 13px/1.5 var(--mono); }
+.msg.ai code { font-family: var(--mono); font-size: .9em; background: var(--code); padding: 1px 4px; border-radius: 4px; }
+.msg.ai pre code { background: none; padding: 0; font-size: inherit; }
+.msg.ai h3, .msg.ai h4 { font-family: var(--serif); font-weight: 600; margin: 1em 0 .4em; }
+.msg-tools { margin-top: 6px; display: flex; gap: 12px; }
+.msg.error { color: var(--bad); border-left: 3px solid var(--bad); padding: 4px 12px; white-space: pre-wrap; }
+.typing::after { content: "Thinking"; color: var(--muted); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.empty { color: var(--muted); text-align: center; margin: 12vh auto 0; max-width: 460px; }
+.empty h3 { font: 400 24px/1.3 var(--serif); color: var(--ink); margin: 0 0 8px; }
+
+.composer { border-top: 1px solid var(--line); background: var(--surface); padding: 14px 24px 18px; }
+.composer-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+.composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 220px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
+.composer-hint { max-width: 760px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+
+/* ---------- gate ---------- */
+.gate { max-width: 620px; margin: 8vh auto 0; }
+.gate h3 { font: 400 26px/1.3 var(--serif); margin: 0 0 6px; }
+.gate p { color: var(--muted); margin: 0 0 18px; }
+.gate h4 { margin: 20px 0 6px; font-size: 15px; }
+.gate ol { margin: 0; padding-left: 20px; }
+.gate li { margin: 4px 0; }
+.cmd { display: flex; align-items: center; gap: 8px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 6px 6px 6px 12px; margin: 6px 0; }
+.cmd code { flex: 1; font: 13px/1.5 var(--mono); overflow-x: auto; white-space: nowrap; }
+
+/* ---------- editor ---------- */
+.editor { flex: 1; overflow-y: auto; padding: 24px; }
+.form { max-width: 720px; margin: 0 auto; }
+.field { margin-bottom: 22px; }
+.field > label, .section-head h3 { display: block; font-weight: 600; margin-bottom: 4px; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.form input[type=text], .form textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--surface); }
+.form textarea { resize: vertical; min-height: 90px; }
+.section { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 8px; margin-bottom: 22px; }
+.section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.section-head h3 { font: 400 20px/1.3 var(--serif); margin: 0; }
+.row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.row input { flex: 1; }
+.skill { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; background: var(--surface); }
+.skill.off { opacity: .65; }
+.skill .row { margin-bottom: 8px; }
+.switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.switch input { width: 16px; height: 16px; accent-color: var(--accent); }
+.form-actions { display: flex; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 18px; }
+.form-actions .spacer { flex: 1; }
+.form-error { color: var(--bad); margin: 0 0 12px; }
+
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  .side { position: fixed; inset: 0 25% 0 0; z-index: 10; transform: translateX(-100%); transition: transform .2s; }
+  .app.menu-open .side { transform: none; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
+  .menu-btn { display: inline-block; }
+  .bar, .thread, .composer, .editor { padding-left: 14px; padding-right: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side" id="side">
+    <div class="brand"><h1>Axis</h1><div class="axisline" id="axisline"></div></div>
+    <div class="status" id="status" aria-live="polite"></div>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+"use strict";
+const DIRECT = "";              // chat target id for the plain model chat
+const S = {
+  status: null,                 // last /api/status result
+  agents: [],
+  view: { kind: "chat", agent: DIRECT },
+  modelChoice: {},              // target -> model picked in the dropdown
+  streaming: null,              // { controller, target }
+};
+
+/* ---------------------------------------------------------------- helpers */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "value") el.value = v;
+    else if (k === "checked") el.checked = !!v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid !== null && kid !== undefined && kid !== false)
+    el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const $ = (id) => document.getElementById(id);
+function fill(el, ...kids) { el.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false)); }
+function esc(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+async function api(path, options = {}) {
+  const opts = { headers: { "Content-Type": "application/json" }, ...options };
+  if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
+  let res;
+  try { res = await fetch(path, opts); }
+  catch { throw new Error("Axis is not responding. Check that the axis window is still open."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+  return data;
+}
+
+let toastTimer;
+function toast(text) {
+  const t = $("toast"); t.textContent = text; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+function recall(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
+}
+const historyKey = (target) => "axis.chat:" + target;
+const getHistory = (target) => { const h = recall(historyKey(target), []); return Array.isArray(h) ? h : []; };
+const setHistory = (target, msgs) => store(historyKey(target), msgs);
+
+function copyText(text, label) {
+  const done = () => toast(label || "Copied");
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const t = h("textarea", { value: text }); document.body.append(t); t.select();
+  try { document.execCommand("copy"); done(); } catch {} t.remove();
+}
+
+/* --------------------------------------------------------------- markdown */
+function inline(text) {
+  return text.split(/(`[^`\n]+`)/).map((part, i) => {
+    if (i % 2) return "<code>" + esc(part.slice(1, -1)) + "</code>";
+    return esc(part)
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  }).join("");
+}
+function blocks(text) {
+  const out = []; let para = []; let list = null;
+  const flushPara = () => { if (para.length) out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag}>` + list.items.map((i) => "<li>" + inline(i) + "</li>").join("") + `</${list.tag}>`); list = null; };
+  for (const line of text.split("\n")) {
+    let m;
+    if (!line.trim()) { flushPara(); flushList(); }
+    else if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { flushPara(); flushList(); out.push((m[1].length <= 2 ? "<h3>" : "<h4>") + inline(m[2]) + (m[1].length <= 2 ? "</h3>" : "</h4>")); }
+    else if ((m = line.match(/^\s*[-*+]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      const tag = /^\s*\d/.test(line) ? "ol" : "ul";
+      flushPara(); if (list && list.tag !== tag) flushList();
+      list = list || { tag, items: [] }; list.items.push(m[1]);
+    }
+    else if (list && /^\s{2,}\S/.test(line)) list.items[list.items.length - 1] += " " + line.trim();
+    else { flushList(); para.push(line); }
+  }
+  flushPara(); flushList();
+  return out.join("");
+}
+function markdown(src) {
+  return src.split("```").map((part, i) => {
+    if (i % 2 === 0) return blocks(part);
+    const nl = part.indexOf("\n");
+    const code = nl >= 0 ? part.slice(nl + 1) : part;
+    return "<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>";
+  }).join("");
+}
+
+/* ----------------------------------------------------------------- status */
+const ready = () => !!(S.status && S.status.ready);
+
+async function refreshStatus() {
+  let st;
+  try { st = await api("/api/status"); }
+  catch (e) { st = { ready: false, axisDown: true, message: e.message, models: [] }; }
+  const changed = JSON.stringify(st) !== JSON.stringify(S.status);
+  S.status = st;
+  if (changed) { renderStatus(); if (S.view.kind === "chat" && !S.streaming) renderMain(); }
+}
+
+function renderStatus() {
+  const st = S.status;
+  let tone, title, detail;
+  if (st.axisDown) { tone = "bad"; title = "Axis stopped"; detail = st.message; }
+  else if (st.ready) { tone = "ok"; title = `${st.server} is ready`; detail = st.url; }
+  else if (st.server_running) { tone = "warn"; title = "No model is on"; detail = st.message; }
+  else { tone = "bad"; title = "No model server"; detail = "Start Ollama or llama.cpp."; }
+  $("axisline").className = "axisline " + tone;
+  fill($("status"), 
+    h("div", { class: "status-title" }, h("span", { class: "dot " + tone }), title),
+    h("div", { class: "status-detail" }, detail),
+    st.ready ? h("ul", { class: "status-models", "aria-label": "Models that are on" }, st.models.map((m) => h("li", {}, m))) : null,
+  );
+}
+
+/* ------------------------------------------------------------------- nav */
+async function loadAgents() {
+  try { S.agents = await api("/api/agents"); } catch (e) { toast(e.message); }
+  renderNav();
+}
+function agentByName(name) { return S.agents.find((a) => a.name === name); }
+
+function go(view) {
+  S.view = view;
+  $("app").classList.remove("menu-open");
+  renderNav(); renderMain();
+}
+
+function renderNav() {
+  const v = S.view;
+  const item = (label, sub, current, onclick) =>
+    h("button", { class: "nav-item", "aria-current": current ? "true" : "false", onclick }, label, h("small", {}, sub));
+  fill($("nav"), 
+    item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT })),
+    h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
+    S.agents.length
+      ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
+          (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name })))
+      : h("p", { class: "nav-empty" }, "No agents yet."),
+  );
+}
+
+/* ------------------------------------------------------------------ chat */
+function matchModel(want, models) {
+  if (!want) return null;
+  return models.find((m) => m === want || m === want + ":latest") || null;
+}
+function currentModel(target) {
+  const models = (S.status && S.status.models) || [];
+  const agent = target ? agentByName(target) : null;
+  return matchModel(S.modelChoice[target], models) || matchModel(agent && agent.model, models) || models[0] || "";
+}
+
+function menuButton() {
+  return h("button", { class: "btn small menu-btn", "aria-label": "Open menu", onclick: () => $("app").classList.toggle("menu-open") }, "Menu");
+}
+
+function renderMain() {
+  if (S.view.kind === "edit") return renderEditor();
+  renderChat();
+}
+
+function renderChat() {
+  const target = S.view.agent;
+  const agent = target ? agentByName(target) : null;
+  if (target && !agent) return go({ kind: "chat", agent: DIRECT });
+  const models = (S.status && S.status.models) || [];
+  const model = currentModel(target);
+
+  const select = h("select", { "aria-label": "Model", disabled: !ready() || !!S.streaming,
+    onchange: (e) => { S.modelChoice[target] = e.target.value; renderChat(); } },
+    models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
+
+  const bar = h("div", { class: "bar" },
+    menuButton(),
+    h("h2", {}, agent ? agent.name : "Direct chat"),
+    ready() ? h("label", {}, "Model", select) : null,
+    agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
+    !ready() ? null : h("button", { class: "btn small", disabled: !!S.streaming, onclick: () => {
+      if (getHistory(target).length && !confirm("Start a new chat? The current conversation will be cleared.")) return;
+      setHistory(target, []); renderChat();
+    } }, "New chat"),
+  );
+
+  const notes = [];
+  if (agent && agent.model && ready() && !matchModel(agent.model, models))
+    notes.push(h("div", { class: "note" }, `This agent prefers ${agent.model}, which is not on. Using ${model}. To use it, run: `,
+      h("code", {}, `ollama run ${agent.model} --keepalive -1m`)));
+
+  const typed = $("input") ? $("input").value : "";
+  const parts = [bar, ...notes];
+  if (!ready()) {
+    parts.push(h("div", { class: "thread" }, gateView()));
+  } else {
+    parts.push(h("div", { class: "thread", id: "thread" }, h("div", { class: "thread-inner", id: "thread-inner" })));
+    parts.push(composer(target, agent));
+  }
+  fill($("main"), ...parts);
+  if (ready()) { renderThread(target, agent, model); const i = $("input"); i.value = typed; i.focus(); }
+}
+
+function cmd(text) {
+  return h("div", { class: "cmd" }, h("code", {}, text), h("button", { class: "btn small", onclick: () => copyText(text) }, "Copy"));
+}
+
+function gateView() {
+  const st = S.status || {};
+  if (st.axisDown) return h("div", { class: "gate" },
+    h("h3", {}, "Axis has stopped"),
+    h("p", {}, "The axis window was closed or stopped. Run axis again in a terminal, then reload this page."));
+  return h("div", { class: "gate" },
+    h("h3", {}, st.server_running ? "Turn on a model to start" : "Start a model server to use Axis"),
+    h("p", {}, st.message || "Axis is looking for Ollama or llama.cpp on this computer."),
+    h("h4", {}, "With Ollama"),
+    h("ol", {},
+      h("li", {}, "Open the Ollama app (or run ollama serve in a terminal)."),
+      h("li", {}, "In a terminal, turn on a model:", cmd("ollama run llama3.2:3b --keepalive -1m")),
+      h("li", {}, "Type /bye to leave Ollama's prompt. The model stays on.")),
+    h("h4", {}, "With llama.cpp"),
+    h("ol", {},
+      h("li", {}, "In a terminal, start the server with a model and leave it open:",
+        cmd("llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"))),
+    h("p", { style: "margin-top:18px" }, "This page checks every few seconds and unlocks as soon as a model is on."));
+}
+
+function composer(target, agent) {
+  const input = h("textarea", { id: "input", rows: 1, placeholder: agent ? `Message ${agent.name}` : "Message the model",
+    "aria-label": "Message",
+    oninput: (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; },
+    onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(target); } } });
+  const btn = S.streaming && S.streaming.target === target
+    ? h("button", { class: "btn", id: "send", onclick: () => S.streaming && S.streaming.controller.abort() }, "Stop")
+    : h("button", { class: "btn primary", id: "send", disabled: !!S.streaming, onclick: () => send(target) }, "Send");
+  let hint = "Enter to send, Shift+Enter for a new line.";
+  if (agent) {
+    const on = agent.skills.filter((s) => s.enabled).length;
+    hint += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
+  }
+  return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn), h("div", { class: "composer-hint" }, hint));
+}
+
+function messageView(m) {
+  if (m.role === "user") return h("div", { class: "msg user" }, m.content);
+  const body = h("div", { class: "msg ai" });
+  body.innerHTML = markdown(m.content);
+  return h("div", {}, body, h("div", { class: "msg-tools" }, h("button", { class: "link", onclick: () => copyText(m.content) }, "Copy")));
+}
+
+function renderThread(target, agent, model) {
+  const inner = $("thread-inner"); if (!inner) return;
+  const msgs = getHistory(target);
+  if (!msgs.length) {
+    fill(inner, h("div", { class: "empty" },
+      h("h3", {}, agent ? `Chat with ${agent.name}` : "Start a conversation"),
+      h("p", {}, agent ? `${agent.name} will answer using ${model}.` : `You are talking directly to ${model}.`)));
+  } else fill(inner, ...msgs.map(messageView));
+  scrollDown();
+}
+function scrollDown() { const t = $("thread"); if (t) t.scrollTop = t.scrollHeight; }
+
+async function send(target) {
+  const input = $("input");
+  const text = input ? input.value.trim() : "";
+  if (!text || S.streaming || !ready()) return;
+  const model = currentModel(target);
+  const msgs = getHistory(target);
+  msgs.push({ role: "user", content: text });
+  setHistory(target, msgs);
+
+  input.value = "";
+  const controller = new AbortController();
+  S.streaming = { controller, target };
+  renderChat();                                  // shows the new message and the Stop button
+  const inner = $("thread-inner");
+  const body = h("div", { class: "msg ai typing" });
+  inner.append(h("div", {}, body)); scrollDown();
+
+  let reply = "", error = null, frame = 0;
+  const paint = () => { frame = 0; body.classList.remove("typing"); body.innerHTML = markdown(reply); scrollDown(); };
+  try {
+    const res = await fetch("/api/chat", { method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: target || null, model, messages: msgs }) });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.t) { reply += ev.t; if (!frame) frame = requestAnimationFrame(paint); }
+        if (ev.error) error = ev.error;
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") error = e.name === "TypeError" ? "Axis is not responding. Check that the axis window is still open." : e.message;
+  }
+  if (frame) cancelAnimationFrame(frame);
+  S.streaming = null;
+
+  const saved = getHistory(target);
+  if (reply.trim()) saved.push({ role: "assistant", content: reply });
+  else if (saved.length && saved[saved.length - 1].role === "user") saved.pop();   // nothing came back: undo the message
+  setHistory(target, saved);
+
+  if (S.view.kind !== "chat" || S.view.agent !== target) return;
+  renderChat();
+  if (!reply.trim()) $("input").value = text;
+  if (error) { $("thread-inner").append(h("div", { class: "msg error", role: "alert" }, error)); scrollDown(); refreshStatus(); }
+}
+
+/* ---------------------------------------------------------------- editor */
+function renderEditor() {
+  const existing = S.view.agent ? agentByName(S.view.agent) : null;
+  if (S.view.agent && !existing) return go({ kind: "chat", agent: DIRECT });
+  const draft = existing ? JSON.parse(JSON.stringify(existing))
+    : { name: "", model: "", system_prompt: "You are a concise and helpful assistant.", config: [], skills: [] };
+  const models = (S.status && S.status.models) || [];
+
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const name = h("input", { type: "text", id: "f-name", value: draft.name, maxlength: 64, autocomplete: "off", placeholder: "for example: editor" });
+  const model = h("input", { type: "text", id: "f-model", value: draft.model, list: "loaded-models", autocomplete: "off", placeholder: "Any model that is on" });
+  const prompt = h("textarea", { id: "f-prompt", rows: 4 }, draft.system_prompt);
+  prompt.value = draft.system_prompt;
+
+  const configList = h("div", {});
+  const addConfig = (text) => {
+    const row = h("div", { class: "row" },
+      h("input", { type: "text", value: text, "aria-label": "Config instruction", placeholder: "for example: Answer in plain English." }),
+      h("button", { class: "btn small danger", type: "button", onclick: () => row.remove() }, "Remove"));
+    configList.append(row); return row;
+  };
+  draft.config.forEach(addConfig);
+
+  const skillList = h("div", {});
+  const addSkill = (s) => {
+    const enabled = h("input", { type: "checkbox", checked: s.enabled, onchange: () => card.classList.toggle("off", !enabled.checked) });
+    const card = h("div", { class: "skill" + (s.enabled ? "" : " off") },
+      h("div", { class: "row" },
+        h("input", { type: "text", class: "s-name", value: s.name, "aria-label": "Skill name", placeholder: "Skill name" }),
+        h("label", { class: "switch" }, enabled, "On"),
+        h("button", { class: "btn small danger", type: "button", onclick: () => card.remove() }, "Remove")),
+      (() => { const t = h("textarea", { class: "s-text", rows: 3, "aria-label": "Skill instructions", placeholder: "What the agent should know or do for this skill" }); t.value = s.instructions; return t; })());
+    card._enabled = enabled;
+    skillList.append(card); return card;
+  };
+  draft.skills.forEach(addSkill);
+
+  const collect = () => ({
+    name: name.value.trim(),
+    model: model.value.trim(),
+    system_prompt: prompt.value,
+    config: [...configList.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean),
+    skills: [...skillList.children].map((c) => ({
+      name: c.querySelector(".s-name").value.trim(),
+      instructions: c.querySelector(".s-text").value.trim(),
+      enabled: c._enabled.checked,
+    })).filter((s) => s.name || s.instructions),
+  });
+
+  const save = async () => {
+    err.hidden = true;
+    const data = collect();
+    try {
+      const saved = existing
+        ? await api("/api/agents/" + encodeURIComponent(existing.name), { method: "PUT", body: data })
+        : await api("/api/agents", { method: "POST", body: data });
+      if (existing && saved.name !== existing.name) {
+        setHistory(saved.name, getHistory(existing.name)); localStorage.removeItem(historyKey(existing.name));
+      }
+      await loadAgents();
+      toast(existing ? "Agent saved" : "Agent created");
+      go({ kind: "edit", agent: saved.name });
+    } catch (e) { err.textContent = e.message; err.hidden = false; err.scrollIntoView({ block: "nearest" }); }
+  };
+
+  const remove = async () => {
+    if (!confirm(`Delete ${existing.name}? Its settings and chat history will be removed.`)) return;
+    try {
+      await api("/api/agents/" + encodeURIComponent(existing.name), { method: "DELETE" });
+      localStorage.removeItem(historyKey(existing.name));
+      await loadAgents(); toast("Agent deleted"); go({ kind: "chat", agent: DIRECT });
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  };
+
+  const form = h("form", { class: "form", onsubmit: (e) => { e.preventDefault(); save(); } },
+    err,
+    h("div", { class: "field" }, h("label", { for: "f-name" }, "Name"),
+      h("p", { class: "hint" }, "Letters, numbers, - and _ only."), name),
+    h("div", { class: "field" }, h("label", { for: "f-model" }, "Preferred model"),
+      h("p", { class: "hint" }, "Leave empty to use whichever model is on. You can still switch models in the chat."),
+      model, h("datalist", { id: "loaded-models" }, models.map((m) => h("option", { value: m })))),
+    h("div", { class: "field" }, h("label", { for: "f-prompt" }, "System prompt"),
+      h("p", { class: "hint" }, "Who the agent is and how it should behave."), prompt),
+    h("div", { class: "section" },
+      h("div", { class: "section-head" }, h("h3", {}, "Config"),
+        h("button", { class: "btn small", type: "button", onclick: () => addConfig("").querySelector("input").focus() }, "Add instruction")),
+      h("p", { class: "hint" }, "Instructions added to the end of every message you send this agent."),
+      configList),
+    h("div", { class: "section" },
+      h("div", { class: "section-head" }, h("h3", {}, "Skills"),
+        h("button", { class: "btn small", type: "button", onclick: () => addSkill({ name: "", instructions: "", enabled: true }).querySelector(".s-name").focus() }, "Add skill")),
+      h("p", { class: "hint" }, "Named sets of instructions the agent can draw on. Switch a skill off to keep it without using it."),
+      skillList),
+    h("div", { class: "form-actions" },
+      h("button", { class: "btn primary", type: "submit" }, existing ? "Save agent" : "Create agent"),
+      existing ? h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: existing.name }) }, "Chat with agent") : null,
+      h("span", { class: "spacer" }),
+      existing ? h("button", { class: "btn danger", type: "button", onclick: remove }, "Delete agent")
+               : h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: DIRECT }) }, "Cancel")));
+
+  fill($("main"), 
+    h("div", { class: "bar" }, menuButton(), h("h2", {}, existing ? `Edit ${existing.name}` : "New agent")),
+    h("div", { class: "editor" }, form));
+  if (!existing) name.focus();
+}
+
+/* ------------------------------------------------------------------ start */
+(async function start() {
+  await Promise.all([refreshStatus(), loadAgents()]);
+  renderMain();
+  setInterval(refreshStatus, 4000);
+})();
+</script>
+</body>
+</html>

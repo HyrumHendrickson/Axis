@@ -1,12 +1,17 @@
 # Axis
 
-Axis is a small command-line tool for talking to a local AI model and running simple "agents" that work through task files.
+Axis is a small app for chatting with a local AI model and with agents you design. Run `axis`, and it opens a page in your browser where you can:
 
-Axis does **not** download, start, or stop models. You start a model yourself with **Ollama** or **llama.cpp**, and Axis uses whatever model is loaded. If no model server is running, or no model is loaded, every Axis command that needs a model stops with an error that tells you what to start.
+* see whether your model server is running and which models are on,
+* chat with a model directly,
+* create agents with their own system prompt, config (instructions added to every message), and skills, and
+* chat with those agents.
+
+Axis does **not** download, start, or stop models. You start a model yourself with **Ollama** or **llama.cpp**; until a model is on, the page shows what to start and keeps chat locked.
 
 ```
-you start the model  ──►  Axis detects it  ──►  axis ask / chat / run
-(Ollama or llama.cpp)     (ports 11434, 8080)
+you start the model  ──►  run axis  ──►  browser opens at http://127.0.0.1:8765
+(Ollama or llama.cpp)
 ```
 
 ---
@@ -17,12 +22,11 @@ you start the model  ──►  Axis detects it  ──►  axis ask / chat / ru
 2. [Windows setup](#windows-setup)
 3. [Mac setup](#mac-setup)
 4. [Every-day use: turning the model on and off](#every-day-use-turning-the-model-on-and-off)
-5. [Command reference](#command-reference)
-6. [Agents and task files](#agents-and-task-files)
-7. [Settings](#settings)
-8. [Troubleshooting](#troubleshooting)
-9. [Updating and uninstalling](#updating-and-uninstalling)
-10. [Running the tests](#running-the-tests)
+5. [Using Axis](#using-axis)
+6. [Settings](#settings)
+7. [Troubleshooting](#troubleshooting)
+8. [Updating and uninstalling](#updating-and-uninstalling)
+9. [Running the tests](#running-the-tests)
 
 ---
 
@@ -34,8 +38,9 @@ you start the model  ──►  Axis detects it  ──►  axis ask / chat / ru
 | pipx | Recommended | Installs the `axis` command so it works in any terminal |
 | Ollama **or** llama.cpp | Required (pick one) | Serves the model that Axis talks to |
 | Git | Optional | Only for installing straight from GitHub |
+| A web browser | Required | Any current Chrome, Edge, Firefox, or Safari |
 
-Axis itself uses **only the Python standard library**. There are no Python packages to install besides Axis.
+Axis itself uses **only the Python standard library**, and the page uses no outside scripts or fonts, so it works offline. There are no Python packages to install besides Axis.
 
 Hardware: a 3-billion-parameter model (the examples below) needs about 3 to 4 GB of free RAM. Larger models need more.
 
@@ -140,17 +145,15 @@ Ollama is the easier choice. You only need one.
 
    Leave this window open. The model is on while this window runs. To use a model file you already have: `llama-server -m C:\path\to\model.gguf`
 
-### Step 5. Use Axis
+### Step 5. Start Axis
 
 In a **separate** PowerShell window:
 
 ```powershell
-axis status
-axis ask "Explain recursion in two sentences."
-axis chat
+axis
 ```
 
-If `axis status` prints `Axis is ready.`, setup is complete.
+Your browser opens at `http://127.0.0.1:8765`. The status panel at the top left should say **Ollama is ready** (or **llama.cpp / OpenAI-compatible is ready**). Leave the PowerShell window open while you use Axis; press Ctrl+C in it to stop Axis.
 
 ---
 
@@ -244,15 +247,15 @@ axis --version
 
 Apple Silicon Macs (M1 and later) use the GPU automatically with both options.
 
-### Step 5. Use Axis
+### Step 5. Start Axis
 
 In a **separate** Terminal window:
 
 ```bash
-axis status
-axis ask "Explain recursion in two sentences."
-axis chat
+axis
 ```
+
+Your browser opens at `http://127.0.0.1:8765`. The status panel at the top left should say **Ollama is ready** (or **llama.cpp / OpenAI-compatible is ready**). Leave the Terminal window open while you use Axis; press Ctrl+C in it to stop Axis.
 
 ---
 
@@ -264,7 +267,7 @@ Axis only works while a model is on.
 |---|---|---|
 | Server running? | Ollama app open (tray/menu bar icon), or `ollama serve` | `llama-server` window open |
 | Turn a model on | `ollama run <model> --keepalive -1m`, then `/bye` | `llama-server -hf <repo>:<quant>` or `-m <file.gguf>` |
-| See what is on | `ollama ps` or `axis status` | `axis status` |
+| See what is on | `ollama ps`, or the Axis status panel | The Axis status panel |
 | Turn a model off | `ollama stop <model>` | Press Ctrl+C in the `llama-server` window |
 | Default address | `http://127.0.0.1:11434` | `http://127.0.0.1:8080` |
 
@@ -272,110 +275,94 @@ Notes on Ollama:
 
 * Without `--keepalive -1m`, Ollama unloads a model after 5 idle minutes, and Axis will then report that no model is loaded.
 * While Axis is talking to a model, it asks Ollama to keep that model loaded until you run `ollama stop <model>`.
-* You can load several models at once (memory permitting). Axis uses the first one listed by `axis status` unless you choose one with `-m`.
+* You can load several models at once (memory permitting). Pick between them with the **Model** menu at the top of any chat.
 
 ---
 
-## Command reference
+## Using Axis
 
-Every command accepts `--help`, e.g. `axis chat --help`.
+Run `axis` in a terminal. Axis starts a small website that only this computer can reach and opens it in your browser. Closing the browser tab does not stop Axis; closing the terminal window (or pressing Ctrl+C in it) does. Running `axis` again while it is already running just opens the page again.
 
-| Command | What it does | Needs a model on? |
-|---|---|---|
-| `axis status` | Shows the detected server and loaded models | Yes |
-| `axis ask "question"` | Asks one question and prints the answer as it is written | Yes |
-| `axis chat` | Interactive conversation | Yes |
-| `axis run <agent>` | Processes the agent's task files until Ctrl+C | Yes |
-| `axis agent create <name>` | Creates an agent | No |
-| `axis agent list` | Lists agents and their pending task counts | No |
-| `axis agent show <name>` | Shows an agent's settings and folder | No |
-| `axis agent edit <name>` | Changes an agent's prompt or model | No |
-| `axis agent delete <name>` | Deletes an agent and its files (asks first) | No |
-| `axis --version` | Prints the Axis version | No |
+### Status
 
-### Options
+The panel under the Axis name shows whether a model server was found and which models are on. The line under the name is green when Axis is ready, amber when a server is running but no model is on, and red when no server is found. The page checks every 4 seconds; while no model is on, chatting is locked and the page shows the exact commands to start one. It unlocks by itself once a model is on.
 
-* `ask` and `chat`: `-a/--agent NAME` to use an agent's system prompt and model; `-m/--model NAME` to pick a specific loaded model (overrides the agent's model).
-* `ask` also reads from a pipe: `Get-Content notes.txt | axis ask` (Windows) or `cat notes.txt | axis ask` (Mac).
-* `run`: `--once` processes what is waiting and exits; `--interval SECONDS` sets how often to check (default 2).
-* `agent create` / `agent edit`: `-p/--prompt "..."` sets the system prompt; `-m/--model NAME` sets a preferred model; `edit --clear-model` goes back to "whichever model is loaded".
-* `agent delete -y` skips the confirmation.
-* Global: `axis --url http://host:port <command>` uses a specific server (see [Settings](#settings)).
+### Chat
 
-### Inside `axis chat`
+* **Direct chat** talks to the model with no agent instructions.
+* Click an agent in the sidebar to chat with that agent.
+* **Model** (top of the chat) switches between the models that are on.
+* **Enter** sends; **Shift+Enter** adds a new line. While a reply is being written, **Send** becomes **Stop**.
+* **New chat** clears the conversation. Conversations are saved in your browser, so they survive reloading the page.
+* Replies show formatting (bold, lists, code blocks). **Copy** under a reply copies its text.
 
-| Type | Effect |
+### Agents
+
+Click **New agent** in the sidebar. An agent has:
+
+| Part | What it does |
 |---|---|
-| `/help` | List chat commands |
-| `/clear` | Forget the conversation so far |
-| `/model` | Show the model in use |
-| `/exit` or `/quit` | Leave (Ctrl+D on Mac, Ctrl+Z then Enter on Windows also work) |
-| Ctrl+C while a reply prints | Stop that reply and keep chatting |
+| Name | Letters, numbers, `-` and `_`. You can rename an agent later; its chat history moves with it. |
+| Preferred model | The model the agent uses when it is on. Leave empty to use whichever model is on. You can still switch models in the chat. |
+| System prompt | Who the agent is and how it behaves. Sent at the start of every conversation. |
+| Config | A list of instructions added to the end of **every message** you send the agent, for rules it must not forget (for example, "Answer in one sentence."). |
+| Skills | Named blocks of instructions, each with an **On** switch. Skills that are on are added to the system prompt; skills that are off are kept but not sent. |
 
-The chat keeps the last 40 messages as context.
+Click **Create agent** (or **Save agent**) to save, **Chat with agent** to start talking, and **Delete agent** to remove it. The text under the message box in an agent chat shows how many config instructions and skills are active.
 
----
+Agents are saved as `Axis/agents/<name>/agent.json` in your home folder (`C:\Users\<you>\Axis` on Windows, `/Users/<you>/Axis` on Mac). Agents made with Axis 1.0 open without changes.
 
-## Agents and task files
+#### What the model receives
 
-An agent is a named system prompt (its personality and instructions), an optional preferred model, and a folder of task files.
-
-```bash
-axis agent create editor -p "You are a careful copy editor. Return the corrected text only."
-axis ask -a editor "Their going to the libary tomorow."
-axis chat -a editor
-```
-
-### Folder layout
-
-Agents live in `Axis/agents/` in your home folder (`C:\Users\<you>\Axis\agents\` on Windows, `/Users/<you>/Axis/agents/` on Mac):
+For an agent with the system prompt "You are a copy editor.", one skill switched on, and two config instructions, sending "their going home" produces:
 
 ```
-Axis/agents/editor/
-├── agent.json        settings (you may edit this file directly)
-├── tasks/            put .txt or .md task files here
-│   ├── done/         finished tasks are moved here
-│   └── failed/       tasks that could not be processed
-└── results/          one answer per task, as <task-name>.md
+system:  You are a copy editor.
+
+         You have the following skills. Use them when relevant.
+
+         ## Grammar
+         Fix grammar mistakes.
+
+user:    their going home
+
+         ---
+         Follow these instructions:
+         - Answer in one sentence.
+         - Use US spelling.
 ```
 
-### Processing tasks
-
-1. Save a task as a text file, e.g. `Axis/agents/editor/tasks/letter.txt`. The whole file is sent as the request.
-2. Run:
-
-   ```bash
-   axis run editor
-   ```
-
-3. The answer appears in `results/letter.md` and the task moves to `tasks/done/`. Axis keeps watching for new files until you press Ctrl+C. Use `axis run editor --once` to process what is waiting and exit.
-
-If a task fails (for example, the model returns an error), it moves to `tasks/failed/` and the reason is written to `results/<task-name>.error.txt`. If the model server goes away while `axis run` is watching, Axis waits and resumes when the model is back; nothing is marked failed. Re-using a task name never overwrites an earlier result; a timestamp is added instead.
-
-`axis run` uses whichever terminal you start it in. To keep chatting at the same time, open another terminal window.
+The config block is attached to your newest message each time you send one; it is not shown in the chat.
 
 ---
 
 ## Settings
 
-| Setting | How | Default |
-|---|---|---|
-| Server address | `--url` option, or `AXIS_URL` environment variable | Tries `127.0.0.1:11434` (Ollama), then `127.0.0.1:8080` (llama.cpp) |
-| Data folder | `AXIS_HOME` environment variable | `Axis` in your home folder |
+Options for the `axis` command:
 
-Examples for a llama.cpp server on a non-default port:
+| Option | Effect |
+|---|---|
+| `--port 9000` | Use a different port for the page (default 8765; if it is taken, Axis uses the next free one) |
+| `--no-browser` | Start without opening a browser; open the printed address yourself |
+| `--url http://127.0.0.1:9000` | Use a model server at a specific address |
+| `--version` | Print the version |
+
+Environment variables:
+
+| Variable | Effect | Default |
+|---|---|---|
+| `AXIS_URL` | Model server address | Tries `127.0.0.1:11434` (Ollama), then `127.0.0.1:8080` (llama.cpp) |
+| `AXIS_HOME` | Where agents are saved | `Axis` in your home folder |
+
+Example for a llama.cpp server on a non-default port:
 
 ```powershell
-# Windows, this window only
-$env:AXIS_URL = "http://127.0.0.1:9000"
-```
-
-```bash
-# Mac, this window only
-export AXIS_URL=http://127.0.0.1:9000
+axis --url http://127.0.0.1:9000          # Windows and Mac alike
 ```
 
 Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API (for example LM Studio on port 1234) also works when given with `--url`.
+
+The page only answers requests from this computer, and only from its own page, so other websites open in your browser cannot use it.
 
 ---
 
@@ -383,15 +370,17 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 
 | Message or symptom | Fix |
 |---|---|
-| `No model server is running at ...` | Start Ollama (open the app, or `ollama serve`) or `llama-server`. Check the port with `--url` if you changed it. |
-| `... is running ... but no model is loaded` | Turn a model on: `ollama run llama3.2:3b --keepalive -1m` |
-| `Model 'X' is not loaded` | Load that model, or run without `-m`, or change the agent with `axis agent edit <name> --clear-model` |
-| `still loading its model` (llama.cpp) | Wait until `llama-server` prints that the server is listening, then retry |
+| Status says **No model server** | Start Ollama (open the app, or `ollama serve`) or `llama-server`. If it uses a non-default port, start Axis with `--url`. |
+| Status says **No model is on** | Turn a model on: `ollama run llama3.2:3b --keepalive -1m` |
+| The page says **Axis has stopped** | The terminal running `axis` was closed. Run `axis` again and reload the page. |
+| A chat shows "This agent prefers X, which is not on" | Turn that model on, or clear the agent's preferred model in **Edit agent** |
+| The browser did not open | Open the address printed in the terminal (normally `http://127.0.0.1:8765`) |
+| A reply stops with an error | The message is put back in the box; check the status panel, then send again |
 | `axis` is not recognized / command not found | Run `py -m pipx ensurepath` (Windows) or `python3 -m pipx ensurepath` (Mac) and open a new terminal. As a fallback, run it by full path: `$HOME\.local\bin\axis.exe` (Windows) or `~/.local/bin/axis` (Mac). |
 | `py` is not recognized (Windows) | Reinstall Python with "Add python.exe to PATH" checked, or use `python` instead of `py` |
 | `ollama` is not recognized | Open a new terminal after installing; on Windows confirm Ollama appears in the tray |
-| Replies are very slow | Use a smaller model (e.g. `llama3.2:1b`) or close other programs to free memory |
-| Strange characters in Windows output | Use Windows Terminal (default on Windows 11) rather than the old console |
+| Replies are very slow | Use a smaller model (for example `llama3.2:1b`) or close other programs to free memory |
+| Chats disappeared | Conversations are stored per browser and per port. Use the same browser and the default port. |
 
 ---
 
@@ -426,12 +415,13 @@ python -m unittest discover -s tests -v      # Windows: py -m unittest discover 
 
 ```
 axis/
-  backend.py   detects the server, lists loaded models, streams replies
-  agents.py    agent storage
-  worker.py    task-file processing for `axis run`
-  cli.py       commands
+  cli.py          the `axis` command: starts the server and opens the browser
+  server.py       local web server and JSON API
+  agents.py       agent storage and how messages are assembled
+  backend.py      detects Ollama or llama.cpp, lists models, streams replies
+  web/index.html  the page (HTML, CSS and JavaScript in one file)
 tests/
-  test_axis.py end-to-end tests against mock servers
+  test_axis.py    tests for the backend, agents, API and launcher
 ```
 
 ## License
