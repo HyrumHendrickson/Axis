@@ -774,6 +774,156 @@ class TestServer(Base):
         self.assertEqual(request(self.url + "/api/ping")[0], 200)
 
 
+class TestModelsAndStats(Base):
+    def test_describe_degrades_gracefully(self):
+        info = backend.describe(self.model_server(OllamaHandler, ["llama3.2:3b"]))
+        self.assertTrue(info["ready"])
+        self.assertEqual([m["name"] for m in info["models"]], ["llama3.2:3b"])
+        self.assertTrue(info["models"][0]["running"])
+        info = backend.describe(self.model_server(LlamaCppHandler, ["m.gguf"]))
+        self.assertEqual((info["kind"], info["models"][0]["name"]), ("openai", "m.gguf"))
+        info = backend.describe(f"http://127.0.0.1:{free_port()}")
+        self.assertEqual((info["ready"], info["models"]), (False, []))
+
+    def test_ollama_metadata_and_memory_estimate(self):
+        class Rich(OllamaHandler):
+            def do_GET(self):
+                if self.path == "/api/ps":
+                    return self._json(200, {"models": [{"name": "a:1b", "size": 2000, "size_vram": 1000, "context_length": 4096}]})
+                if self.path == "/api/tags":
+                    return self._json(200, {"models": [{"name": "a:1b", "size": 1500, "modified_at": "x"},
+                                                       {"name": "b:7b", "size": 4000, "modified_at": "y"}]})
+                return super().do_GET()
+
+            def do_POST(self):
+                if self.path != "/api/show":
+                    return super().do_POST()
+                self._body()
+                return self._json(200, {"capabilities": ["completion"], "model_info": {
+                    "general.architecture": "llama", "llama.context_length": 131072, "llama.block_count": 2,
+                    "llama.embedding_length": 64, "llama.attention.head_count": 4, "llama.attention.head_count_kv": 2}})
+        info = backend.describe(self.model_server(Rich, ["a:1b"]))
+        a, b = info["models"]
+        self.assertEqual((a["name"], a["running"], a["gpu_percent"], a["context"], a["max_context"]), ("a:1b", True, 50, 4096, 131072))
+        self.assertEqual((b["name"], b["running"]), ("b:7b", False))
+        # 2 layers * 2 kv heads * (16 + 16) * 2 bytes * context
+        self.assertEqual(b["estimated_cache"], 2 * 2 * 32 * 2 * b["axis_context"])
+        self.assertEqual(b["estimated_memory"], 4000 + b["estimated_cache"])
+        self.assertEqual(b["capabilities"], ["completion"])
+
+    def test_llamacpp_metadata(self):
+        class Rich(LlamaCppHandler):
+            def do_GET(self):
+                if self.path == "/v1/models":
+                    return self._json(200, {"data": [{"id": "m", "meta": {"n_ctx_train": 8192, "n_params": 3e9, "size": 2e9}}]})
+                if self.path == "/props":
+                    return self._json(200, {"default_generation_settings": {"n_ctx": 4096}, "total_slots": 2, "modalities": {"vision": True}})
+                return super().do_GET()
+        m = backend.describe(self.model_server(Rich, ["m"]))["models"][0]
+        self.assertEqual((m["context"], m["max_context"], m["slots"], m["memory"]), (4096, 8192, 2, 2e9))
+        self.assertIn("vision", m["capabilities"])
+
+    def test_token_stats(self):
+        turn = backend.Turn("")
+        backend._ollama_stats({"prompt_eval_count": 10, "eval_count": 5, "eval_duration": 2_000_000_000}, turn)
+        self.assertEqual(turn.stats, {"prompt_tokens": 10, "output_tokens": 5, "seconds": 2.0})
+        turn = backend.Turn("")
+        backend._openai_stats({"timings": {"prompt_n": 3, "cache_n": 7, "predicted_n": 4, "predicted_ms": 500}}, turn)
+        self.assertEqual(turn.stats, {"prompt_tokens": 10, "output_tokens": 4, "seconds": 0.5})
+
+    def test_runner_emits_stats(self):
+        class Counting(OllamaHandler):
+            def do_POST(self):
+                body = self._body()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"message": {"content": "hi"}, "done": False}).encode() + b"\n")
+                self.wfile.write(json.dumps({"message": {"content": ""}, "done": True, "prompt_eval_count": 7,
+                                             "eval_count": 1, "eval_duration": 10**9}).encode() + b"\n")
+        conn = backend.connect(self.model_server(Counting, ["m"]))
+        events = []
+        runner.reply(conn, "m", [{"role": "user", "content": "x"}], events.append)
+        self.assertIn({"stats": {"prompt_tokens": 7, "output_tokens": 1, "seconds": 1.0}}, events)
+
+
+class TestFileManagement(Base):
+    def setUp(self):
+        super().setUp()
+        self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
+        request(self.url + "/api/agents", "POST", {"name": "a"})
+        self.ws = Path(self.home) / "agents" / "a" / "workspace"
+        self.base = self.url + "/api/files/a"
+
+    def upload(self, name, data, path=""):
+        req = urllib.request.Request(f"{self.base}/upload?path={urllib.parse.quote(path)}&name={urllib.parse.quote(name)}",
+                                     data=data, method="POST", headers={"Content-Type": "application/octet-stream"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_upload_never_overwrites(self):
+        self.assertEqual(self.upload("data.csv", b"a,b\n1,2\n"), (201, {"path": "data.csv", "size": 8}))
+        self.assertEqual(self.upload("data.csv", b"x")[1]["path"], "data (2).csv")
+        self.assertEqual(self.upload(".env", b"x")[1]["path"], ".env")
+        self.assertEqual(self.upload(".env", b"y")[1]["path"], ".env (2)")
+        self.assertEqual((self.ws / "data.csv").read_bytes(), b"a,b\n1,2\n")
+        self.assertFalse(any(p.name.endswith(".axis-upload") for p in self.ws.iterdir()))
+
+    def test_upload_rejects_bad_names_and_places(self):
+        for name in ("../x", "a/b", "..", "", ".axis-tmp", "c:x"):
+            self.assertEqual(self.upload(name, b"x")[0], 400, name)
+        self.assertEqual(self.upload("x", b"x", "../..")[0], 400)
+        self.assertEqual(self.upload("x", b"x", "missing")[0], 404)
+
+    def test_mkdir_and_delete(self):
+        self.assertEqual(request(self.base + "/mkdir?path=reports/2026", "POST", {})[0], 201)
+        self.assertTrue((self.ws / "reports" / "2026").is_dir())
+        self.assertEqual(request(self.base + "/mkdir?path=reports", "POST", {})[0], 400)  # exists
+        self.assertEqual(self.upload("r.txt", b"x", "reports/2026")[1]["path"], "reports/2026/r.txt")
+        self.assertEqual(request(self.base + "?path=reports/2026/r.txt", "DELETE")[0], 200)
+        self.assertFalse((self.ws / "reports" / "2026" / "r.txt").exists())
+        self.assertEqual(request(self.base + "?path=reports", "DELETE")[0], 200)  # folder with contents
+        self.assertFalse((self.ws / "reports").exists())
+        for bad in ("", ".", "..", "../agent.json"):
+            self.assertIn(request(self.base + "?path=" + urllib.parse.quote(bad), "DELETE")[0], (400, 404), bad)
+        self.assertTrue((Path(self.home) / "agents" / "a" / "agent.json").is_file())
+        self.assertTrue(self.ws.is_dir())
+
+    def test_bad_content_length(self):
+        conn = socket.create_connection(("127.0.0.1", int(self.url.rsplit(":", 1)[1])))
+        host = self.url.split("//")[1]
+        conn.sendall(f"POST /api/agents HTTP/1.0\r\nHost: {host}\r\nContent-Length: nope\r\n\r\n".encode())
+        self.assertIn(b" 400 ", conn.recv(200))
+        conn.close()
+
+    def test_models_route(self):
+        code, text = request(self.url + "/api/models")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(text)["models"][0]["name"], "m")
+
+
+class TestToolRobustness(Base):
+    def test_list_files_with_broken_link(self):
+        ws = Path(self.home) / "ws"
+        ws.mkdir()
+        os.symlink(ws / "gone", ws / "dangling")
+        ok, out = tools.execute(ws, "list_files", {}, ["list_files"])
+        self.assertTrue(ok, out)
+        self.assertIn("dangling", out)
+
+    def test_huge_file_read_is_bounded(self):
+        ws = Path(self.home) / "ws"
+        ws.mkdir()
+        (ws / "big.txt").write_text("y" * 2_000_000)
+        ok, out = tools.execute(ws, "read_file", {"path": "big.txt"}, ["read_file"])
+        self.assertTrue(ok)
+        self.assertLess(len(out), tools.MAX_READ + 300)
+        self.assertIn("file continues", out)
+
+
 # ---------------------------------------------------------------------- cli
 
 

@@ -9,7 +9,8 @@ Axis is a small app for chatting with a local AI model and with agents you desig
 * make skills, including built-in actions that let agents run Python and create, read and list files,
 * create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
 * chat with those agents. Each agent has its own folder, and every file it makes stays there, and
-* browse every agent's folder in the Files tab: open folders, read documents, view images and tables, and download anything they made.
+* browse every agent's folder in the Files tab: open folders, read documents, view images and tables, upload files for agents to work on, and download anything they made, and
+* see each model's memory use, context size and details in the Models tab.
 
 Axis does **not** download, start, or stop models. You start a model yourself with **Ollama** or **llama.cpp**; until a model is on, the page shows what to start and keeps chat locked.
 
@@ -31,9 +32,10 @@ you start the model  ──►  run axis  ──►  browser opens at http://127
 7. [Skills](#skills)
 8. [Llama models](#llama-models)
 9. [Files and agent folders](#files-and-agent-folders)
-10. [Settings](#settings)
-11. [Troubleshooting](#troubleshooting)
-12. [Running the tests](#running-the-tests)
+10. [The Models tab](#the-models-tab)
+11. [Settings](#settings)
+12. [Troubleshooting](#troubleshooting)
+13. [Running the tests](#running-the-tests)
 
 ---
 
@@ -314,9 +316,13 @@ The panel under the Axis name shows whether a model server was found and which m
 * **Direct chat** talks to the model with no agent instructions.
 * Click an agent in the sidebar to chat with that agent.
 * **Model** (top of the chat) switches between the models that are on.
-* **Enter** sends; **Shift+Enter** adds a new line. While a reply is being written, **Send** becomes **Stop**.
-* **New chat** clears the conversation. Conversations are saved in your browser, so they survive reloading the page.
-* Replies show formatting (bold, lists, code blocks). **Copy** under a reply copies its text.
+* **Enter** sends; **Shift+Enter** adds a new line. While a reply is being written, **Send** becomes **Stop** (or press **Esc**).
+* While the model works, the chat shows **Thinking** with a timer, and each action as it runs ("Running Python…"). You can switch to another page, agent or browser tab and come back: the reply keeps going and is shown where it left off. The sidebar marks any chat that is still working, and the browser tab title says **Working…** (then **Reply ready** if you were away).
+* Several chats can work at the same time, for example two agents on separate tasks.
+* Each chat keeps its own unsent text, so switching chats never mixes up what you were typing.
+* **New chat** clears the conversation. **Export** downloads it as a Markdown file. Conversations are saved in your browser, so they survive reloading the page.
+* Replies show formatting (bold, lists, code blocks; each code block has its own **Copy** button). Under a reply: **Copy** copies its text, **Retry** asks for a new answer to your last message, and a line shows the model, how many tokens it wrote, its speed, and how long it took.
+* Under the message box, a meter shows how much of the model's context the conversation is using (when the server reports token counts).
 
 ### Agents
 
@@ -331,7 +337,7 @@ Click **New agent** in the sidebar. An agent has:
 | Skills | Tick the skills this agent may use (see [Skills](#skills)). **Manage skills** opens the Skills page. |
 | Folder | Shown once the agent is created: where its files are kept, a list of them, and **Open folder** to see them in Explorer or Finder. |
 
-Click **Create agent** (or **Save agent**) to save, **Chat with agent** to start talking, and **Delete agent** to remove it. **Deleting an agent deletes its folder and every file in it.**
+Click **Create agent** (or **Save agent**) to save, **Chat with agent** to start talking, **Duplicate** to start a new agent with the same settings, and **Delete agent** to remove it. **Deleting an agent deletes its folder and every file in it.**
 
 When an agent uses an action, the chat shows a line such as "Wrote notes/plan.md" or "Ran Python". Click it to see the code, the file contents, or the result.
 
@@ -423,7 +429,9 @@ Click **Files** in the sidebar to look through what your agents have made.
 
 * Pick an agent at the top. Its folder is listed on the left: click a folder to go into it, **Up one folder** or the path above the list to go back.
 * Click a file to open it on the right. Text and code are shown as-is; Markdown is shown formatted (with **Show source**); CSV files are shown as a table; images are shown as pictures; PDFs open in a viewer; web pages (`.html`) are shown as source with **Preview page** to see them rendered.
-* **Download** saves a copy; **Show in folder** opens Explorer or Finder with the file selected. Axis never runs files you click.
+* **Download** saves a copy; **Show in folder** opens Explorer or Finder with the file selected; **Copy text** copies a text file; **Delete** removes it. Axis never runs files you click.
+* **Upload** (or dragging files onto the list) copies files from your computer into the folder you are viewing, so an agent can read or process them. An upload never replaces an existing file: a second `data.csv` is saved as `data (2).csv`. Files up to 512 MB can be uploaded.
+* **New folder** makes a folder; **Delete folder** removes the folder you are in and everything inside it.
 * The list refreshes by itself every few seconds, so new files appear while an agent works.
 * In a chat, each action has a link (**Open in Files**) that jumps straight to the file it made.
 
@@ -449,6 +457,29 @@ How Axis keeps files in the agent's folder:
 * Renaming an agent moves its folder; deleting an agent deletes its folder and everything in it.
 
 This guard is designed to keep the agent's ordinary work in its folder. It is not a security sandbox against code written deliberately to escape it, so review what an agent is doing when you give it Run Python.
+
+---
+
+## The Models tab
+
+Click **Models** in the sidebar to see what your model server reports about each model. Nothing here changes a model; it only reads.
+
+**With Ollama**, every model you have downloaded is listed. Models that are on show:
+
+| Detail | Meaning |
+|---|---|
+| Memory in use | RAM and video memory the loaded model takes, including its context cache, and how much of it is on the GPU |
+| Context window | How many tokens the model can hold right now, and the most the model supports |
+| Parameters, Quantization, Size on disk | The model's size and compression (for example 3.2B, Q4_K_M) |
+| Architecture, Layers, Embedding size, Vocabulary | Technical details from the model file |
+| Stays loaded | When Ollama will unload it ("until you stop it" with `--keepalive -1m`) |
+| Capabilities | Chat, Tools, Vision, Thinking or Embeddings, as Ollama reports them |
+
+Models that are installed but not on show an **estimated memory** figure: the download size plus the context cache needed for the context Axis asks for (8,192 tokens unless you change `AXIS_NUM_CTX`). Treat it as approximate; the real figure appears once the model is on. Each card has the command to turn the model on (or off) and, for models that are on, **Chat with this model**.
+
+**With llama.cpp**, the loaded model shows its context window (per slot), the context it was trained for, its parameter count, the memory its weights take, the number of parallel slots, and the model file. llama.cpp does not report the context cache, so actual memory use is somewhat higher than the weights alone.
+
+If a model has no built-in tool support, its card says so; agents with actions still work through Axis's text format, but less reliably.
 
 ---
 
@@ -529,7 +560,7 @@ axis/
   skills.py       the skill library (built-in actions and your skills)
   tools.py        the actions, kept inside each agent's folder
   runner.py       lets an agent use its actions while replying
-  backend.py      detects Ollama or llama.cpp, lists models, streams replies and tool calls
+  backend.py      detects Ollama or llama.cpp, reads model details, streams replies, tool calls and token counts
   paths.py        where Axis keeps its data
   web/index.html  the page (HTML, CSS and JavaScript in one file, with the logo built in)
 tests/

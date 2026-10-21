@@ -13,6 +13,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
@@ -80,8 +81,13 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
         return str(exc.reason)
 
 
-def _get_json(url: str):
-    with _open(url) as resp:
+def _get_json(url: str, timeout: float = PROBE_TIMEOUT):
+    with _open(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _post_json(url: str, body: dict, timeout: float = PROBE_TIMEOUT):
+    with _open(url, body, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
@@ -179,6 +185,9 @@ class ToolCall:
 class Turn:
     text: str
     tool_calls: List[ToolCall] = field(default_factory=list)
+    # Token counts and speed reported by the server, when it reports them:
+    # prompt_tokens, output_tokens, seconds (time spent writing the output).
+    stats: Dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_args(raw: Any) -> Any:
@@ -225,7 +234,37 @@ def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional
             if text:
                 yield text
             if chunk.get("done"):
+                _ollama_stats(chunk, turn)
                 return
+
+
+def _ollama_stats(chunk: dict, turn: Turn) -> None:
+    stats: Dict[str, Any] = {}
+    if isinstance(chunk.get("prompt_eval_count"), int):
+        stats["prompt_tokens"] = chunk["prompt_eval_count"]
+    if isinstance(chunk.get("eval_count"), int):
+        stats["output_tokens"] = chunk["eval_count"]
+    if isinstance(chunk.get("eval_duration"), (int, float)) and chunk["eval_duration"] > 0:
+        stats["seconds"] = chunk["eval_duration"] / 1e9
+    turn.stats.update(stats)
+
+
+def _openai_stats(chunk: dict, turn: Turn) -> None:
+    usage = chunk.get("usage")
+    if isinstance(usage, dict):
+        if isinstance(usage.get("prompt_tokens"), int):
+            turn.stats["prompt_tokens"] = usage["prompt_tokens"]
+        if isinstance(usage.get("completion_tokens"), int):
+            turn.stats["output_tokens"] = usage["completion_tokens"]
+    timings = chunk.get("timings")  # llama-server
+    if isinstance(timings, dict):
+        if isinstance(timings.get("prompt_n"), int):
+            # prompt_n counts only tokens not already cached, so prefer usage when it exists
+            turn.stats.setdefault("prompt_tokens", timings["prompt_n"] + int(timings.get("cache_n") or 0))
+        if isinstance(timings.get("predicted_n"), int):
+            turn.stats["output_tokens"] = timings["predicted_n"]
+        if isinstance(timings.get("predicted_ms"), (int, float)) and timings["predicted_ms"] > 0:
+            turn.stats["seconds"] = timings["predicted_ms"] / 1000
 
 
 def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
@@ -249,6 +288,7 @@ def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional
                 if chunk.get("error"):
                     err = chunk["error"]
                     raise BackendError(str(err.get("message") if isinstance(err, dict) else err))
+                _openai_stats(chunk, turn)
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
                     for call in delta.get("tool_calls") or []:
@@ -317,3 +357,187 @@ def tool_message(backend: Backend, call: ToolCall, result: str) -> Dict[str, Any
     if backend.kind == "ollama":
         return {"role": "tool", "content": result, "tool_name": call.name}
     return {"role": "tool", "tool_call_id": call.id, "content": result}
+
+
+# ------------------------------------------------------------------ model info
+
+
+def _num(value: Any) -> Optional[float]:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def kv_cache_bytes(info: Dict[str, Any], context: int) -> Optional[int]:
+    """Estimate the memory the context cache needs (16-bit keys and values)."""
+    layers, embd, heads = info.get("layers"), info.get("embedding_length"), info.get("head_count")
+    kv_heads = info.get("head_count_kv") or heads
+    key_len = info.get("key_length") or (embd // heads if embd and heads else None)
+    val_len = info.get("value_length") or key_len
+    if not (layers and key_len and kv_heads and context):
+        return None
+    per_layer = kv_heads if isinstance(kv_heads, list) else [kv_heads] * int(layers)
+    per_layer = [h for h in per_layer if isinstance(h, (int, float))]
+    return int(sum(per_layer) * (key_len + val_len) * 2 * context)
+
+
+def _arch_info(model_info: Dict[str, Any]) -> Dict[str, Any]:
+    arch = model_info.get("general.architecture") or ""
+    get = lambda key: model_info.get(f"{arch}.{key}")  # noqa: E731
+    out = {
+        "architecture": arch or None,
+        "parameter_count": _num(model_info.get("general.parameter_count")),
+        "max_context": _num(get("context_length")),
+        "embedding_length": _num(get("embedding_length")),
+        "layers": _num(get("block_count")),
+        "head_count": _num(get("attention.head_count")),
+        "head_count_kv": get("attention.head_count_kv"),
+        "key_length": _num(get("attention.key_length")),
+        "value_length": _num(get("attention.value_length")),
+        "vocab_size": _num(get("vocab_size")),
+        "expert_count": _num(get("expert_count")),
+    }
+    hk = out["head_count_kv"]
+    if not (_num(hk) or (isinstance(hk, list) and all(_num(x) is not None for x in hk))):
+        out["head_count_kv"] = None
+    return out
+
+
+_SHOW_CACHE: Dict[tuple, Dict[str, Any]] = {}
+
+
+def _ollama_show(base: str, name: str, stamp: Optional[str] = None) -> Dict[str, Any]:
+    """/api/show for one model. Cached per install time, since it only changes when the model is pulled again."""
+    key = (base, name, stamp)
+    if stamp and key in _SHOW_CACHE:
+        return dict(_SHOW_CACHE[key])
+    info = _ollama_show_uncached(base, name)
+    if stamp and info:
+        if len(_SHOW_CACHE) > 500:
+            _SHOW_CACHE.clear()
+        _SHOW_CACHE[key] = info
+    return dict(info)
+
+
+def _ollama_show_uncached(base: str, name: str) -> Dict[str, Any]:
+    try:
+        data = _post_json(base + "/api/show", {"model": name, "name": name}, timeout=10)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    info = _arch_info(data.get("model_info") or {})
+    caps = data.get("capabilities")
+    info["capabilities"] = [str(c) for c in caps] if isinstance(caps, list) else []
+    params = data.get("parameters")
+    info["parameters"] = params.strip() if isinstance(params, str) else ""
+    lic = data.get("license")
+    info["license"] = (lic.strip().splitlines() or [""])[0][:160] if isinstance(lic, str) else ""
+    return info
+
+
+def _ollama_models(base: str) -> Dict[str, Any]:
+    running = (_get_json(base + "/api/ps").get("models") or [])
+    try:
+        installed = _get_json(base + "/api/tags", timeout=10).get("models") or []
+    except Exception:
+        installed = []
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for m in installed:
+        if isinstance(m, dict) and (m.get("name") or m.get("model")):
+            name = m.get("name") or m.get("model")
+            d = m.get("details") or {}
+            by_name[name] = {
+                "name": name, "running": False, "disk_size": _num(m.get("size")), "modified": m.get("modified_at"),
+                "family": d.get("family"), "parameter_size": d.get("parameter_size"),
+                "quantization": d.get("quantization_level"), "format": d.get("format"),
+            }
+    for m in running:
+        if not isinstance(m, dict) or not (m.get("name") or m.get("model")):
+            continue
+        name = m.get("name") or m.get("model")
+        d = m.get("details") or {}
+        entry = by_name.setdefault(name, {"name": name, "disk_size": None, "modified": None})
+        size, vram = _num(m.get("size")), _num(m.get("size_vram"))
+        entry.update({
+            "running": True, "memory": size, "memory_gpu": vram,
+            "gpu_percent": round(100 * vram / size) if size and vram is not None else None,
+            "context": _num(m.get("context_length")), "expires": m.get("expires_at"),
+            "family": entry.get("family") or d.get("family"),
+            "parameter_size": entry.get("parameter_size") or d.get("parameter_size"),
+            "quantization": entry.get("quantization") or d.get("quantization_level"),
+            "format": entry.get("format") or d.get("format"),
+        })
+    models = list(by_name.values())
+    with ThreadPoolExecutor(max_workers=min(8, len(models) or 1)) as pool:
+        shows = list(pool.map(lambda m: _ollama_show(base, m["name"], m.get("modified")), models))
+    for m, info in zip(models, shows):
+        m.update({k: v for k, v in info.items() if v is not None or k not in m})
+        planned = NUM_CTX if NUM_CTX > 0 else 4096
+        if m.get("max_context"):
+            planned = min(planned, int(m["max_context"]))
+        m["axis_context"] = planned
+        kv = kv_cache_bytes(m, planned)
+        m["estimated_memory"] = (m["disk_size"] + kv) if (m.get("disk_size") and kv) else None
+        m["estimated_cache"] = kv
+    models.sort(key=lambda m: (not m["running"], m["name"].lower()))
+    return {"models": models}
+
+
+def _openai_models(base: str) -> Dict[str, Any]:
+    payload = _get_json(base + "/v1/models")
+    try:
+        props = _get_json(base + "/props")
+        props = props if isinstance(props, dict) else {}
+    except Exception:
+        props = {}
+    gen = props.get("default_generation_settings") or {}
+    if not isinstance(gen, dict):
+        gen = {}
+    slot_ctx = _num(gen.get("n_ctx")) or _num((gen.get("params") or {}).get("n_ctx") if isinstance(gen.get("params"), dict) else None)
+    slots = _num(props.get("total_slots"))
+    modalities = props.get("modalities") if isinstance(props.get("modalities"), dict) else {}
+    models = []
+    for m in payload.get("data") or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        meta = m.get("meta") if isinstance(m.get("meta"), dict) else {}
+        caps = ["completion"] + [k for k, v in modalities.items() if v]
+        models.append({
+            "name": m["id"], "running": True,
+            "context": slot_ctx or _num(meta.get("n_ctx")),
+            "max_context": _num(meta.get("n_ctx_train")),
+            "parameter_count": _num(meta.get("n_params")),
+            "memory": _num(meta.get("size")),
+            "memory_note": "model weights only; the context cache uses more" if _num(meta.get("size")) else None,
+            "embedding_length": _num(meta.get("n_embd")),
+            "vocab_size": _num(meta.get("n_vocab")),
+            "slots": slots,
+            "model_path": props.get("model_path") if isinstance(props.get("model_path"), str) else None,
+            "build": props.get("build_info") if isinstance(props.get("build_info"), str) else None,
+            "capabilities": caps if modalities else [],
+        })
+    return {"models": models}
+
+
+def describe(url: Optional[str] = None) -> Dict[str, Any]:
+    """Everything the server reports about its models, for the Models page."""
+    conn = None
+    try:
+        conn = connect(url)
+    except BackendError as exc:
+        explicit = resolve_url(url)
+        # A server with no model loaded can still list installed Ollama models.
+        for base in ([explicit] if explicit else list(DEFAULT_URLS)):
+            try:
+                if _probe_ollama(base):
+                    conn = Backend("ollama", base, [])
+                    break
+            except BackendError:
+                continue
+        if conn is None:
+            return {"ready": False, "message": str(exc).split("\n")[0], "models": []}
+    try:
+        data = _ollama_models(conn.url) if conn.kind == "ollama" else _openai_models(conn.url)
+    except Exception as exc:
+        return {"ready": False, "message": f"Could not read model details: {exc}", "models": []}
+    return {"ready": bool(conn.models), "server": conn.label, "kind": conn.kind, "url": conn.url,
+            "axis_context": NUM_CTX if conn.kind == "ollama" else None, **data}

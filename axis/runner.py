@@ -17,6 +17,7 @@ Events sent to `emit` (one dict each):
     {"rewrite": text}                             replace this round's text (a tool call was removed)
     {"tool": {"id", "name", "args"}}              a tool is about to run
     {"tool_result": {"id", "ok", "output"}}       the tool finished
+    {"stats": {"prompt_tokens", "output_tokens", "seconds"}}   token counts for the turn just finished
 """
 
 from __future__ import annotations
@@ -177,9 +178,16 @@ def reply(
 ) -> None:
     """Produce one reply, running tools as the model asks for them."""
     say = lambda t: emit({"t": t})  # noqa: E731
+
+    def complete(*args, **kwargs) -> backend.Turn:
+        turn = backend.complete(*args, **kwargs)
+        if turn.stats:
+            emit({"stats": turn.stats})
+        return turn
+
     if not tool_names or workspace is None:
         emit({"round": 0})
-        backend.complete(conn, model, messages, say)
+        complete(conn, model, messages, say)
         return
 
     messages = list(messages)
@@ -198,7 +206,7 @@ def reply(
         emit({"round": step})
         if not text_mode:
             try:
-                turn = backend.complete(conn, model, messages, say, tools=specs, temperature=TOOL_TEMPERATURE)
+                turn = complete(conn, model, messages, say, tools=specs, temperature=TOOL_TEMPERATURE)
             except backend.ToolsUnsupported:
                 _TEXT_MODE.add(key)
                 text_mode = True
@@ -226,7 +234,7 @@ def reply(
                 continue
 
         hider = HideToolBlocks(say)
-        turn = backend.complete(conn, model, messages, hider.feed, temperature=TOOL_TEMPERATURE)
+        turn = complete(conn, model, messages, hider.feed, temperature=TOOL_TEMPERATURE)
         hider.flush()
         found_block = parse_tool_block(turn.text)
         if found_block is not None:
@@ -249,7 +257,7 @@ def reply(
     emit({"round": MAX_STEPS})
     messages.append({"role": "user", "content": FINAL_REQUEST})
     hider = HideToolBlocks(say)
-    turn = backend.complete(conn, model, messages, hider.feed, temperature=TOOL_TEMPERATURE)
+    turn = complete(conn, model, messages, hider.feed, temperature=TOOL_TEMPERATURE)
     hider.flush()
     if find_text_call(turn.text, tool_names) or parse_tool_block(turn.text):
         emit({"rewrite": "I stopped here because the task needed more steps than allowed in one reply. "

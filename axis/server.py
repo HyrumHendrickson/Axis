@@ -4,6 +4,7 @@ Routes:
   GET    /                                  the app
   GET    /api/ping                          identifies a running Axis
   GET    /api/status                        model server and loaded models
+  GET    /api/models                        details for each model (memory, context, size)
   GET    /api/agents                        list agents
   POST   /api/agents                        create an agent
   GET    /api/agents/<name>                 one agent
@@ -15,6 +16,9 @@ Routes:
   GET    /api/files/<name>/view?path=file   a file prepared for preview
   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
+  POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
+  POST   /api/files/<name>/mkdir?path=dir   make a folder
+  DELETE /api/files/<name>?path=x           delete a file or folder
   GET    /api/skills                        list skills (built-in and custom)
   POST   /api/skills                        create a custom skill
   GET    /api/skills/<id>                   one skill
@@ -41,6 +45,7 @@ from . import __version__, agents, backend, runner, skills, tools
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
+MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
 HIDDEN = {".axis-tmp"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
@@ -149,6 +154,35 @@ def file_preview(agent: agents.Agent, rel: str) -> Dict[str, Any]:
     return {**info, "kind": "text", "text": text, "truncated": truncated}
 
 
+def delete_path(agent: agents.Agent, rel: str) -> str:
+    """Delete a file or a whole folder inside the agent's folder (never the folder itself)."""
+    try:
+        target = tools.resolve(agent.workspace, rel)
+    except tools.ToolError as exc:
+        raise agents.AgentError(str(exc)) from exc
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    elif target.exists() or target.is_symlink():
+        target.unlink()
+    else:
+        raise agents.AgentError(f"'{rel}' does not exist in {agent.name}'s folder.")
+    return target.relative_to(agent.workspace.resolve()).as_posix()
+
+
+def make_dir(agent: agents.Agent, rel: str) -> str:
+    agent.workspace.mkdir(parents=True, exist_ok=True)
+    try:
+        target = tools.resolve(agent.workspace, rel)
+    except tools.ToolError as exc:
+        raise agents.AgentError(str(exc)) from exc
+    if target.name in HIDDEN:
+        raise agents.AgentError("That folder name cannot be used.")
+    if target.exists():
+        raise agents.AgentError(f"'{rel}' already exists.")
+    target.mkdir(parents=True)
+    return target.relative_to(agent.workspace.resolve()).as_posix()
+
+
 def open_folder(path: Path) -> None:
     if os.name == "nt":
         os.startfile(str(path))  # type: ignore[attr-defined]
@@ -197,8 +231,17 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code: int, message: str) -> None:
         self._json(code, {"error": message})
 
+    def _length(self) -> int:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise agents.AgentError("Bad Content-Length header.")
+        if length < 0:
+            raise agents.AgentError("Bad Content-Length header.")
+        return length
+
     def _body(self) -> Any:
-        length = int(self.headers.get("Content-Length") or 0)
+        length = self._length()
         if length > MAX_BODY:
             raise agents.AgentError("Request is too large.")
         raw = self.rfile.read(length) if length else b"{}"
@@ -247,6 +290,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"app": "axis", "version": __version__})
         elif parts[1:] == ["status"] and method == "GET":
             return self._status()
+        elif parts[1:] == ["models"] and method == "GET":
+            return self._json(200, backend.describe(self.server.model_url))
         elif parts[1:] == ["chat"] and method == "POST":
             return self._chat()
 
@@ -277,6 +322,12 @@ class Handler(BaseHTTPRequestHandler):
             action = parts[3] if n == 4 else ""
             if n == 3 and method == "GET":
                 return self._json(200, folder_listing(agent, param("path")))
+            if n == 3 and method == "DELETE":
+                return self._json(200, {"deleted": delete_path(agent, param("path"))})
+            if action == "upload" and method == "POST":
+                return self._json(201, self._upload(agent, param("path"), param("name")))
+            if action == "mkdir" and method == "POST":
+                return self._json(201, {"made": make_dir(agent, param("path"))})
             if action == "view" and method == "GET":
                 return self._json(200, file_preview(agent, param("path")))
             if action == "raw" and method == "GET":
@@ -343,6 +394,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         with path.open("rb") as f:
             shutil.copyfileobj(f, self.wfile, 256 * 1024)
+
+    def _upload(self, agent: agents.Agent, rel_dir: str, name: str) -> Dict[str, Any]:
+        length = self._length()
+        if length > MAX_UPLOAD:
+            raise agents.AgentError(f"Files larger than {MAX_UPLOAD // (1024 * 1024)} MB cannot be uploaded.")
+        name = (name or "").strip()
+        if not name or name in (".", "..") or any(c in name for c in '/\\:*?"<>|\0') or name in HIDDEN:
+            raise agents.AgentError("That file name cannot be used.")
+        ws = agent.workspace
+        ws.mkdir(parents=True, exist_ok=True)
+        try:
+            folder = tools.resolve(ws, rel_dir, allow_root=True)
+        except tools.ToolError as exc:
+            raise agents.AgentError(str(exc)) from exc
+        if not folder.is_dir():
+            raise agents.AgentError(f"Folder '{rel_dir}' does not exist in {agent.name}'s folder.")
+        stem, dot, ext = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
+        target, n = folder / name, 2
+        while target.exists():  # never overwrite: report.txt -> report (2).txt
+            target, n = folder / (f"{stem} ({n}){dot}{ext}"), n + 1
+        tmp = folder / (target.name + ".axis-upload")
+        remaining = length
+        try:
+            with tmp.open("wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 256 * 1024))
+                    if not chunk:
+                        raise agents.AgentError("The upload was interrupted.")
+                    f.write(chunk)
+                    remaining -= len(chunk)
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+        return {"path": target.relative_to(ws.resolve()).as_posix(), "size": length}
 
     def _status(self) -> None:
         try:

@@ -90,8 +90,26 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .msg.ai h3, .msg.ai h4 { font-family: var(--serif); font-weight: 600; margin: 1em 0 .4em; }
 .msg-tools { margin-top: 6px; display: flex; gap: 12px; }
 .msg.error { color: var(--bad); border-left: 3px solid var(--bad); padding: 4px 12px; white-space: pre-wrap; }
-.typing::after { content: "Thinking"; color: var(--muted); animation: pulse 1.2s infinite; }
-@keyframes pulse { 50% { opacity: .35; } }
+.typing { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 4px 0; }
+.typing-label { animation: pulse 1.6s ease-in-out infinite; }
+.dots { display: inline-flex; gap: 4px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--tan); animation: bounce 1.2s infinite ease-in-out; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+.elapsed { font: 12px/1 var(--mono); color: var(--muted); }
+@keyframes pulse { 50% { opacity: .45; } }
+@keyframes bounce { 0%, 80%, 100% { transform: scale(.55); opacity: .5; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.msg.ai pre { position: relative; }
+.code-copy { position: absolute; top: 6px; right: 6px; font: 600 11px/1 var(--sans); padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; }
+.msg.ai pre:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+.msg-tools { align-items: baseline; flex-wrap: wrap; }
+.msg-stats { color: var(--muted); font-size: 12px; }
+.msg-note { color: var(--muted); font-size: 12px; font-style: italic; }
+.nav-item.busy small { color: var(--panel-ink); }
+.busy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--panel-ink); margin-right: 6px; animation: pulse 1.2s infinite; vertical-align: middle; }
+.meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin: 0 6px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--ok); }
+.meter.warn i { background: var(--warn); } .meter.bad i { background: var(--bad); }
 .empty { color: var(--muted); text-align: center; margin: 12vh auto 0; max-width: 460px; }
 .empty h3 { font: 400 24px/1.3 var(--serif); color: var(--ink); margin: 0 0 8px; }
 
@@ -139,6 +157,7 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .step > summary::before { content: "\25B8"; color: var(--muted); font-size: 11px; transition: transform .15s; }
 .step[open] > summary::before { transform: rotate(90deg); }
 .step.running > summary { color: var(--muted); }
+.step.running > summary::after { content: ""; width: 11px; height: 11px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 .step.failed > summary { color: var(--bad); }
 .step-body { padding: 0 12px 10px; }
 .step-body pre { margin: 6px 0 0; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow-x: auto; font: 12.5px/1.45 var(--mono); max-height: 320px; overflow-y: auto; white-space: pre-wrap; }
@@ -191,6 +210,24 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .fb-empty { color: var(--muted); padding: 24px 16px; }
 @media (max-width: 760px) { .fb { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 40%) 1fr; } .fb-list { border-right: 0; border-bottom: 1px solid var(--line); } .crumbs, .fb-view { padding-left: 14px; padding-right: 14px; } }
 
+/* ---------- models ---------- */
+.model-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-top: 12px; background: var(--surface); }
+.model-card h4 { margin: 0; font: 600 16px/1.3 var(--mono); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px 20px; margin: 12px 0 0; }
+.kv dt { font-size: 12px; color: var(--muted); }
+.kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.kv dd small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font: 600 11px/1 var(--sans); padding: 4px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); }
+.chip.on { background: var(--ok); color: var(--surface); }
+.model-note { font-size: 13px; color: var(--warn); margin: 10px 0 0; }
+.model-card details { margin-top: 10px; font-size: 13px; }
+.model-card details pre { background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; margin: 6px 0 0; }
+.model-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+.model-actions .cmd { flex: 1; min-width: 240px; margin: 0; }
+.summary-line { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
+.fb-list.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 
@@ -225,7 +262,11 @@ const S = {
   files: { agent: "", dir: "", file: "" },  // Files tab position
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
-  streaming: null,              // { controller, target }
+  streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
+  drafts: {},                   // target -> unsent text in the message box
+  errors: {},                   // target -> the last error, shown until the next message
+  models: null,                 // last /api/models result
+  unseen: false,                // a reply finished while the browser tab was hidden
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -264,13 +305,31 @@ function toast(text) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
 }
 
-function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }
 function recall(key, fallback) {
   try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
 }
 const historyKey = (target) => "axis.chat:" + target;
 const getHistory = (target) => { const h = recall(historyKey(target), []); return Array.isArray(h) ? h : []; };
-const setHistory = (target, msgs) => store(historyKey(target), msgs);
+function setHistory(target, msgs) {
+  if (store(historyKey(target), msgs)) return true;
+  toast("Could not save this chat: the browser\u2019s storage is full. Start a new chat somewhere to free space.");
+  return false;
+}
+function saveDrafts() { store("axis.drafts", S.drafts); }
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: type || "text/plain;charset=utf-8" }));
+  const a = h("a", { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const fmt = (n) => (typeof n === "number" && isFinite(n)) ? n.toLocaleString() : "";
+function bigNum(n) {
+  if (typeof n !== "number" || !isFinite(n)) return "";
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  return fmt(n);
+}
+const tokens = (n) => (typeof n === "number" && n > 0) ? fmt(n) + " tokens" : "";
 
 function copyText(text, label) {
   const done = () => toast(label || "Copied");
@@ -328,9 +387,26 @@ async function refreshStatus() {
   try { st = await api("/api/status"); }
   catch (e) { st = { ready: false, axisDown: true, message: e.message, models: [] }; }
   const changed = JSON.stringify(st) !== JSON.stringify(S.status);
+  const modelsChanged = JSON.stringify(st.models || []) !== JSON.stringify((S.status && S.status.models) || []);
   S.status = st;
-  if (changed) { renderStatus(); if (S.view.kind === "chat" && !S.streaming) renderMain(); }
+  if (changed) {
+    renderStatus();
+    if (modelsChanged) loadModels();
+    if (S.view.kind === "chat") renderMain();     // safe while replies stream: they are kept in S.streams
+  }
 }
+
+let modelsLoading = null;
+function loadModels() {
+  if (modelsLoading) return modelsLoading;
+  modelsLoading = api("/api/models")
+    .then((d) => { S.models = d; })
+    .catch((e) => { S.models = { ready: false, message: e.message, models: [] }; })
+    .finally(() => { modelsLoading = null; if (S.view.kind === "models") renderModels(); else updateHint(); });
+  return modelsLoading;
+}
+const modelInfo = (name) => (S.models && Array.isArray(S.models.models) && S.models.models.find((m) => m.name === name)) || null;
+function contextLimit(name) { const m = modelInfo(name); return m ? (m.context || m.axis_context || null) : null; }
 
 function renderStatus() {
   const st = S.status;
@@ -366,16 +442,18 @@ function go(view) {
 
 function renderNav() {
   const v = S.view;
-  const item = (label, sub, current, onclick) =>
-    h("button", { class: "nav-item", "aria-current": current ? "true" : "false", onclick }, label, h("small", {}, sub));
+  const item = (label, sub, current, onclick, busy) =>
+    h("button", { class: "nav-item" + (busy ? " busy" : ""), "aria-current": current ? "true" : "false", onclick }, label,
+      h("small", {}, busy ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : sub));
   fill($("nav"), 
-    item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT })),
+    item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT }), !!S.streams[DIRECT]),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
+    item("Models", "Memory, context and details", v.kind === "models", () => go({ kind: "models" })),
     h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
     S.agents.length
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
-          (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name })))
+          (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name }), !!S.streams[a.name]))
       : h("p", { class: "nav-empty" }, "No agents yet."),
   );
 }
@@ -399,8 +477,12 @@ function renderMain() {
   if (S.view.kind === "edit") return renderEditor();
   if (S.view.kind === "skills") return renderSkills();
   if (S.view.kind === "files") return renderFiles();
+  if (S.view.kind === "models") return renderModels();
   renderChat();
 }
+
+const viewing = (target) => S.view.kind === "chat" && S.view.agent === target;
+const chatTitle = (target) => target || "Direct chat";
 
 function renderChat() {
   const target = S.view.agent;
@@ -408,19 +490,29 @@ function renderChat() {
   if (target && !agent) return go({ kind: "chat", agent: DIRECT });
   const models = (S.status && S.status.models) || [];
   const model = currentModel(target);
+  const stream = S.streams[target];
 
-  const select = h("select", { "aria-label": "Model", disabled: !ready() || !!S.streaming,
+  // Keep the reader's place and focus when this chat is drawn again (status changes, replies finishing).
+  const oldThread = $("thread"), oldInput = $("input");
+  const sameChat = !!oldThread && oldThread.dataset.target === target;
+  const keepScroll = sameChat && !nearBottom(oldThread) ? oldThread.scrollTop : null;
+  const active = document.activeElement;
+  const takeFocus = !oldInput || active === oldInput || !active || active === document.body;
+
+  const select = h("select", { "aria-label": "Model", disabled: !ready() || !!stream,
     onchange: (e) => { S.modelChoice[target] = e.target.value; renderChat(); } },
     models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
+  const hasHistory = getHistory(target).length > 0;
 
   const bar = h("div", { class: "bar" },
     menuButton(),
     h("h2", {}, agent ? agent.name : "Direct chat"),
     ready() ? h("label", {}, "Model", select) : null,
     agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
-    !ready() ? null : h("button", { class: "btn small", disabled: !!S.streaming, onclick: () => {
+    hasHistory ? h("button", { class: "btn small", title: "Download this conversation as a Markdown file", onclick: () => exportChat(target) }, "Export") : null,
+    !ready() ? null : h("button", { class: "btn small", disabled: !!stream, onclick: () => {
       if (getHistory(target).length && !confirm("Start a new chat? The current conversation will be cleared.")) return;
-      setHistory(target, []); renderChat();
+      setHistory(target, []); delete S.errors[target]; renderChat();
     } }, "New chat"),
   );
 
@@ -429,17 +521,29 @@ function renderChat() {
     notes.push(h("div", { class: "note" }, `This agent prefers ${agent.model}, which is not on. Using ${model}. To use it, run: `,
       h("code", {}, `ollama run ${agent.model} --keepalive -1m`)));
 
-  const typed = $("input") ? $("input").value : "";
   const parts = [bar, ...notes];
   if (!ready()) {
     parts.push(h("div", { class: "thread" }, gateView()));
   } else {
-    parts.push(h("div", { class: "thread", id: "thread" }, h("div", { class: "thread-inner", id: "thread-inner" })));
-    parts.push(composer(target, agent));
+    parts.push(h("div", { class: "thread", id: "thread", "data-target": target }, h("div", { class: "thread-inner", id: "thread-inner" })));
+    parts.push(composer(target, agent, model));
   }
   fill($("main"), ...parts);
-  if (ready()) { renderThread(target, agent, model); const i = $("input"); i.value = typed; i.focus(); }
+  if (!ready()) return;
+  renderThread(target, agent, model);
+  const t = $("thread");
+  if (keepScroll !== null) t.scrollTop = keepScroll; else scrollDown(true);
+  const i = $("input");
+  i.value = S.drafts[target] || ""; autosize(i);
+  if (takeFocus) i.focus({ preventScroll: true });
 }
+
+function updateHint() {
+  const el = $("composer-hint");
+  if (el && S.view.kind === "chat") fill(el, composerHint(S.view.agent, agentByName(S.view.agent), currentModel(S.view.agent)));
+}
+
+function autosize(el) { el.style.height = "auto"; if (el.value) el.style.height = el.scrollHeight + "px"; }
 
 function cmd(text) {
   return h("div", { class: "cmd" }, h("code", {}, text), h("button", { class: "btn small", onclick: () => copyText(text) }, "Copy"));
@@ -462,25 +566,48 @@ function gateView() {
     h("ol", {},
       h("li", {}, "In a terminal, start the server with a model and leave it open:",
         cmd("llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192"))),
+    st.server_running ? h("p", { style: "margin-top:18px" }, h("button", { class: "btn small", onclick: () => go({ kind: "models" }) }, "See installed models")) : null,
     h("p", { style: "margin-top:18px" }, "This page checks every few seconds and unlocks as soon as a model is on."));
 }
 
-function composer(target, agent) {
+function composer(target, agent, model) {
+  const stream = S.streams[target];
   const input = h("textarea", { id: "input", rows: 1, placeholder: agent ? `Message ${agent.name}` : "Message the model",
     "aria-label": "Message",
-    oninput: (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; },
+    oninput: (e) => { autosize(e.target); S.drafts[target] = e.target.value; saveDrafts(); },
     onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(target); } } });
-  const btn = S.streaming && S.streaming.target === target
-    ? h("button", { class: "btn", id: "send", onclick: () => S.streaming && S.streaming.controller.abort() }, "Stop")
-    : h("button", { class: "btn primary", id: "send", disabled: !!S.streaming, onclick: () => send(target) }, "Send");
-  let hint = "Enter to send, Shift+Enter for a new line.";
+  const btn = stream
+    ? h("button", { class: "btn", id: "send", onclick: () => stream.controller.abort() }, "Stop")
+    : h("button", { class: "btn primary", id: "send", onclick: () => send(target) }, "Send");
+  return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn),
+    h("div", { class: "composer-hint", id: "composer-hint" }, composerHint(target, agent, model)));
+}
+
+function composerHint(target, agent, model) {
+  const out = [];
+  let text = S.streams[target] ? "Esc or Stop ends the reply." : "Enter to send, Shift+Enter for a new line.";
   if (agent) {
     const on = agent.skills.filter(skillById).length;
-    hint += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
-    if (agent.skills.some((id) => (skillById(id) || {}).builtin))
-      hint += " Actions work best with models that support tools, such as llama3.1, llama3.2, qwen2.5 or qwen3.";
+    text += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
+    if (agent.skills.some((id) => (skillById(id) || {}).builtin)) {
+      const info = modelInfo(model), caps = (info && info.capabilities) || [];
+      if (caps.length && !caps.includes("tools"))
+        text += ` ${model} has no built-in tool support, so actions use a text format that is less reliable; llama3.1 or qwen3 handle them better.`;
+      else if (!caps.length) text += " Actions work best with models that support tools, such as llama3.1, llama3.2, qwen2.5 or qwen3.";
+    }
   }
-  return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn), h("div", { class: "composer-hint" }, hint));
+  out.push(text);
+  // How full the model's context is, from the token counts of the last reply.
+  const msgs = getHistory(target);
+  const last = [...msgs].reverse().find((m) => m.role === "assistant" && m.stats && m.stats.context_tokens);
+  const limit = contextLimit(model);
+  if (last && limit) {
+    const used = last.stats.context_tokens, pct = Math.min(100, Math.round(100 * used / limit));
+    const tone = pct >= 90 ? "bad" : pct >= 70 ? "warn" : "";
+    out.push(" Context", h("span", { class: "meter " + tone, title: `${fmt(used)} of ${fmt(limit)} tokens` }, h("i", { style: `width:${pct}%` })),
+      `${fmt(used)} / ${fmt(limit)} tokens.`, pct >= 70 ? " Older messages are dropped as it fills; New chat starts fresh." : "");
+  }
+  return out;
 }
 
 const STEP_TEXT = {
@@ -496,11 +623,15 @@ function openInFiles(agent, path, isFile) {
   S.files = { agent, dir, file: isFile ? path : "" };
   go({ kind: "files" });
 }
-function stepView(p, agent) {
+function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
+function stepLabel(p) {
   const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
   const target = p.args && typeof p.args.path === "string" && p.args.path ? " " + p.args.path : "";
-  const state = p.output === undefined ? "running" : (p.ok ? "done" : "failed");
-  const label = (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
+  const state = stepState(p);
+  return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
+}
+function stepView(p, agent, wasOpen) {
+  const state = stepState(p);
   const body = h("div", { class: "step-body" });
   if (p.args && typeof p.args.code === "string") body.append(h("div", { class: "step-label" }, "Code"), h("pre", {}, p.args.code));
   if (p.args && typeof p.args.content === "string")
@@ -514,71 +645,222 @@ function stepView(p, agent) {
     else if (p.name === "make_folder" && path) body.append(link("Open folder in Files", path, false));
     else if (p.name === "run_python" || p.name === "list_files") body.append(link("Browse this agent\u2019s files", "", false));
   }
-  return h("details", { class: "step " + state }, h("summary", {}, label), body);
+  const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
+  if (wasOpen) d.open = true;
+  return d;
 }
-function partsView(parts, agent) {
+function partsView(parts, agent, openSteps) {
   return parts.map((p) => {
-    if (p.type === "tool") return stepView(p, agent);
-    const d = h("div", { class: "msg ai" }); d.innerHTML = markdown(p.text); return d;
+    if (p.type === "tool") return stepView(p, agent, openSteps && openSteps.has(p.id));
+    const d = h("div", { class: "msg ai" }); d.innerHTML = markdown(p.text);
+    for (const pre of d.querySelectorAll("pre")) {
+      const code = pre.querySelector("code") || pre;
+      pre.append(h("button", { class: "code-copy", type: "button", onclick: () => copyText(code.textContent, "Code copied") }, "Copy"));
+    }
+    return d;
   });
 }
-function messageView(m, agent) {
-  if (m.role === "user") return h("div", { class: "msg user" }, m.content);
-  const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: m.content }];
-  return h("div", {}, partsView(parts, agent),
-    m.content.trim() ? h("div", { class: "msg-tools" }, h("button", { class: "link", onclick: () => copyText(m.content) }, "Copy")) : null);
+function statsText(st) {
+  if (!st) return "";
+  const bits = [];
+  if (st.output_tokens) bits.push(`${fmt(st.output_tokens)} tokens`);
+  if (st.output_tokens && st.seconds) bits.push(`${(st.output_tokens / st.seconds).toFixed(1)} tokens/s`);
+  if (st.elapsed) bits.push(`${st.elapsed < 10 ? st.elapsed.toFixed(1) : Math.round(st.elapsed)} s`);
+  return bits.join(" \u00b7 ");
+}
+function messageView(m, target, isLast) {
+  if (m.role === "user") return h("div", { class: "msg user" }, String(m.content || ""));
+  const content = String(m.content || "");
+  const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: content }];
+  const tools = [];
+  if (content.trim()) tools.push(h("button", { class: "link", onclick: () => copyText(content) }, "Copy"));
+  if (isLast && ready()) tools.push(h("button", { class: "link", title: "Ask for a new answer to your last message", onclick: () => send(target, { resend: true }) }, "Retry"));
+  const meta = [m.model, statsText(m.stats)].filter(Boolean).join(" \u00b7 ");
+  if (meta) tools.push(h("span", { class: "msg-stats" }, meta));
+  return h("div", {}, partsView(parts, target),
+    m.stopped ? h("div", { class: "msg-note" }, "Stopped before the reply finished.") : null,
+    tools.length ? h("div", { class: "msg-tools" }, tools) : null);
 }
 
 function renderThread(target, agent, model) {
   const inner = $("thread-inner"); if (!inner) return;
   const msgs = getHistory(target);
-  if (!msgs.length) {
-    fill(inner, h("div", { class: "empty" },
+  const stream = S.streams[target];
+  const kids = [];
+  if (!msgs.length && !stream) {
+    kids.push(h("div", { class: "empty" },
       h("h3", {}, agent ? `Chat with ${agent.name}` : "Start a conversation"),
       h("p", {}, agent ? `${agent.name} will answer using ${model}.` : `You are talking directly to ${model}.`)));
-  } else fill(inner, ...msgs.map((m) => messageView(m, target)));
-  scrollDown();
+  } else msgs.forEach((m, i) => kids.push(messageView(m, target, i === msgs.length - 1 && !stream)));
+  if (stream) {
+    const live = h("div", { id: "live", "data-target": target });
+    fillLive(live, stream, target);
+    kids.push(live);
+  }
+  if (S.errors[target] && !stream) {
+    kids.push(h("div", { class: "msg error", role: "alert" }, S.errors[target], " ",
+      h("button", { class: "link", onclick: () => retry(target) }, "Try again")));
+  }
+  fill(inner, kids);
 }
-function scrollDown() { const t = $("thread"); if (t) t.scrollTop = t.scrollHeight; }
+
+// The reply being written. Drawn from S.streams, so it reappears whenever this chat is shown again.
+function fillLive(live, stream, target) {
+  const open = new Set([...live.querySelectorAll("details.step[open]")].map((d) => d.dataset.step));
+  const kids = partsView(stream.parts, target, open);
+  const last = stream.parts[stream.parts.length - 1];
+  const waiting = !last || (last.type === "tool" && last.output !== undefined);
+  if (waiting) {
+    const label = !stream.parts.length ? (stream.model ? `Thinking with ${stream.model}` : "Thinking") : "Thinking about the result";
+    kids.push(h("div", { class: "typing", role: "status" },
+      h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+      h("span", { class: "typing-label" }, label),
+      h("span", { class: "elapsed", "data-since": String(stream.started) }, elapsedText(stream.started))));
+  }
+  fill(live, kids);
+}
+function elapsedText(since) {
+  const s = Math.max(0, Math.floor((Date.now() - Number(since)) / 1000));
+  return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
+}
+function tick() { for (const el of document.querySelectorAll("[data-since]")) el.textContent = elapsedText(el.dataset.since); }
+
+function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
+function scrollDown(force) { const t = $("thread"); if (t && (force || nearBottom(t))) t.scrollTop = t.scrollHeight; }
 
 // What the model sees for an earlier message: its text plus a short note of any actions,
 // so it can refer back to files it made.
 function forModel(m) {
-  if (m.role !== "assistant" || !Array.isArray(m.parts)) return { role: m.role, content: m.content };
+  if (m.role !== "assistant" || !Array.isArray(m.parts)) return { role: m.role, content: String(m.content || "") };
   const steps = m.parts.filter((p) => p.type === "tool" && p.ok).map((p) => {
     const target = p.args && p.args.path ? " " + p.args.path : "";
     const out = String(p.output || "").replace(/\s+/g, " ").slice(0, 160);
     return `${p.name}${target} (${out})`;
   });
-  const content = m.content + (steps.length ? `\n\n[Actions I took in this reply: ${steps.join("; ")}]` : "");
+  const content = String(m.content || "") + (steps.length ? `\n\n[Actions I took in this reply: ${steps.join("; ")}]` : "");
   return { role: "assistant", content: content.trim() || "(no reply)" };
 }
 
-async function send(target) {
-  const input = $("input");
-  const text = input ? input.value.trim() : "";
-  if (!text || S.streaming || !ready()) return;
-  const model = currentModel(target);
+const CLIP = 20000;   // keep saved chats small enough for the browser's storage
+function clipParts(parts) {
+  const cut = (t) => (typeof t === "string" && t.length > CLIP ? t.slice(0, CLIP) + "\n\u2026 (shortened)" : t);
+  return parts.map((p) => p.type !== "tool" ? p : {
+    ...p, output: cut(p.output),
+    args: p.args && typeof p.args === "object" ? Object.fromEntries(Object.entries(p.args).map(([k, v]) => [k, cut(v)])) : p.args,
+  });
+}
+function summarize(stream) {
+  const st = stream.stats, out = { elapsed: (Date.now() - stream.started) / 1000 };
+  if (!st.length) return out;
+  const last = st[st.length - 1];
+  out.output_tokens = st.reduce((a, s) => a + (s.output_tokens || 0), 0) || undefined;
+  out.seconds = st.reduce((a, s) => a + (s.seconds || 0), 0) || undefined;
+  out.context_tokens = ((last.prompt_tokens || 0) + (last.output_tokens || 0)) || undefined;
+  return out;
+}
+
+function retry(target) {
   const msgs = getHistory(target);
-  msgs.push({ role: "user", content: text });
+  if (msgs.length && msgs[msgs.length - 1].role === "user") send(target, { resend: true });
+  else send(target);
+}
+
+function streamsChanged() {
+  renderNav();
+  const busy = Object.keys(S.streams).length;
+  document.title = busy ? "Working\u2026 \u00b7 Axis" : S.unseen ? "Reply ready \u00b7 Axis" : "Axis";
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.unseen) { S.unseen = false; streamsChanged(); } });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || S.view.kind !== "chat") return;
+  const s = S.streams[S.view.agent];
+  if (s) { e.preventDefault(); s.controller.abort(); }
+});
+
+function exportChat(target) {
+  const msgs = getHistory(target);
+  if (!msgs.length) return;
+  const lines = [`# ${chatTitle(target)}`, "", `Exported from Axis on ${new Date().toLocaleString()}.`, ""];
+  for (const m of msgs) {
+    if (m.role === "user") { lines.push("## You", "", String(m.content || ""), ""); continue; }
+    lines.push(`## ${target || "Model"}${m.model ? ` (${m.model})` : ""}`, "");
+    const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: String(m.content || "") }];
+    for (const p of parts) {
+      if (p.type !== "tool") { lines.push(p.text, ""); continue; }
+      lines.push(`> **${stepLabel(p)}**`);
+      if (p.args && typeof p.args.code === "string") lines.push("", "```python", p.args.code, "```");
+      if (p.output !== undefined) lines.push("", "```", String(p.output), "```");
+      lines.push("");
+    }
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  download(`${target || "direct-chat"}-${stamp}.md`, lines.join("\n"), "text/markdown;charset=utf-8");
+}
+
+async function send(target, { resend = false } = {}) {
+  if (S.streams[target] || !ready()) return;
+  const msgs = getHistory(target);
+  let text;
+  if (resend) {
+    while (msgs.length && msgs[msgs.length - 1].role === "assistant") msgs.pop();
+    if (!msgs.length) return;
+    text = String(msgs[msgs.length - 1].content || "");
+  } else {
+    const input = viewing(target) ? $("input") : null;
+    text = (input ? input.value : S.drafts[target] || "").trim();
+    if (!text) return;
+    msgs.push({ role: "user", content: text });
+    S.drafts[target] = ""; saveDrafts();
+  }
   setHistory(target, msgs);
+  delete S.errors[target];
 
-  input.value = "";
-  const controller = new AbortController();
-  S.streaming = { controller, target };
-  renderChat();                                  // shows the new message and the Stop button
-  const inner = $("thread-inner");
-  const live = h("div", {}, h("div", { class: "msg ai typing" }));
-  inner.append(live); scrollDown();
+  const model = currentModel(target);
+  const stream = { controller: new AbortController(), parts: [], stats: [], started: Date.now(), model, roundStart: 0, frame: 0, error: null };
+  S.streams[target] = stream;
+  streamsChanged();
+  if (viewing(target)) renderChat();          // shows the new message, the thinking indicator and the Stop button
 
-  const parts = []; let error = null, frame = 0;
-  const textOf = () => parts.filter((p) => p.type === "text").map((p) => p.text).join("");
-  const paint = () => { frame = 0; fill(live, partsView(parts, target)); scrollDown(); };
-  let roundStart = 0;
-  const schedule = () => { if (!frame) frame = requestAnimationFrame(paint); };
+  const paint = () => {
+    stream.frame = 0;
+    const live = $("live");
+    if (!live || live.dataset.target !== target) return;   // this chat is not on screen; it is drawn when it comes back
+    const stick = nearBottom($("thread"));
+    fillLive(live, stream, target);
+    if (stick) scrollDown(true);
+  };
+  const schedule = () => {
+    if (stream.frame) return;
+    // Animation frames pause in background tabs; a timer keeps the state current there.
+    stream.timer = document.hidden;
+    stream.frame = stream.timer ? setTimeout(paint, 250) : requestAnimationFrame(paint);
+  };
+  const parts = stream.parts;
+  const onEvent = (ev) => {
+    if (ev.model) stream.model = ev.model;
+    if (ev.t) {
+      const last = parts[parts.length - 1];
+      if (last && last.type === "text") last.text += ev.t; else parts.push({ type: "text", text: ev.t });
+    }
+    if (ev.round !== undefined) stream.roundStart = parts.length;
+    if (ev.rewrite !== undefined) {
+      parts.splice(stream.roundStart);
+      if (ev.rewrite.trim()) parts.push({ type: "text", text: ev.rewrite });
+    }
+    if (ev.tool) parts.push({ type: "tool", id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+    if (ev.tool_result) {
+      const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_result.id && p.output === undefined);
+      if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; }
+    }
+    if (ev.stats) stream.stats.push(ev.stats);
+    if (ev.error) stream.error = ev.error;
+    schedule();
+  };
+
+  let aborted = false;
   try {
     const history = msgs.map(forModel);
-    const res = await fetch("/api/chat", { method: "POST", signal: controller.signal,
+    const res = await fetch("/api/chat", { method: "POST", signal: stream.controller.signal,
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: target || null, model, messages: history }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
@@ -590,52 +872,54 @@ async function send(target) {
       while ((nl = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
         if (!line) continue;
-        const ev = JSON.parse(line);
-        if (ev.t) {
-          const last = parts[parts.length - 1];
-          if (last && last.type === "text") last.text += ev.t; else parts.push({ type: "text", text: ev.t });
-          schedule();
-        }
-        if (ev.round !== undefined) roundStart = parts.length;
-        if (ev.rewrite !== undefined) {
-          parts.splice(roundStart);
-          if (ev.rewrite.trim()) parts.push({ type: "text", text: ev.rewrite });
-          schedule();
-        }
-        if (ev.tool) { parts.push({ type: "tool", id: ev.tool.id, name: ev.tool.name, args: ev.tool.args }); schedule(); }
-        if (ev.tool_result) {
-          const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_result.id);
-          if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; schedule(); }
-        }
-        if (ev.error) error = ev.error;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        onEvent(ev);
       }
     }
   } catch (e) {
-    if (e.name !== "AbortError") error = e.name === "TypeError" ? "Axis is not responding. Check that the axis window is still open." : e.message;
+    if (e.name === "AbortError") aborted = true;
+    else stream.error = e.name === "TypeError" ? "Axis is not responding. Check that the axis window is still open." : e.message;
   }
-  if (frame) cancelAnimationFrame(frame);
-  S.streaming = null;
+  if (stream.frame) { if (stream.timer) clearTimeout(stream.frame); else cancelAnimationFrame(stream.frame); stream.frame = 0; }
+  delete S.streams[target];
   for (const p of parts) if (p.type === "tool" && p.output === undefined) { p.ok = false; p.output = "Stopped before this finished."; }
 
-  const reply = textOf();
-  const got = reply.trim() || parts.some((p) => p.type === "tool");
+  if (target && !agentByName(target)) { streamsChanged(); return; }   // the agent was deleted meanwhile
+  const reply = parts.filter((p) => p.type === "text").map((p) => p.text).join("");
+  const got = !!reply.trim() || parts.some((p) => p.type === "tool");
   const saved = getHistory(target);
-  if (got) saved.push({ role: "assistant", content: reply, parts });
-  else if (saved.length && saved[saved.length - 1].role === "user") saved.pop();   // nothing came back: undo the message
+  if (got) {
+    saved.push({ role: "assistant", content: reply, parts: clipParts(parts), model: stream.model,
+      stats: summarize(stream), stopped: aborted || undefined });
+  } else if (!resend && saved.length && saved[saved.length - 1].role === "user") {
+    saved.pop();                                    // nothing came back: undo the message and give the text back
+    if (!(S.drafts[target] || "").trim()) { S.drafts[target] = text; saveDrafts(); }
+  }
   setHistory(target, saved);
+  if (stream.error) S.errors[target] = stream.error;
+  if (document.hidden) S.unseen = true;
+  streamsChanged();
+  if (stream.stats.length) loadModels();           // the context size may have changed (Ollama reloads at Axis's size)
 
-  if (S.view.kind !== "chat" || S.view.agent !== target) return;
-  renderChat();
-  if (!got) $("input").value = text;
-  if (error) { $("thread-inner").append(h("div", { class: "msg error", role: "alert" }, error)); scrollDown(); refreshStatus(); }
+  if (viewing(target)) renderChat();
+  else if (got || stream.error) toast(`${chatTitle(target)}: ${stream.error ? "the reply failed" : "reply ready"}`);
+  if (stream.error) refreshStatus();
 }
 
 /* ---------------------------------------------------------------- editor */
 function renderEditor() {
   const existing = S.view.agent ? agentByName(S.view.agent) : null;
   if (S.view.agent && !existing) return go({ kind: "chat", agent: DIRECT });
-  const draft = existing ? JSON.parse(JSON.stringify(existing))
-    : { name: "", model: "", system_prompt: "You are a concise and helpful assistant.", config: [], skills: [] };
+  const source = !existing && S.view.from ? agentByName(S.view.from) : null;
+  let draft = { name: "", model: "", system_prompt: "You are a concise and helpful assistant.", config: [], skills: [] };
+  if (existing) draft = JSON.parse(JSON.stringify(existing));
+  else if (source) {
+    draft = JSON.parse(JSON.stringify(source));
+    let n = 2, name = (source.name + "-copy").slice(0, 64);
+    while (agentByName(name)) name = `${source.name}-copy${n++}`.slice(0, 64);
+    draft.name = name;
+  }
   const models = (S.status && S.status.models) || [];
 
   const err = h("p", { class: "form-error", role: "alert", hidden: true });
@@ -677,12 +961,19 @@ function renderEditor() {
   const save = async () => {
     err.hidden = true;
     const data = collect();
+    if (existing && data.name !== existing.name && S.streams[existing.name]) {
+      err.textContent = `${existing.name} is still writing a reply. Wait for it to finish (or stop it) before renaming.`;
+      err.hidden = false; return;
+    }
     try {
       const saved = existing
         ? await api("/api/agents/" + encodeURIComponent(existing.name), { method: "PUT", body: data })
         : await api("/api/agents", { method: "POST", body: data });
       if (existing && saved.name !== existing.name) {
         setHistory(saved.name, getHistory(existing.name)); localStorage.removeItem(historyKey(existing.name));
+        for (const map of [S.drafts, S.errors, S.modelChoice]) if (existing.name in map) { map[saved.name] = map[existing.name]; delete map[existing.name]; }
+        saveDrafts();
+        if (S.files.agent === existing.name) S.files.agent = saved.name;
       }
       await loadAgents();
       toast(existing ? "Agent saved" : "Agent created");
@@ -692,9 +983,11 @@ function renderEditor() {
 
   const remove = async () => {
     if (!confirm(`Delete ${existing.name}? Its settings, chat history and every file in its folder will be removed.`)) return;
+    if (S.streams[existing.name]) S.streams[existing.name].controller.abort();
     try {
       await api("/api/agents/" + encodeURIComponent(existing.name), { method: "DELETE" });
       localStorage.removeItem(historyKey(existing.name));
+      delete S.drafts[existing.name]; delete S.errors[existing.name]; saveDrafts();
       await loadAgents(); toast("Agent deleted"); go({ kind: "chat", agent: DIRECT });
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   };
@@ -722,14 +1015,15 @@ function renderEditor() {
     h("div", { class: "form-actions" },
       h("button", { class: "btn primary", type: "submit" }, existing ? "Save agent" : "Create agent"),
       existing ? h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: existing.name }) }, "Chat with agent") : null,
+      existing ? h("button", { class: "btn", type: "button", title: "Make a new agent with these settings", onclick: () => go({ kind: "edit", agent: null, from: existing.name }) }, "Duplicate") : null,
       h("span", { class: "spacer" }),
       existing ? h("button", { class: "btn danger", type: "button", onclick: remove }, "Delete agent")
                : h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: DIRECT }) }, "Cancel")));
 
   fill($("main"), 
-    h("div", { class: "bar" }, menuButton(), h("h2", {}, existing ? `Edit ${existing.name}` : "New agent")),
+    h("div", { class: "bar" }, menuButton(), h("h2", {}, existing ? `Edit ${existing.name}` : source ? `New agent (copy of ${source.name})` : "New agent")),
     h("div", { class: "editor" }, form));
-  if (!existing) name.focus();
+  if (!existing) { name.focus(); if (source) name.select(); }
 }
 
 function workspaceSection(agent) {
@@ -738,7 +1032,7 @@ function workspaceSection(agent) {
     try {
       const d = await api("/api/agents/" + encodeURIComponent(agent.name) + "/files");
       fill(list, d.files.length
-        ? d.files.map((f) => h("li", {}, h("span", {}, f.path), h("small", {}, f.size < 1024 ? f.size + " B" : (f.size / 1024).toFixed(1) + " KB")))
+        ? d.files.map((f) => h("li", {}, h("span", {}, f.path), h("small", {}, size(f.size))))
         : h("li", {}, h("small", {}, "No files yet.")));
     } catch (e) { fill(list, h("li", {}, h("small", {}, e.message))); }
   };
@@ -768,7 +1062,8 @@ function size(n) {
   if (n === null || n === undefined) return "";
   if (n < 1024) return n + " B";
   if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1048576).toFixed(1) + " MB";
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+  return (n / 1073741824).toFixed(1) + " GB";
 }
 function when(iso) {
   const d = new Date(iso); if (isNaN(d)) return "";
@@ -806,8 +1101,12 @@ function renderFiles() {
   }
   const pick = h("select", { "aria-label": "Agent", onchange: (e) => { S.files = { agent: e.target.value, dir: "", file: "" }; renderFiles(); } },
     names.map((n) => { const o = h("option", { value: n }, n); o.selected = n === f.agent; return o; }));
+  const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   bar.append(
     h("label", {}, "Agent", pick),
+    h("button", { class: "btn small", title: "Copy files from your computer into this folder", onclick: () => picker.click() }, "Upload"), picker,
+    h("button", { class: "btn small", onclick: newFolder }, "New folder"),
+    f.dir ? h("button", { class: "btn small danger", onclick: () => deletePath(f.dir, true) }, "Delete folder") : null,
     h("button", { class: "btn small", onclick: () => api(filesUrl(f.agent, "reveal", f.dir), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
     h("button", { class: "btn small", onclick: () => loadListing(true) }, "Refresh"));
 
@@ -816,7 +1115,11 @@ function renderFiles() {
   crumbs.append(h("button", { onclick: () => openDir("") }, f.agent));
   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), h("button", { onclick: () => openDir(segs.slice(0, i + 1).join("/")) }, seg)));
 
-  const list = h("div", { class: "fb-list", id: "fb-list", role: "list" }, h("div", { class: "fb-empty" }, "Loading\u2026"));
+  const list = h("div", { class: "fb-list", id: "fb-list", role: "list",
+    ondragover: (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); list.classList.add("drop"); } },
+    ondragleave: (e) => { if (!list.contains(e.relatedTarget)) list.classList.remove("drop"); },
+    ondrop: (e) => { e.preventDefault(); list.classList.remove("drop"); uploadFiles(e.dataTransfer.files); } },
+    h("div", { class: "fb-empty" }, "Loading\u2026"));
   const view = h("div", { class: "fb-view", id: "fb-view" });
   fill($("main"), bar, crumbs, h("div", { class: "fb" }, list, view));
   loadListing(true);
@@ -826,6 +1129,45 @@ function renderFiles() {
 }
 
 function openDir(dir) { S.files.dir = dir; S.files.file = ""; renderFiles(); }
+
+const MAX_UPLOAD = 512 * 1024 * 1024;
+async function uploadFiles(fileList) {
+  const { agent, dir } = S.files;
+  const files = [...(fileList || [])];
+  if (!files.length || !agent) return;
+  let done = 0;
+  for (const file of files) {
+    if (file.size > MAX_UPLOAD) { toast(`${file.name} is larger than 512 MB.`); continue; }
+    toast(`Uploading ${file.name}\u2026`);
+    try {
+      const res = await fetch(filesUrl(agent, "upload", dir, "&name=" + encodeURIComponent(file.name)),
+        { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || `Upload failed (${res.status}).`);
+      done++;
+    } catch (e) { toast(e.name === "TypeError" ? `Could not upload ${file.name} (folders cannot be uploaded).` : e.message); }
+  }
+  if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${agent}`);
+  if (S.view.kind === "files" && S.files.agent === agent) loadListing(true);
+}
+async function newFolder() {
+  const name = (prompt("Name of the new folder:") || "").trim();
+  if (!name) return;
+  if (/[\\/:*?"<>|]/.test(name) || name === "." || name === "..") return toast("Folder names cannot contain \\ / : * ? \" < > |");
+  const path = S.files.dir ? S.files.dir + "/" + name : name;
+  try { await api(filesUrl(S.files.agent, "mkdir", path), { method: "POST" }); openDir(path); }
+  catch (e) { toast(e.message); }
+}
+async function deletePath(path, isDir) {
+  const what = isDir ? `the folder ${path} and everything in it` : path;
+  if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
+  try {
+    await api(filesUrl(S.files.agent, "", path), { method: "DELETE" });
+    toast("Deleted");
+    if (isDir) openDir(path.split("/").slice(0, -1).join("/"));
+    else { S.files.file = ""; showFile(); loadListing(true); }
+  } catch (e) { toast(e.message); }
+}
 
 let lastListing = "";
 async function loadListing(force) {
@@ -876,7 +1218,9 @@ async function showFile() {
   const body = h("div", {});
   const actions = h("div", { class: "fb-actions" },
     h("a", { class: "btn small", href: raw + "&download=1", download: d.name }, "Download"),
-    h("button", { class: "btn small", onclick: () => api(filesUrl(d.agent, "reveal", d.path), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"));
+    h("button", { class: "btn small", onclick: () => api(filesUrl(d.agent, "reveal", d.path), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
+    d.kind === "text" ? h("button", { class: "btn small", onclick: () => copyText(d.text, "Text copied") }, "Copy text") : null,
+    h("button", { class: "btn small danger", onclick: () => deletePath(d.path, false) }, "Delete"));
 
   const showText = () => fill(body, h("pre", {}, d.text));
   if (d.kind === "image") body.append(h("img", { src: raw, alt: d.name }));
@@ -905,6 +1249,100 @@ async function showFile() {
 
   fill(view, h("h3", {}, d.name), h("p", { class: "fb-meta" }, `${d.path}, ${size(d.size)}, changed ${when(d.modified)}`),
     actions, body, d.truncated ? h("p", { class: "hint", style: "margin-top:8px" }, "Only the first 512 KB is shown. Download the file to see all of it.") : null);
+}
+
+/* ---------------------------------------------------------------- models */
+const CAP_TEXT = { completion: "Chat", tools: "Tools", vision: "Vision", thinking: "Thinking", embedding: "Embeddings", insert: "Fill-in", audio: "Audio" };
+function gpuText(m) {
+  if (typeof m.gpu_percent !== "number") return "";
+  if (m.gpu_percent >= 100) return "all on the GPU";
+  if (m.gpu_percent <= 0) return "all in system RAM (CPU)";
+  return `${m.gpu_percent}% GPU, ${100 - m.gpu_percent}% CPU`;
+}
+function expiresText(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  if (d.getFullYear() > 2100) return "until you stop it";
+  return "until " + when(iso);
+}
+function modelCard(m, d) {
+  const rows = [];
+  const add = (label, value, note) => {
+    if (value === null || value === undefined || value === "") return;
+    rows.push(h("div", { class: "kv" }, h("dt", {}, label), h("dd", {}, String(value), note ? h("small", {}, note) : null)));
+  };
+  if (m.running) {
+    add("Memory in use", m.memory ? size(m.memory) : null, m.memory_note || gpuText(m));
+    add("Context window", tokens(m.context), m.max_context && m.max_context !== m.context ? `the model supports up to ${fmt(m.max_context)}` : null);
+    if (m.slots > 1) add("Parallel slots", m.slots, "requests that can run at once");
+  } else {
+    add("Estimated memory", m.estimated_memory ? "about " + size(m.estimated_memory) : null,
+      m.estimated_memory ? `${size(m.disk_size)} of weights plus ${size(m.estimated_cache)} for a context of ${fmt(m.axis_context)} tokens` : null);
+    add("Longest context", tokens(m.max_context));
+  }
+  add("Parameters", m.parameter_size || bigNum(m.parameter_count));
+  add("Quantization", m.quantization);
+  add("Size on disk", m.disk_size ? size(m.disk_size) : null);
+  add("Architecture", m.architecture || m.family);
+  add("Layers", fmt(m.layers));
+  add("Embedding size", fmt(m.embedding_length));
+  add("Vocabulary", m.vocab_size ? fmt(m.vocab_size) + " tokens" : null);
+  if (m.expert_count) add("Experts", fmt(m.expert_count));
+  if (m.running && m.expires) add("Stays loaded", expiresText(m.expires));
+  if (!m.running && m.modified) add("Installed", when(m.modified));
+  add("Model file", m.model_path);
+  add("Server build", m.build);
+  add("License", m.license);
+
+  const caps = Array.isArray(m.capabilities) ? m.capabilities : [];
+  const notes = [];
+  if (d.kind === "ollama" && m.running && m.context && m.axis_context && m.context !== m.axis_context)
+    notes.push(`Axis asks Ollama for a context of ${fmt(m.axis_context)} tokens, so Ollama will reload this model at that size with the next Axis message. Memory use changes when it does.`);
+  if (caps.length && caps.includes("completion") && !caps.includes("tools"))
+    notes.push("No built-in tool support. Agents with actions still work through Axis\u2019s text format, but less reliably.");
+  if (caps.includes("embedding") && !caps.includes("completion")) notes.push("This is an embedding model; it cannot chat.");
+
+  const actions = [];
+  if (m.running && (S.status && S.status.models || []).includes(m.name) && !caps.includes("embedding")) {
+    actions.push(h("button", { class: "btn small primary", onclick: () => { S.modelChoice[DIRECT] = m.name; go({ kind: "chat", agent: DIRECT }); } }, "Chat with this model"));
+  }
+  if (d.kind === "ollama") actions.push(cmd(m.running ? `ollama stop ${m.name}` : `ollama run ${m.name} --keepalive -1m`));
+
+  return h("div", { class: "model-card" },
+    h("h4", {}, m.name, m.running ? h("span", { class: "chip on" }, "On") : h("span", { class: "chip" }, "Installed")),
+    caps.length ? h("div", { class: "chips", style: "margin-top:8px" }, caps.map((c) => h("span", { class: "chip" }, CAP_TEXT[c] || c))) : null,
+    rows.length ? h("dl", { class: "kv-grid" }, rows) : h("p", { class: "hint", style: "margin-top:8px" }, "The server did not report any details for this model."),
+    notes.map((n) => h("p", { class: "model-note" }, n)),
+    m.parameters ? h("details", {}, h("summary", {}, "Default settings"), h("pre", {}, m.parameters)) : null,
+    actions.length ? h("div", { class: "model-actions" }, actions) : null);
+}
+
+function renderModels() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Models"),
+    h("button", { class: "btn small", onclick: () => { S.models = null; renderModels(); } }, "Refresh"));
+  const d = S.models;
+  if (!d) {
+    loadModels();
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "hint" }, "Reading model details\u2026"))));
+  }
+  const running = d.models.filter((m) => m.running), installed = d.models.filter((m) => !m.running);
+  const body = [];
+  if (!d.models.length) {
+    body.push(h("div", { class: "empty" }, h("h3", {}, "No models found"),
+      h("p", {}, d.message || "Start Ollama or llama.cpp with a model, then click Refresh.")));
+  } else {
+    const total = running.reduce((a, m) => a + (m.memory || 0), 0);
+    body.push(h("p", { class: "summary-line" }, [d.server, d.url].filter(Boolean).join(" at "),
+      total ? ` \u00b7 ${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}` : ""));
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "On now"),
+      running.length ? running.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "No model is loaded. Turn one on with the command under an installed model.")));
+    if (d.kind === "ollama") {
+      body.push(h("div", { class: "skill-group" }, h("h3", {}, "Installed"),
+        h("p", { class: "hint" }, `Downloaded but not loaded. Memory estimates assume the context of ${fmt(d.axis_context || 4096)} tokens that Axis asks for, and are approximate.`),
+        installed.length ? installed.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "Every installed model is on.")));
+    }
+  }
+  fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, body)));
 }
 
 /* ---------------------------------------------------------------- skills */
@@ -975,9 +1413,13 @@ function renderSkills() {
 
 /* ------------------------------------------------------------------ start */
 (async function start() {
+  const drafts = recall("axis.drafts", {});
+  if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) S.drafts = drafts;
   await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
   renderMain();
+  loadModels();
   setInterval(refreshStatus, 4000);
+  setInterval(tick, 1000);
 })();
 </script>
 </body>

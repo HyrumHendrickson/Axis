@@ -139,7 +139,13 @@ def list_files(ws: Path, args: Dict[str, Any]) -> str:
         return f"{_rel(ws, folder)} is empty."
     lines = []
     for e in entries[:500]:
-        lines.append(f"{e.name}/" if e.is_dir() else f"{e.name}  ({e.stat().st_size} bytes)")
+        if e.is_dir():
+            lines.append(f"{e.name}/")
+            continue
+        try:
+            lines.append(f"{e.name}  ({e.stat().st_size} bytes)")
+        except OSError:  # a broken link, or a file removed while listing
+            lines.append(f"{e.name}  (unreadable)")
     if len(entries) > 500:
         lines.append(f"... and {len(entries) - 500} more")
     return "\n".join(lines)
@@ -149,13 +155,17 @@ def read_file(ws: Path, args: Dict[str, Any]) -> str:
     path = resolve(ws, _require(args, "path"))
     if not path.is_file():
         raise ToolError(f"{args['path']} is not a file in your folder.")
-    data = path.read_bytes()
+    total = path.stat().st_size
+    with path.open("rb") as f:  # never load a huge file just to show the start of it
+        data = f.read(MAX_READ * 4 + 4)
     if b"\0" in data[:4096]:
         raise ToolError(f"{args['path']} is a binary file and cannot be shown as text.")
     text = data.decode("utf-8", errors="replace")
-    if len(text) > MAX_READ:
-        return text[:MAX_READ] + (f"\n... (file continues for {len(text) - MAX_READ} more characters; "
-                                  "use run_python to read a specific part if you need it)")
+    if len(text) > MAX_READ or total > len(data):
+        shown = text[:MAX_READ]
+        rest = total - len(shown.encode("utf-8", errors="replace"))
+        return shown + (f"\n... (file continues for about {max(rest, 0)} more bytes; "
+                        "use run_python to read a specific part if you need it)")
     return text
 
 
