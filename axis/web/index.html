@@ -210,6 +210,18 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .fb-empty { color: var(--muted); padding: 24px 16px; }
 @media (max-width: 760px) { .fb { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 40%) 1fr; } .fb-list { border-right: 0; border-bottom: 1px solid var(--line); } .crumbs, .fb-view { padding-left: 14px; padding-right: 14px; } }
 
+/* ---------- past chats ---------- */
+.chat-sub { display: block; font: 13px/1.3 var(--sans); color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
+.chat-search { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--surface); min-width: 160px; }
+.chat-group { font: 400 18px/1.3 var(--serif); margin: 22px 0 4px; }
+.chat-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin-top: 8px; }
+.chat-row:hover { border-color: var(--accent); }
+.chat-open { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 10px 14px; cursor: pointer; }
+.chat-open:disabled { cursor: not-allowed; opacity: .6; }
+.chat-title { display: flex; gap: 8px; align-items: center; font-weight: 600; overflow-wrap: anywhere; }
+.chat-open small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.chat-actions { display: flex; gap: 14px; padding-right: 14px; flex: none; }
+
 /* ---------- models ---------- */
 .model-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-top: 12px; background: var(--surface); }
 .model-card h4 { margin: 0; font: 600 16px/1.3 var(--mono); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
@@ -266,6 +278,11 @@ const S = {
   drafts: {},                   // target -> unsent text in the message box
   errors: {},                   // target -> the last error, shown until the next message
   models: null,                 // last /api/models result
+  chats: {},                    // chat id -> { id, agent, title, messages } for chats opened in this page
+  current: {},                  // target -> id of the chat open for it (none means a new, empty chat)
+  deletedChats: new Set(),      // ids deleted here, so a reply finishing later does not bring them back
+  chatList: null,               // last /api/chats result, for Past chats
+  history: { agent: "*", sort: "new", query: "" },   // Past chats filter and order
   unseen: false,                // a reply finished while the browser tab was hidden
 };
 
@@ -309,12 +326,73 @@ function store(key, value) { try { localStorage.setItem(key, JSON.stringify(valu
 function recall(key, fallback) {
   try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
 }
-const historyKey = (target) => "axis.chat:" + target;
-const getHistory = (target) => { const h = recall(historyKey(target), []); return Array.isArray(h) ? h : []; };
+/* Chats are saved by Axis in ~/Axis/chats. S.chats caches the ones opened here;
+   S.current maps each agent ("" for Direct chat) to the chat open for it. */
+function newChatId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+function saveCurrent() { store("axis.current", S.current); }
+const chatMessages = (id) => (id && S.chats[id] ? S.chats[id].messages.slice() : []);
+const getHistory = (target) => chatMessages(S.current[target]);
+const savingChats = {};    // id -> promise chain, so saves of one chat reach Axis in order
+function saveChat(id, agent, msgs) {
+  if (S.deletedChats.has(id)) return;
+  const c = S.chats[id] || (S.chats[id] = { id, agent, title: "", messages: [] });
+  c.messages = msgs.slice(); c.agent = agent;
+  savingChats[id] = (savingChats[id] || Promise.resolve()).then(async () => {
+    if (S.deletedChats.has(id)) return;
+    if (c.messages.length) {
+      await api("/api/chats/" + encodeURIComponent(id), { method: "PUT", body: { agent: c.agent, title: c.title || "", messages: c.messages } });
+      c.saved = true;
+    } else if (c.saved) {   // the only message was taken back: nothing left to keep
+      await api("/api/chats/" + encodeURIComponent(id), { method: "DELETE" }).catch(() => {});
+      c.saved = false;
+    }
+  }).catch((e) => toast("Could not save the chat: " + e.message));
+}
 function setHistory(target, msgs) {
-  if (store(historyKey(target), msgs)) return true;
-  toast("Could not save this chat: the browser\u2019s storage is full. Start a new chat somewhere to free space.");
-  return false;
+  let id = S.current[target];
+  if (!id) {
+    if (!msgs.length) return;
+    id = S.current[target] = newChatId(); saveCurrent();
+  }
+  saveChat(id, target, msgs);
+}
+const loadingChats = {};
+function loadChat(id) {   // resolves "ok", "missing" or an error message
+  if (!loadingChats[id]) {
+    loadingChats[id] = api("/api/chats/" + encodeURIComponent(id))
+      .then((c) => { S.chats[id] = { ...c, messages: Array.isArray(c.messages) ? c.messages : [], saved: true }; return "ok"; })
+      .catch((e) => /does not exist/.test(e.message) ? "missing" : e.message)
+      .finally(() => { delete loadingChats[id]; });
+  }
+  return loadingChats[id];
+}
+function openChat(agent, id) {
+  if (S.current[agent] !== id) delete S.errors[agent];
+  if (id) S.current[agent] = id; else delete S.current[agent];
+  saveCurrent();
+  go({ kind: "chat", agent });
+}
+// Axis 3.2 and earlier kept one chat per agent in the browser. Move them to Axis once.
+async function migrateOldChats() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("axis.chat:")) keys.push(k); }
+  for (const k of keys) {
+    const target = k.slice("axis.chat:".length), msgs = recall(k, []);
+    if (Array.isArray(msgs) && msgs.length && (!target || agentByName(target))) {
+      const id = newChatId();
+      try {
+        await api("/api/chats/" + id, { method: "PUT", body: { agent: target, messages: msgs } });
+        if (!S.current[target]) S.current[target] = id;
+      } catch (e) {
+        if (/not responding/.test(e.message)) continue;   // try again next time
+      }
+    }
+    try { localStorage.removeItem(k); } catch {}
+  }
+  saveCurrent();
 }
 function saveDrafts() { store("axis.drafts", S.drafts); }
 function download(name, text, type) {
@@ -447,6 +525,7 @@ function renderNav() {
       h("small", {}, busy ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : sub));
   fill($("nav"), 
     item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT }), !!S.streams[DIRECT]),
+    item("Past chats", "Earlier conversations", v.kind === "history", () => go({ kind: "history" })),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
     item("Models", "Memory, context and details", v.kind === "models", () => go({ kind: "models" })),
@@ -478,11 +557,19 @@ function renderMain() {
   if (S.view.kind === "skills") return renderSkills();
   if (S.view.kind === "files") return renderFiles();
   if (S.view.kind === "models") return renderModels();
+  if (S.view.kind === "history") return renderHistory();
   renderChat();
 }
 
 const viewing = (target) => S.view.kind === "chat" && S.view.agent === target;
-const chatTitle = (target) => target || "Direct chat";
+const targetName = (target) => target || "Direct chat";
+function chatTitle(chat) {
+  if (chat.title) return chat.title;
+  const first = (chat.messages || []).find((m) => m.role === "user");
+  const line = first ? String(first.content).replace(/\s+/g, " ").trim() : "";
+  return line ? (line.length > 80 ? line.slice(0, 79) + "\u2026" : line) : "New chat";
+}
+const streamHere = (target) => { const s = S.streams[target]; return s && s.chatId === S.current[target] ? s : null; };
 
 function renderChat() {
   const target = S.view.agent;
@@ -491,6 +578,18 @@ function renderChat() {
   const models = (S.status && S.status.models) || [];
   const model = currentModel(target);
   const stream = S.streams[target];
+  const chatId = S.current[target];
+  if (chatId && !S.chats[chatId]) {          // a saved chat that is not loaded yet
+    fill($("main"), h("div", { class: "bar" }, menuButton(), h("h2", {}, agent ? agent.name : "Direct chat")),
+      h("div", { class: "thread" }, h("p", { class: "hint", style: "text-align:center" }, "Opening chat\u2026")));
+    loadChat(chatId).then((r) => {
+      if (r === "missing") { if (S.current[target] === chatId) { delete S.current[target]; saveCurrent(); } }
+      else if (r !== "ok") { toast("Could not open the chat: " + r); return; }
+      if (viewing(target)) renderChat();
+    });
+    return;
+  }
+  const chat = chatId ? S.chats[chatId] : null;
 
   // Keep the reader's place and focus when this chat is drawn again (status changes, replies finishing).
   const oldThread = $("thread"), oldInput = $("input");
@@ -506,14 +605,15 @@ function renderChat() {
 
   const bar = h("div", { class: "bar" },
     menuButton(),
-    h("h2", {}, agent ? agent.name : "Direct chat"),
+    h("h2", {}, agent ? agent.name : "Direct chat",
+      chat && hasHistory ? h("small", { class: "chat-sub" }, chatTitle(chat)) : null),
     ready() ? h("label", {}, "Model", select) : null,
     agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
     hasHistory ? h("button", { class: "btn small", title: "Download this conversation as a Markdown file", onclick: () => exportChat(target) }, "Export") : null,
-    !ready() ? null : h("button", { class: "btn small", disabled: !!stream, onclick: () => {
-      if (getHistory(target).length && !confirm("Start a new chat? The current conversation will be cleared.")) return;
-      setHistory(target, []); delete S.errors[target]; renderChat();
-    } }, "New chat"),
+    h("button", { class: "btn small", title: "Earlier conversations" + (agent ? " with " + agent.name : ""),
+      onclick: () => { S.history.agent = target; go({ kind: "history" }); } }, "Past chats"),
+    !ready() || !hasHistory ? null : h("button", { class: "btn small", title: "Start a fresh conversation. This one stays in Past chats.",
+      onclick: () => openChat(target, null) }, "New chat"),
   );
 
   const notes = [];
@@ -571,21 +671,24 @@ function gateView() {
 }
 
 function composer(target, agent, model) {
-  const stream = S.streams[target];
+  const stream = streamHere(target), busyElsewhere = !stream && !!S.streams[target];
   const input = h("textarea", { id: "input", rows: 1, placeholder: agent ? `Message ${agent.name}` : "Message the model",
     "aria-label": "Message",
     oninput: (e) => { autosize(e.target); S.drafts[target] = e.target.value; saveDrafts(); },
     onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(target); } } });
   const btn = stream
     ? h("button", { class: "btn", id: "send", onclick: () => stream.controller.abort() }, "Stop")
-    : h("button", { class: "btn primary", id: "send", onclick: () => send(target) }, "Send");
+    : h("button", { class: "btn primary", id: "send", disabled: busyElsewhere,
+        title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: () => send(target) }, "Send");
   return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn),
     h("div", { class: "composer-hint", id: "composer-hint" }, composerHint(target, agent, model)));
 }
 
 function composerHint(target, agent, model) {
   const out = [];
-  let text = S.streams[target] ? "Esc or Stop ends the reply." : "Enter to send, Shift+Enter for a new line.";
+  let text = streamHere(target) ? "Esc or Stop ends the reply."
+    : S.streams[target] ? "Another chat with this agent is still replying; you can send once it finishes."
+    : "Enter to send, Shift+Enter for a new line.";
   if (agent) {
     const on = agent.skills.filter(skillById).length;
     text += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
@@ -685,7 +788,7 @@ function messageView(m, target, isLast) {
 function renderThread(target, agent, model) {
   const inner = $("thread-inner"); if (!inner) return;
   const msgs = getHistory(target);
-  const stream = S.streams[target];
+  const stream = streamHere(target);
   const kids = [];
   if (!msgs.length && !stream) {
     kids.push(h("div", { class: "empty" },
@@ -693,7 +796,7 @@ function renderThread(target, agent, model) {
       h("p", {}, agent ? `${agent.name} will answer using ${model}.` : `You are talking directly to ${model}.`)));
   } else msgs.forEach((m, i) => kids.push(messageView(m, target, i === msgs.length - 1 && !stream)));
   if (stream) {
-    const live = h("div", { id: "live", "data-target": target });
+    const live = h("div", { id: "live", "data-target": target, "data-chat": stream.chatId });
     fillLive(live, stream, target);
     kids.push(live);
   }
@@ -773,14 +876,15 @@ function streamsChanged() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.unseen) { S.unseen = false; streamsChanged(); } });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || S.view.kind !== "chat") return;
-  const s = S.streams[S.view.agent];
+  const s = streamHere(S.view.agent);
   if (s) { e.preventDefault(); s.controller.abort(); }
 });
 
 function exportChat(target) {
   const msgs = getHistory(target);
   if (!msgs.length) return;
-  const lines = [`# ${chatTitle(target)}`, "", `Exported from Axis on ${new Date().toLocaleString()}.`, ""];
+  const chat = S.chats[S.current[target]];
+  const lines = [`# ${chat ? chatTitle(chat) : targetName(target)}`, "", `${targetName(target)}, exported from Axis on ${new Date().toLocaleString()}.`, ""];
   for (const m of msgs) {
     if (m.role === "user") { lines.push("## You", "", String(m.content || ""), ""); continue; }
     lines.push(`## ${target || "Model"}${m.model ? ` (${m.model})` : ""}`, "");
@@ -816,7 +920,8 @@ async function send(target, { resend = false } = {}) {
   delete S.errors[target];
 
   const model = currentModel(target);
-  const stream = { controller: new AbortController(), parts: [], stats: [], started: Date.now(), model, roundStart: 0, frame: 0, error: null };
+  const stream = { controller: new AbortController(), parts: [], stats: [], started: Date.now(), model, roundStart: 0, frame: 0, error: null,
+    chatId: S.current[target] };   // the reply is saved into this chat even if another one is opened meanwhile
   S.streams[target] = stream;
   streamsChanged();
   if (viewing(target)) renderChat();          // shows the new message, the thinking indicator and the Stop button
@@ -824,7 +929,7 @@ async function send(target, { resend = false } = {}) {
   const paint = () => {
     stream.frame = 0;
     const live = $("live");
-    if (!live || live.dataset.target !== target) return;   // this chat is not on screen; it is drawn when it comes back
+    if (!live || live.dataset.target !== target || live.dataset.chat !== stream.chatId) return;   // not on screen; drawn when it comes back
     const stick = nearBottom($("thread"));
     fillLive(live, stream, target);
     if (stick) scrollDown(true);
@@ -885,10 +990,10 @@ async function send(target, { resend = false } = {}) {
   delete S.streams[target];
   for (const p of parts) if (p.type === "tool" && p.output === undefined) { p.ok = false; p.output = "Stopped before this finished."; }
 
-  if (target && !agentByName(target)) { streamsChanged(); return; }   // the agent was deleted meanwhile
+  if ((target && !agentByName(target)) || S.deletedChats.has(stream.chatId)) { streamsChanged(); return; }   // deleted meanwhile
   const reply = parts.filter((p) => p.type === "text").map((p) => p.text).join("");
   const got = !!reply.trim() || parts.some((p) => p.type === "tool");
-  const saved = getHistory(target);
+  const saved = chatMessages(stream.chatId);
   if (got) {
     saved.push({ role: "assistant", content: reply, parts: clipParts(parts), model: stream.model,
       stats: summarize(stream), stopped: aborted || undefined });
@@ -896,14 +1001,16 @@ async function send(target, { resend = false } = {}) {
     saved.pop();                                    // nothing came back: undo the message and give the text back
     if (!(S.drafts[target] || "").trim()) { S.drafts[target] = text; saveDrafts(); }
   }
-  setHistory(target, saved);
-  if (stream.error) S.errors[target] = stream.error;
+  saveChat(stream.chatId, target, saved);
+  if (S.chatList) S.chatList = null;               // Past chats re-reads the list next time
+  if (stream.error && S.current[target] === stream.chatId) S.errors[target] = stream.error;
   if (document.hidden) S.unseen = true;
   streamsChanged();
   if (stream.stats.length) loadModels();           // the context size may have changed (Ollama reloads at Axis's size)
 
   if (viewing(target)) renderChat();
-  else if (got || stream.error) toast(`${chatTitle(target)}: ${stream.error ? "the reply failed" : "reply ready"}`);
+  else if (got || stream.error) toast(`${targetName(target)}: ${stream.error ? "the reply failed" : "reply ready"}`);
+  if (S.view.kind === "history") loadChatList().then(drawChatList);
   if (stream.error) refreshStatus();
 }
 
@@ -970,9 +1077,10 @@ function renderEditor() {
         ? await api("/api/agents/" + encodeURIComponent(existing.name), { method: "PUT", body: data })
         : await api("/api/agents", { method: "POST", body: data });
       if (existing && saved.name !== existing.name) {
-        setHistory(saved.name, getHistory(existing.name)); localStorage.removeItem(historyKey(existing.name));
-        for (const map of [S.drafts, S.errors, S.modelChoice]) if (existing.name in map) { map[saved.name] = map[existing.name]; delete map[existing.name]; }
-        saveDrafts();
+        for (const c of Object.values(S.chats)) if (c.agent === existing.name) c.agent = saved.name;   // Axis moved its chats
+        S.chatList = null;
+        for (const map of [S.drafts, S.errors, S.modelChoice, S.current]) if (existing.name in map) { map[saved.name] = map[existing.name]; delete map[existing.name]; }
+        saveDrafts(); saveCurrent();
         if (S.files.agent === existing.name) S.files.agent = saved.name;
       }
       await loadAgents();
@@ -982,11 +1090,13 @@ function renderEditor() {
   };
 
   const remove = async () => {
-    if (!confirm(`Delete ${existing.name}? Its settings, chat history and every file in its folder will be removed.`)) return;
+    if (!confirm(`Delete ${existing.name}? Its settings, all of its chats and every file in its folder will be removed.`)) return;
     if (S.streams[existing.name]) S.streams[existing.name].controller.abort();
     try {
       await api("/api/agents/" + encodeURIComponent(existing.name), { method: "DELETE" });
-      localStorage.removeItem(historyKey(existing.name));
+      for (const c of Object.values(S.chats)) if (c.agent === existing.name) { S.deletedChats.add(c.id); delete S.chats[c.id]; }
+      delete S.current[existing.name]; S.chatList = null; saveCurrent();
+      if (S.history.agent === existing.name) S.history.agent = "*";
       delete S.drafts[existing.name]; delete S.errors[existing.name]; saveDrafts();
       await loadAgents(); toast("Agent deleted"); go({ kind: "chat", agent: DIRECT });
     } catch (e) { err.textContent = e.message; err.hidden = false; }
@@ -1251,6 +1361,99 @@ async function showFile() {
     actions, body, d.truncated ? h("p", { class: "hint", style: "margin-top:8px" }, "Only the first 512 KB is shown. Download the file to see all of it.") : null);
 }
 
+/* ------------------------------------------------------------ past chats */
+async function loadChatList() {
+  try { S.chatList = await api("/api/chats"); }
+  catch (e) { toast(e.message); S.chatList = S.chatList || []; }
+}
+
+function renderHistory() {
+  const hv = S.history;
+  if (hv.agent !== "*" && hv.agent !== DIRECT && !agentByName(hv.agent)) hv.agent = "*";
+  const filter = h("select", { "aria-label": "Show chats for", onchange: (e) => { hv.agent = e.target.value; drawChatList(); } },
+    [["*", "All chats"], [DIRECT, "Direct chat"], ...S.agents.map((a) => [a.name, a.name])].map(([v, label]) => {
+      const o = h("option", { value: v }, label); o.selected = v === hv.agent; return o; }));
+  const sort = h("select", { "aria-label": "Sort by", onchange: (e) => { hv.sort = e.target.value; drawChatList(); } },
+    [["new", "Newest first"], ["old", "Oldest first"], ["agent", "By agent"], ["title", "By title"]].map(([v, label]) => {
+      const o = h("option", { value: v }, label); o.selected = v === hv.sort; return o; }));
+  const search = h("input", { type: "search", class: "chat-search", placeholder: "Search titles", "aria-label": "Search chat titles",
+    value: hv.query, oninput: (e) => { hv.query = e.target.value; drawChatList(); } });
+  fill($("main"),
+    h("div", { class: "bar" }, menuButton(), h("h2", {}, "Past chats"),
+      h("label", {}, "Show", filter), h("label", {}, "Sort", sort), search,
+      h("button", { class: "btn small primary", onclick: () => openChat(hv.agent === "*" ? DIRECT : hv.agent, null) }, "New chat")),
+    h("div", { class: "editor" }, h("div", { class: "form", id: "chat-list" }, h("p", { class: "hint" }, "Loading chats\u2026"))));
+  if (S.chatList) drawChatList();
+  loadChatList().then(() => { if (S.view.kind === "history") drawChatList(); });
+}
+
+function drawChatList() {
+  const box = $("chat-list"); if (!box || !S.chatList) return;
+  const hv = S.history, q = hv.query.trim().toLowerCase();
+  let list = S.chatList.filter((c) => (hv.agent === "*" || c.agent === hv.agent) && (!q || c.title.toLowerCase().includes(q)));
+  const byNew = (a, b) => (b.updated || "").localeCompare(a.updated || "");
+  if (hv.sort === "old") list.sort((a, b) => byNew(b, a));
+  else if (hv.sort === "title") list.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) || byNew(a, b));
+  else if (hv.sort === "agent") list.sort((a, b) => (a.agent ? 1 : 0) - (b.agent ? 1 : 0) || a.agent.localeCompare(b.agent, undefined, { sensitivity: "base" }) || byNew(a, b));
+  else list.sort(byNew);
+
+  if (!list.length) {
+    const none = !S.chatList.length;
+    return fill(box, h("div", { class: "empty" }, h("h3", {}, none ? "No saved chats yet" : "No chats match"),
+      h("p", {}, none ? "Every conversation, with an agent or in Direct chat, is saved here automatically." : "Try another agent or search.")));
+  }
+  const rows = [];
+  let group = null;
+  for (const c of list) {
+    if (hv.sort === "agent" && c.agent !== group) { group = c.agent; rows.push(h("h3", { class: "chat-group" }, targetName(c.agent))); }
+    rows.push(chatRow(c));
+  }
+  const shown = list.length === S.chatList.length ? `${list.length} chat${list.length === 1 ? "" : "s"}` : `${list.length} of ${S.chatList.length} chats`;
+  fill(box, h("p", { class: "summary-line" }, shown), rows);
+}
+
+function chatRow(c) {
+  const exists = !c.agent || !!agentByName(c.agent);
+  const stream = S.streams[c.agent];
+  const working = !!(stream && stream.chatId === c.id);
+  const isOpen = S.current[c.agent] === c.id;
+  const meta = [targetName(c.agent) + (exists ? "" : " (deleted agent)"), `${c.messages} message${c.messages === 1 ? "" : "s"}`, when(c.updated)].filter(Boolean).join(" \u00b7 ");
+  return h("div", { class: "chat-row" },
+    h("button", { class: "chat-open", disabled: !exists, title: exists ? "Open this chat" : "This chat\u2019s agent no longer exists", onclick: () => openChat(c.agent, c.id) },
+      h("span", { class: "chat-title" }, c.title,
+        working ? h("span", { class: "chip on" }, "Working") : isOpen ? h("span", { class: "chip" }, "Open") : null),
+      h("small", {}, meta)),
+    h("div", { class: "chat-actions" },
+      h("button", { class: "link", onclick: () => renameChat(c) }, "Rename"),
+      h("button", { class: "link", style: "color:var(--bad)", onclick: () => deleteChat(c) }, "Delete")));
+}
+
+async function renameChat(c) {
+  const title = prompt("Chat title (leave empty to use the first message):", c.custom_title ? c.title : "");
+  if (title === null) return;
+  try {
+    await api("/api/chats/" + encodeURIComponent(c.id), { method: "PATCH", body: { title } });
+    if (S.chats[c.id]) S.chats[c.id].title = title.trim();
+    await loadChatList(); drawChatList();
+  } catch (e) { toast(e.message); }
+}
+
+async function deleteChat(c) {
+  if (!confirm(`Delete the chat \u201c${c.title}\u201d? This cannot be undone.`)) return;
+  const stream = S.streams[c.agent];
+  if (stream && stream.chatId === c.id) stream.controller.abort();
+  S.deletedChats.add(c.id);
+  try {
+    await (savingChats[c.id] || Promise.resolve());          // let a save in progress finish first
+    await api("/api/chats/" + encodeURIComponent(c.id), { method: "DELETE" });
+  } catch (e) { if (!/does not exist/.test(e.message)) { S.deletedChats.delete(c.id); return toast(e.message); } }
+  delete S.chats[c.id];
+  if (S.current[c.agent] === c.id) { delete S.current[c.agent]; delete S.errors[c.agent]; saveCurrent(); }
+  S.chatList = (S.chatList || []).filter((x) => x.id !== c.id);
+  toast("Chat deleted");
+  drawChatList();
+}
+
 /* ---------------------------------------------------------------- models */
 const CAP_TEXT = { completion: "Chat", tools: "Tools", vision: "Vision", thinking: "Thinking", embedding: "Embeddings", insert: "Fill-in", audio: "Audio" };
 function gpuText(m) {
@@ -1415,7 +1618,10 @@ function renderSkills() {
 (async function start() {
   const drafts = recall("axis.drafts", {});
   if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) S.drafts = drafts;
+  const current = recall("axis.current", {});
+  if (current && typeof current === "object" && !Array.isArray(current)) S.current = current;
   await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
+  await migrateOldChats();
   renderMain();
   loadModels();
   setInterval(refreshStatus, 4000);

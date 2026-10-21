@@ -905,6 +905,58 @@ class TestFileManagement(Base):
         self.assertEqual(json.loads(text)["models"][0]["name"], "m")
 
 
+class TestChats(Base):
+    def setUp(self):
+        super().setUp()
+        self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
+        request(self.url + "/api/agents", "POST", {"name": "poet"})
+        self.msgs = [{"role": "user", "content": "Write   a poem\nabout rain"}, {"role": "assistant", "content": "Drip.", "parts": []}]
+
+    def put(self, chat_id, agent, msgs=None, title=None):
+        body = {"agent": agent, "messages": self.msgs if msgs is None else msgs}
+        if title is not None:
+            body["title"] = title
+        return request(f"{self.url}/api/chats/{chat_id}", "PUT", body)
+
+    def test_save_list_get_rename_delete(self):
+        code, text = self.put("chat-0001", "poet")
+        self.assertEqual(code, 200, text)
+        self.assertEqual(json.loads(text)["title"], "Write a poem about rain")
+        self.assertEqual(self.put("chat-0002", "")[0], 200)   # Direct chat is saved too
+        listing = json.loads(request(self.url + "/api/chats")[1])
+        self.assertEqual({(c["id"], c["agent"], c["messages"]) for c in listing}, {("chat-0001", "poet", 2), ("chat-0002", "", 2)})
+        chat = json.loads(request(self.url + "/api/chats/chat-0001")[1])
+        self.assertEqual(chat["messages"][1]["content"], "Drip.")
+        created = chat["created"]
+        self.put("chat-0001", "poet", self.msgs + [{"role": "user", "content": "more"}])
+        chat = json.loads(request(self.url + "/api/chats/chat-0001")[1])
+        self.assertEqual((len(chat["messages"]), chat["created"]), (3, created))
+        code, text = request(self.url + "/api/chats/chat-0001", "PATCH", {"title": "Rain"})
+        self.assertEqual(json.loads(text)["title"], "Rain")
+        self.put("chat-0001", "poet", title="Rain")
+        self.assertEqual(json.loads(request(self.url + "/api/chats/chat-0001")[1])["title"], "Rain")
+        self.assertEqual(request(self.url + "/api/chats/chat-0001", "DELETE")[0], 200)
+        self.assertEqual(request(self.url + "/api/chats/chat-0001")[0], 404)
+        self.assertEqual(request(self.url + "/api/chats/chat-0001", "DELETE")[0], 404)
+
+    def test_validation(self):
+        self.assertEqual(self.put("chat-0001", "ghost")[0], 404)          # unknown agent
+        self.assertEqual(self.put("../../x", "")[0], 404)
+        self.assertEqual(self.put("short", "")[0], 404)
+        self.assertEqual(self.put("chat-0001", "", [{"role": "system", "content": "x"}])[0], 400)
+        self.assertEqual(self.put("chat-0001", "", "nope")[0], 400)
+        self.assertEqual(request(self.url + "/api/chats/chat-9999")[0], 404)
+
+    def test_chats_follow_their_agent(self):
+        self.put("chat-0001", "poet")
+        self.put("chat-0002", "")
+        request(self.url + "/api/agents/poet", "PUT", {"name": "bard"})
+        self.assertEqual(json.loads(request(self.url + "/api/chats/chat-0001")[1])["agent"], "bard")
+        request(self.url + "/api/agents/bard", "DELETE")
+        self.assertEqual(request(self.url + "/api/chats/chat-0001")[0], 404)   # deleted with its agent
+        self.assertEqual(request(self.url + "/api/chats/chat-0002")[0], 200)   # other chats are kept
+
+
 class TestToolRobustness(Base):
     def test_list_files_with_broken_link(self):
         ws = Path(self.home) / "ws"

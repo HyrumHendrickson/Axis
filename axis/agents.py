@@ -11,7 +11,7 @@ Settings:
 * skills         ids of skills from the skill library (see skills.py)
 * model          preferred model ("" means whichever model is loaded)
 
-Deleting an agent deletes its whole folder, including the workspace.
+Deleting an agent deletes its whole folder, including the workspace, and its saved chats.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import chats as chat_lib
 from . import skills as skill_lib
 from .paths import axis_home
 
@@ -181,6 +182,7 @@ def update(name: str, data: Dict[str, Any]) -> Agent:
                 f"Could not rename the agent's folder ({exc.strerror or exc}). "
                 "Close any of its files that are open in other programs and try again."
             ) from exc
+        chat_lib.rename_agent(agent.name, new_name)
         agent.name = new_name
     agent.save()
     return agent
@@ -222,6 +224,7 @@ def delete(name: str) -> None:
             "Some of the agent's files could not be deleted. Close any of its files that are open "
             f"in other programs, then delete the agent again. Folder: {folder}"
         )
+    chat_lib.delete_for_agent(agent.name)
 
 
 # ----------------------------------------------------------------- prompts

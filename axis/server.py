@@ -25,6 +25,11 @@ Routes:
   PUT    /api/skills/<id>                   update a custom skill
   DELETE /api/skills/<id>                   delete a custom skill (and remove it from agents)
   POST   /api/chat                          stream a reply as newline-delimited JSON
+  GET    /api/chats                         saved chats (newest first, without messages)
+  GET    /api/chats/<id>                    one saved chat with its messages
+  PUT    /api/chats/<id>                    create or replace a saved chat
+  PATCH  /api/chats/<id>                    rename a saved chat
+  DELETE /api/chats/<id>                    delete a saved chat
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, agents, backend, runner, skills, tools
+from . import __version__, agents, backend, chats, runner, skills, tools
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
@@ -271,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         parts: List[str] = [urllib.parse.unquote(p) for p in url.path.split("/") if p]
         try:
             return self._dispatch(method, parts, param)
-        except (agents.AgentError, skills.SkillError) as exc:
+        except (agents.AgentError, skills.SkillError, chats.ChatError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -343,6 +348,24 @@ class Handler(BaseHTTPRequestHandler):
                 reveal(target)
                 return self._json(200, {"revealed": str(target)})
 
+        elif n >= 2 and parts[1] == "chats":
+            if n == 2 and method == "GET":
+                return self._json(200, chats.list_all())
+            if n == 3:
+                if method == "GET":
+                    return self._json(200, chats.get(parts[2]))
+                if method == "PUT":
+                    body = self._body()
+                    agent = body.get("agent") if isinstance(body, dict) else None
+                    agent = agents.load(agent).name if agent else ""
+                    return self._json(200, chats.save(parts[2], body, agent))
+                if method == "PATCH":
+                    body = self._body()
+                    return self._json(200, chats.rename(parts[2], body.get("title") if isinstance(body, dict) else None))
+                if method == "DELETE":
+                    chats.delete(parts[2])
+                    return self._json(200, {"deleted": parts[2]})
+
         elif n >= 2 and parts[1] == "skills":
             if n == 2 and method == "GET":
                 return self._json(200, skills.list_all())
@@ -367,6 +390,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         self._route("PUT")
+
+    def do_PATCH(self):
+        self._route("PATCH")
 
     def do_DELETE(self):
         self._route("DELETE")

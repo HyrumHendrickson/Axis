@@ -8,7 +8,8 @@ Axis is a small app for chatting with a local AI model and with agents you desig
 * chat with a model directly,
 * make skills, including built-in actions that let agents run Python and create, read and list files,
 * create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
-* chat with those agents. Each agent has its own folder, and every file it makes stays there, and
+* chat with those agents. Each agent has its own folder, and every file it makes stays there,
+* return to any earlier conversation in Past chats, and
 * browse every agent's folder in the Files tab: open folders, read documents, view images and tables, upload files for agents to work on, and download anything they made, and
 * see each model's memory use, context size and details in the Models tab.
 
@@ -31,11 +32,12 @@ you start the model  ──►  run axis  ──►  browser opens at http://127
 6. [Using Axis](#using-axis)
 7. [Skills](#skills)
 8. [Llama models](#llama-models)
-9. [Files and agent folders](#files-and-agent-folders)
-10. [The Models tab](#the-models-tab)
-11. [Settings](#settings)
-12. [Troubleshooting](#troubleshooting)
-13. [Running the tests](#running-the-tests)
+9. [Past chats](#past-chats)
+10. [Files and agent folders](#files-and-agent-folders)
+11. [The Models tab](#the-models-tab)
+12. [Settings](#settings)
+13. [Troubleshooting](#troubleshooting)
+14. [Running the tests](#running-the-tests)
 
 ---
 
@@ -320,7 +322,8 @@ The panel under the Axis name shows whether a model server was found and which m
 * While the model works, the chat shows **Thinking** with a timer, and each action as it runs ("Running Python…"). You can switch to another page, agent or browser tab and come back: the reply keeps going and is shown where it left off. The sidebar marks any chat that is still working, and the browser tab title says **Working…** (then **Reply ready** if you were away).
 * Several chats can work at the same time, for example two agents on separate tasks.
 * Each chat keeps its own unsent text, so switching chats never mixes up what you were typing.
-* **New chat** clears the conversation. **Export** downloads it as a Markdown file. Conversations are saved in your browser, so they survive reloading the page.
+* **New chat** starts a fresh conversation; the previous one is kept in [Past chats](#past-chats). **Past chats** in the chat's top bar lists earlier conversations with that agent. **Export** downloads the open conversation as a Markdown file.
+* Every conversation is saved by Axis as you go, so it survives reloading the page, closing the browser, and restarting Axis.
 * Replies show formatting (bold, lists, code blocks; each code block has its own **Copy** button). Under a reply: **Copy** copies its text, **Retry** asks for a new answer to your last message, and a line shows the model, how many tokens it wrote, its speed, and how long it took.
 * Under the message box, a meter shows how much of the model's context the conversation is using (when the server reports token counts).
 
@@ -421,6 +424,20 @@ If `llama-server` refuses tools (older builds started without `--jinja`), Axis u
 
 ---
 
+## Past chats
+
+Every conversation is saved automatically, both with agents and in Direct chat. Click **Past chats** in the sidebar to see them all.
+
+* **Show** limits the list to one agent or to Direct chat. **Sort** orders it newest first, oldest first, by agent (grouped under each agent's name), or by title. The search box filters by title.
+* Each chat is titled with its first message until you **Rename** it. The line under the title shows the agent, the number of messages, and when it was last used. **Open** marks the chat currently open for that agent, and **Working** marks one that is still replying.
+* Click a chat to continue it. Each agent remembers which chat you had open, and **New chat** in the list starts a fresh one.
+* **Delete** removes a chat for good (after asking). Axis never deletes chats on its own, with one exception: **deleting an agent deletes all of its chats**. Renaming an agent keeps its chats.
+* Chats saved in the browser by earlier versions of Axis are moved into Past chats the first time the page opens.
+
+Chats are stored as `.json` files in `Axis/chats` in your home folder (see [Where the files are](#where-the-files-are)).
+
+---
+
 ## Files and agent folders
 
 ### The Files tab
@@ -447,6 +464,7 @@ Axis/                       in your home folder
 │   └── maker/
 │       ├── agent.json      the agent's settings
 │       └── workspace/      the agent's folder: every file it makes goes here
+├── chats/                  saved conversations, one .json file each
 └── skills/                 your custom skills, one .json file each
 ```
 
@@ -454,7 +472,7 @@ How Axis keeps files in the agent's folder:
 
 * The file actions refuse any path outside the folder, including `..`, absolute paths such as `C:\` or `/Users`, and links that point outside.
 * Run Python starts in the folder, and blocks writing, renaming or deleting files anywhere else and starting other programs. Code can still *read* files elsewhere (for example to import installed packages).
-* Renaming an agent moves its folder; deleting an agent deletes its folder and everything in it.
+* Renaming an agent moves its folder; deleting an agent deletes its folder and everything in it, along with its saved chats.
 
 This guard is designed to keep the agent's ordinary work in its folder. It is not a security sandbox against code written deliberately to escape it, so review what an agent is doing when you give it Run Python.
 
@@ -557,6 +575,7 @@ axis/
   cli.py          the `axis`, `axis update` and `axis uninstall` commands
   server.py       local web server and JSON API
   agents.py       agent storage, agent folders, and how messages are assembled
+  chats.py        saved conversations (Past chats)
   skills.py       the skill library (built-in actions and your skills)
   tools.py        the actions, kept inside each agent's folder
   runner.py       lets an agent use its actions while replying

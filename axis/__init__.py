@@ -1,3 +1,3 @@
 """Axis: a small CLI for chatting with and running agents on a local model."""
 
-__version__ = "3.2.0"
+__version__ = "3.3.0"
