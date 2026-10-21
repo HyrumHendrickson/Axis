@@ -1,12 +1,15 @@
 # Axis
 
+<p align="center"><img src="axislogo.png" width="160" alt="Axis logo"></p>
+
 Axis is a small app for chatting with a local AI model and with agents you design. Run `axis`, and it opens a page in your browser where you can:
 
 * see whether your model server is running and which models are on,
 * chat with a model directly,
 * make skills, including built-in actions that let agents run Python and create, read and list files,
 * create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
-* chat with those agents. Each agent has its own folder, and every file it makes stays there.
+* chat with those agents. Each agent has its own folder, and every file it makes stays there, and
+* browse every agent's folder in the Files tab: open folders, read documents, view images and tables, and download anything they made.
 
 Axis does **not** download, start, or stop models. You start a model yourself with **Ollama** or **llama.cpp**; until a model is on, the page shows what to start and keeps chat locked.
 
@@ -26,10 +29,11 @@ you start the model  ──►  run axis  ──►  browser opens at http://127
 5. [Commands](#commands)
 6. [Using Axis](#using-axis)
 7. [Skills](#skills)
-8. [Agent folders](#agent-folders)
-9. [Settings](#settings)
-10. [Troubleshooting](#troubleshooting)
-11. [Running the tests](#running-the-tests)
+8. [Llama models](#llama-models)
+9. [Files and agent folders](#files-and-agent-folders)
+10. [Settings](#settings)
+11. [Troubleshooting](#troubleshooting)
+12. [Running the tests](#running-the-tests)
 
 ---
 
@@ -143,10 +147,10 @@ Ollama is the easier choice. You only need one.
 2. Start the server with a model (the first run downloads the model from Hugging Face):
 
    ```powershell
-   llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+   llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192
    ```
 
-   Leave this window open. The model is on while this window runs. To use a model file you already have: `llama-server -m C:\path\to\model.gguf`
+   Leave this window open. The model is on while this window runs. `-c 8192` gives the model enough memory of the conversation for agents (see [Llama models](#llama-models)). To use a model file you already have: `llama-server -m C:\path\to\model.gguf -c 8192`
 
 ### Step 5. Start Axis
 
@@ -243,10 +247,10 @@ axis --version
 2. Start the server with a model:
 
    ```bash
-   llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+   llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192
    ```
 
-   Leave this window open. To use a model file you already have: `llama-server -m ~/models/model.gguf`
+   Leave this window open. `-c 8192` gives the model enough memory of the conversation for agents (see [Llama models](#llama-models)). To use a model file you already have: `llama-server -m ~/models/model.gguf -c 8192`
 
 Apple Silicon Macs (M1 and later) use the GPU automatically with both options.
 
@@ -373,7 +377,7 @@ These let an agent do things, not just write text. Each one works only inside th
 
 Built-in skills cannot be edited or deleted.
 
-**Which models can use actions.** Actions work best with models trained for tool use, for example `llama3.1`, `llama3.2`, `qwen2.5` and `qwen3` in Ollama. Axis uses the model's native tool calling when the server supports it. If the server or model refuses tools (for example `does not support tools` in Ollama, or an older llama.cpp started without `--jinja`), Axis switches automatically to a plain-text format that any model can follow, though small models follow it less reliably. Larger models (7B and up) are noticeably more dependable at multi-step work. An agent may take up to 10 actions per reply.
+Actions need a model that can call tools. See [Llama models](#llama-models) for which ones work best.
 
 **Run Python uses your own Python**, the one Axis was installed with, so packages you have installed there (for example `pip install pandas`) are available to agent code.
 
@@ -385,7 +389,47 @@ Skills made in Axis 2.0 (inside an individual agent) move into the library autom
 
 ---
 
-## Agent folders
+## Llama models
+
+Axis works with any Llama model, and is tuned for how Llama 3 models behave in Ollama and llama.cpp.
+
+| Model (Ollama name) | Download | Chat | Actions (files, Python) |
+|---|---|---|---|
+| `llama3.1:8b` | about 4.9 GB | Good | **Recommended.** Handles multi-step tasks well. Needs about 8 GB of free memory. |
+| `llama3.2:3b` | about 2 GB | Good | Works for simple tasks (save a file, run a short calculation). Less reliable over many steps. |
+| `llama3.2:1b` | about 1.3 GB | Basic | Not recommended for actions. |
+| `llama3` (3.0), `llama2` | | Good / basic | No built-in tool support; Axis switches to its text-based tool format automatically, which works but is less reliable. |
+
+Turn one on the usual way, for example `ollama run llama3.1:8b --keepalive -1m`.
+
+What Axis does for Llama models:
+
+* **Larger context.** Ollama gives models 4,096 tokens of memory by default and silently forgets anything beyond that, which can cut off an agent's instructions mid-task. Axis asks Ollama for 8,192 tokens. Because of this, the first message after you turn a model on can take a few extra seconds while Ollama reloads it. Change the amount with `AXIS_NUM_CTX` (see [Settings](#settings)); for llama.cpp, set it with `-c 8192` when starting `llama-server`. Long chats are also shortened automatically so the newest messages and the agent's instructions always fit.
+* **Steadier actions.** Agent turns that can use actions run at a low temperature (0.2), which makes Llama's tool calls more consistent.
+* **Recovering text tool calls.** Llama models sometimes write a tool call as text (for example `{"name": "write_file", "parameters": {...}}`) instead of making a real call. Axis recognises these, runs the action, and replaces the raw text in the chat with the action itself.
+* **Forgiving names.** Common variations such as `python`, `ls`, `mkdir`, `create_file`, `filename`, `text` or `script` are understood as the right action and argument, and Python code sent with `\n` instead of real line breaks is repaired before it runs.
+* **No loops.** If an agent repeats the same action, the repeat is not run again; after a few repeats, or after 10 actions in one reply, the agent is asked to give its final answer.
+* **Memory of earlier actions.** Each earlier reply is sent back to the model with a short note of the actions it took, so follow-ups such as "now add a line to that file" work.
+
+If `llama-server` refuses tools (older builds started without `--jinja`), Axis uses the text-based tool format automatically.
+
+---
+
+## Files and agent folders
+
+### The Files tab
+
+Click **Files** in the sidebar to look through what your agents have made.
+
+* Pick an agent at the top. Its folder is listed on the left: click a folder to go into it, **Up one folder** or the path above the list to go back.
+* Click a file to open it on the right. Text and code are shown as-is; Markdown is shown formatted (with **Show source**); CSV files are shown as a table; images are shown as pictures; PDFs open in a viewer; web pages (`.html`) are shown as source with **Preview page** to see them rendered.
+* **Download** saves a copy; **Show in folder** opens Explorer or Finder with the file selected. Axis never runs files you click.
+* The list refreshes by itself every few seconds, so new files appear while an agent works.
+* In a chat, each action has a link (**Open in Files**) that jumps straight to the file it made.
+
+Web pages an agent makes are previewed in a sealed frame: their scripts can run, but they cannot reach Axis or your other data.
+
+### Where the files are
 
 Each agent's files live in its own folder:
 
@@ -402,7 +446,7 @@ How Axis keeps files in the agent's folder:
 
 * The file actions refuse any path outside the folder, including `..`, absolute paths such as `C:\` or `/Users`, and links that point outside.
 * Run Python starts in the folder, and blocks writing, renaming or deleting files anywhere else and starting other programs. Code can still *read* files elsewhere (for example to import installed packages).
-* Renaming an agent moves its folder; deleting an agent deletes its folder.
+* Renaming an agent moves its folder; deleting an agent deletes its folder and everything in it.
 
 This guard is designed to keep the agent's ordinary work in its folder. It is not a security sandbox against code written deliberately to escape it, so review what an agent is doing when you give it Run Python.
 
@@ -426,6 +470,10 @@ Environment variables:
 | `AXIS_URL` | Model server address | Tries `127.0.0.1:11434` (Ollama), then `127.0.0.1:8080` (llama.cpp) |
 | `AXIS_HOME` | Where agents, skills and agent files are saved | `Axis` in your home folder |
 | `AXIS_PYTHON` | Python used by the Run Python action | The Python Axis was installed with |
+| `AXIS_NUM_CTX` | Context size Axis asks Ollama for, in tokens (0 = Ollama's own default) | 8192 |
+| `AXIS_HISTORY_CHARS` | How much earlier conversation is sent with each message, in characters | 20000 |
+
+To set one, start Axis like this: `$env:AXIS_NUM_CTX = "16384"; axis` (Windows PowerShell) or `AXIS_NUM_CTX=16384 axis` (Mac).
 
 Example for a llama.cpp server on a non-default port:
 
@@ -453,7 +501,9 @@ The page only answers requests from this computer, and only from its own page, s
 | `py` is not recognized (Windows) | Reinstall Python with "Add python.exe to PATH" checked, or use `python` instead of `py` |
 | `ollama` is not recognized | Open a new terminal after installing; on Windows confirm Ollama appears in the tray |
 | Replies are very slow | Use a smaller model (for example `llama3.2:1b`) or close other programs to free memory |
-| An agent describes an action but nothing happens | The model is not calling tools. Use a tool-capable model (see [Skills](#skills)), and make sure the skill is ticked in the agent's settings. |
+| An agent forgets its instructions or what it was doing | The conversation outgrew the model's memory. Start a **New chat**, or raise `AXIS_NUM_CTX` if your computer has memory to spare. For llama.cpp, start `llama-server` with `-c 8192` or more. |
+| The first reply after turning a model on is slow | Normal: Ollama reloads the model with the larger context Axis asks for. Later replies are fast. |
+| An agent describes an action but nothing happens | Make sure the skill is ticked in the agent's settings, and use a model that handles actions well, such as `llama3.1:8b` (see [Llama models](#llama-models)). Asking directly also helps: "Save this as notes.md". |
 | `Unknown tool '...'` in a step | The agent tried an action whose skill is not ticked. Tick it in **Edit agent**, or ignore it. |
 | Run Python says a package is missing | Install it for the Python that runs Axis, e.g. `py -m pip install pandas` (Windows) or `python3 -m pip install pandas` (Mac) |
 | `axis update` fails | Check your internet connection. You can also reinstall by hand: `pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip` |
@@ -481,9 +531,10 @@ axis/
   runner.py       lets an agent use its actions while replying
   backend.py      detects Ollama or llama.cpp, lists models, streams replies and tool calls
   paths.py        where Axis keeps its data
-  web/index.html  the page (HTML, CSS and JavaScript in one file)
+  web/index.html  the page (HTML, CSS and JavaScript in one file, with the logo built in)
 tests/
   test_axis.py    tests for all of the above, using fake model servers
+axislogo.png      the Axis logo
 ```
 
 ## License

@@ -19,6 +19,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 DEFAULT_URLS = ("http://127.0.0.1:11434", "http://127.0.0.1:8080")
 PROBE_TIMEOUT = 3.0
 GENERATE_TIMEOUT = 600.0
+# Ollama's default context is 4096 tokens and it silently drops anything older,
+# which can cut off an agent's instructions and tool definitions. 0 = leave Ollama's default.
+NUM_CTX = int(os.environ.get("AXIS_NUM_CTX", "8192"))
 
 # Local servers should never be reached through a system HTTP proxy.
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -26,7 +29,7 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 START_HELP = (
     "Start a model first, then try again:\n"
     "  Ollama:     ollama run llama3.2:3b --keepalive -1m\n"
-    "  llama.cpp:  llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M\n"
+    "  llama.cpp:  llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192\n"
     "See the README for full setup instructions."
 )
 
@@ -191,9 +194,17 @@ def _parse_args(raw: Any) -> Any:
     return raw
 
 
-def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn) -> Iterator[str]:
+def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
+                   temperature: Optional[float]) -> Iterator[str]:
     # keep_alive -1 keeps the model loaded until the user stops it (ollama stop <model>).
     body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True, "keep_alive": -1}
+    options: Dict[str, Any] = {}
+    if NUM_CTX > 0:
+        options["num_ctx"] = NUM_CTX
+    if temperature is not None:
+        options["temperature"] = temperature
+    if options:
+        body["options"] = options
     if tools:
         body["tools"] = tools
     with _open(backend.url + "/api/chat", body, timeout=GENERATE_TIMEOUT) as resp:
@@ -217,8 +228,11 @@ def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional
                 return
 
 
-def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn) -> Iterator[str]:
+def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
+                   temperature: Optional[float]) -> Iterator[str]:
     body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if temperature is not None:
+        body["temperature"] = temperature
     if tools:
         body["tools"] = tools
     partial: Dict[int, Dict[str, str]] = {}
@@ -258,13 +272,14 @@ def complete(
     messages: list,
     on_token: Optional[Callable[[str], None]] = None,
     tools: Optional[list] = None,
+    temperature: Optional[float] = None,
 ) -> Turn:
     """Send a conversation; stream text to on_token; return the text and any tool calls."""
     stream = _stream_ollama if backend.kind == "ollama" else _stream_openai
     turn = Turn("")
     parts: List[str] = []
     try:
-        for text in stream(backend, model, messages, tools, turn):
+        for text in stream(backend, model, messages, tools, turn, temperature):
             parts.append(text)
             if on_token:
                 on_token(text)

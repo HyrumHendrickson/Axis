@@ -21,7 +21,9 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 WORKSPACE_NOTE = (
     "You have your own folder for files. All paths are relative to that folder "
-    "(for example: notes/todo.txt). You cannot reach files outside it."
+    "(for example: notes/todo.txt). You cannot reach files outside it. "
+    "Use a tool only when the request needs one; for ordinary conversation, just reply. "
+    "After using tools, tell the user what you did and name any files you created."
 )
 
 BUILTIN: List[Dict[str, Any]] = [

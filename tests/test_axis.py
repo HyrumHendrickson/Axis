@@ -16,6 +16,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,16 @@ def scripted_reply(body):
     """
     msgs = body["messages"]
     last = msgs[-1]
+    users = [m.get("content") or "" for m in msgs if m["role"] == "user"]
+    if any("LOOP" in u for u in users) or any("COUNT" in u for u in users):
+        if last["content"].startswith("Stop using tools"):
+            return ("text", "final answer")
+        if any("LOOP" in u for u in users):
+            return ("call", "list_files", {}) if body.get("tools") else ("text", '{"name": "list_files", "parameters": {}}')
+        n = sum(1 for m in msgs if m["role"] == "tool")
+        return ("call", "write_file", {"path": f"f{n}.txt", "content": str(n)})
+    if last["role"] == "user" and last["content"].startswith("TEXTCALL "):
+        return ("text", last["content"][len("TEXTCALL "):])
     if last["role"] == "tool" or (last["role"] == "user" and last["content"].startswith("Result of")):
         return ("text", "done: " + last["content"].splitlines()[-1 if last["role"] == "tool" else 1])
     user = last["content"]
@@ -338,6 +349,32 @@ class TestSkillsAndAgents(Base):
         self.assertEqual(agents.tool_names(b), ["write_file", "make_folder", "run_python"])
         self.assertIn("own folder", agents.build_messages(b, history)[0]["content"])
 
+    def test_long_history_is_trimmed_to_fit(self):
+        history = []
+        for i in range(60):
+            history += [{"role": "user", "content": f"q{i} " + "x" * 500}, {"role": "assistant", "content": "a" * 500}]
+        history.append({"role": "user", "content": "last"})
+        a = agents.create({"name": "t", "system_prompt": "SYS"})
+        msgs = agents.build_messages(a, history)
+        self.assertEqual(msgs[0]["content"], "SYS")
+        self.assertEqual(msgs[1]["role"], "user")
+        self.assertEqual(msgs[-1]["content"], "last")
+        self.assertLessEqual(sum(len(m["content"]) for m in msgs[1:]), agents.HISTORY_CHARS + 600)
+        self.assertLess(len(msgs), len(history))
+
+    def test_delete_removes_read_only_files(self):
+        a = agents.create({"name": "ro"})
+        f = a.workspace / "locked.txt"
+        f.write_text("x")
+        os.chmod(f, 0o444)
+        os.chmod(a.workspace, 0o555)
+        try:
+            agents.delete("ro")
+        finally:
+            if a.workspace.exists():
+                os.chmod(a.workspace, 0o755)
+        self.assertFalse(a.folder.exists())
+
     def test_build_messages_rejects_bad_history(self):
         for bad in ([], None, [{"role": "assistant", "content": "x"}], [{"role": "system", "content": "x"}],
                     [{"role": "user", "content": 5}], [{"role": "user", "content": "  "}]):
@@ -375,6 +412,29 @@ class TestTools(Base):
             ok, msg = self.run_tool("write_file", path=path, content="x")
             self.assertFalse(ok, path)
         self.assertEqual(list(self.outside.iterdir()), [])
+
+    def test_llama_name_variants(self):
+        self.assertEqual(tools.normalize_call("python", {"script": "x"}, ["run_python"]), ("run_python", {"code": "x"}))
+        self.assertEqual(tools.normalize_call("functions.create_file", {"filename": "a", "text": "b"}, ["write_file"]),
+                         ("write_file", {"path": "a", "content": "b"}))
+        self.assertEqual(tools.normalize_call("ls", {}, ["read_file"])[0], "ls")  # not allowed, not mapped
+        self.assertEqual(tools.normalize_call("read_file", {"path": {"type": "string", "value": "a"}}, ["read_file"]),
+                         ("read_file", {"path": "a"}))
+        ok, out = tools.execute(self.ws, "mkdir", {"folder": "made"}, self.all)
+        self.assertTrue(ok, out)
+        self.assertTrue((self.ws / "made").is_dir())
+
+    def test_escaped_newlines_in_code(self):
+        self.assertEqual(tools.fix_escaped_code("a = 1\\nprint(a)"), "a = 1\nprint(a)")
+        self.assertEqual(tools.fix_escaped_code("print('x\\ny')"), "print('x\\ny')")  # valid as is
+        ok, out = self.run_tool("run_python", code="total = 0\\nfor i in range(4):\\n    total += i\\nprint(total)")
+        self.assertIn("Output:\n6", out)
+
+    def test_long_files_are_shortened_for_the_model(self):
+        (self.ws / "big.txt").write_text("x" * 50000)
+        ok, out = self.run_tool("read_file", path="big.txt")
+        self.assertLess(len(out), tools.MAX_READ + 300)
+        self.assertIn("file continues", out)
 
     def test_only_allowed_tools(self):
         ok, msg = tools.execute(self.ws, "run_python", {"code": "print(1)"}, ["read_file"])
@@ -480,16 +540,54 @@ class TestRunner(Base):
         events = self.run_reply(url, tool_msg("run_python", code="x"), names=["read_file"])
         self.assertIn("Unknown tool", [e for e in events if "tool_result" in e][0]["tool_result"]["output"])
 
-    def test_step_limit(self):
+    def test_repeated_action_is_not_rerun_and_ends_with_an_answer(self):
         url = self.model_server(OllamaHandler, ["m"])
-        conn = backend.connect(url)
-        looping = backend.Turn("", [backend.ToolCall("c", "list_files", {})])
-        with mock.patch.object(backend, "complete", return_value=looping):
-            events = []
-            runner.reply(conn, "m", [{"role": "system", "content": "S"}, {"role": "user", "content": "x"}],
-                         events.append, ["list_files"], self.ws)
+        events = self.run_reply(url, [{"role": "user", "content": "LOOP"}], names=["list_files"])
+        steps = [e for e in events if "tool_result" in e]
+        self.assertEqual(len(steps), 3)  # one real run, two refused repeats
+        self.assertIn("already did exactly this", steps[1]["tool_result"]["output"])
+        self.assertEqual("".join(e.get("t", "") for e in events).strip(), "final answer")
+        self.assertNotIn("tools", REQUESTS[-1])
+        self.assertEqual(REQUESTS[-1]["messages"][-1]["content"], runner.FINAL_REQUEST)
+
+    def test_step_limit_ends_with_an_answer(self):
+        url = self.model_server(LlamaCppHandler, ["m"])
+        events = self.run_reply(url, [{"role": "user", "content": "COUNT"}], names=["write_file"])
         self.assertEqual(len([e for e in events if "tool" in e]), runner.MAX_STEPS)
-        self.assertIn("Stopped after", events[-1]["t"])
+        self.assertEqual(len(list(self.ws.glob("f*.txt"))), runner.MAX_STEPS)
+        self.assertEqual("".join(e.get("t", "") for e in events).strip(), "final answer")
+        self.assertNotIn("tools", REQUESTS[-1])
+
+    def test_llama_style_text_tool_calls_are_run(self):
+        url = self.model_server(OllamaHandler, ["llama3.2:3b"])
+        call = {"name": "python", "parameters": {"script": "open('t.txt','w').write('ok')\\nprint('made')"}}
+        events = self.run_reply(url, [{"role": "user", "content": "TEXTCALL Sure. <|python_tag|>" + json.dumps(call)}])
+        step = [e for e in events if "tool" in e][0]["tool"]
+        self.assertEqual(step["name"], "run_python")
+        result = [e for e in events if "tool_result" in e][0]["tool_result"]
+        self.assertTrue(result["ok"])
+        self.assertIn("made", result["output"])
+        self.assertEqual((self.ws / "t.txt").read_text(), "ok")
+        self.assertIn({"rewrite": "Sure."}, events)  # the raw JSON is replaced on the page
+        self.assertIn("done:", "".join(e.get("t", "") for e in events))
+
+    def test_text_mode_also_accepts_bare_json(self):
+        url = self.model_server(OllamaHandler, ["llama3"], no_tools=True)
+        call = {"name": "write_file", "parameters": {"filename": "a.md", "text": "# A"}}
+        events = self.run_reply(url, [{"role": "user", "content": "TEXTCALL " + json.dumps(call)}])
+        self.assertEqual((self.ws / "a.md").read_text(), "# A")
+        self.assertIn({"rewrite": ""}, events)
+
+    def test_agent_turns_use_low_temperature_and_bigger_context(self):
+        url = self.model_server(OllamaHandler, ["m"])
+        self.run_reply(url, [{"role": "user", "content": "hi"}])
+        self.assertEqual(REQUESTS[-1]["options"], {"num_ctx": backend.NUM_CTX, "temperature": runner.TOOL_TEMPERATURE})
+        conn = backend.connect(url)
+        runner.reply(conn, "m", [{"role": "user", "content": "hi"}], lambda e: None)
+        self.assertEqual(REQUESTS[-1]["options"], {"num_ctx": backend.NUM_CTX})
+        url2 = self.model_server(LlamaCppHandler, ["m"])
+        self.run_reply(url2, [{"role": "user", "content": "hi"}])
+        self.assertEqual(REQUESTS[-1]["temperature"], runner.TOOL_TEMPERATURE)
 
     def test_hide_tool_blocks(self):
         for chunks in (["Hi ", "there\n```", "tool\n{}", "\n```"], ["Hi there\n`", "``tool {}"], ["Hi there\n``` code"]):
@@ -585,6 +683,45 @@ class TestServer(Base):
         self.assertFalse((Path(self.home) / "agents" / "bard").exists())
         self.assertEqual(request(self.url + "/api/agents/bard", "DELETE")[0], 404)
         self.assertEqual(request(self.url + "/api/nope")[0], 404)
+
+    def test_files_routes(self):
+        request(self.url + "/api/agents", "POST", {"name": "files"})  # a name that used to clash with a route
+        self.assertEqual(request(self.url + "/api/agents/files")[0], 200)
+        ws = Path(self.home) / "agents" / "files" / "workspace"
+        (ws / "notes").mkdir()
+        (ws / "notes" / "a.md").write_text("# Hello")
+        (ws / "page.html").write_text("<script>alert(1)</script>")
+        (ws / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 20)
+        (ws / "blob.bin").write_bytes(b"\0\1\2" * 10)
+        (ws / ".axis-tmp").mkdir()
+        base = self.url + "/api/files/files"
+        top = json.loads(request(base)[1])
+        self.assertEqual([e["name"] for e in top["entries"]], ["notes", "blob.bin", "page.html", "pic.png"])
+        self.assertEqual(top["entries"][0], {**top["entries"][0], "type": "dir", "items": 1, "path": "notes"})
+        sub = json.loads(request(base + "?path=notes")[1])
+        self.assertEqual(sub["path"], "notes")
+        self.assertEqual(sub["entries"][0]["path"], "notes/a.md")
+        view = json.loads(request(base + "/view?path=notes/a.md")[1])
+        self.assertEqual((view["kind"], view["text"]), ("text", "# Hello"))
+        self.assertEqual(json.loads(request(base + "/view?path=pic.png")[1])["kind"], "image")
+        self.assertEqual(json.loads(request(base + "/view?path=blob.bin")[1])["kind"], "binary")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(base + "/raw?path=page.html") as resp:
+            self.assertTrue(resp.headers["Content-Type"].startswith("text/plain"))
+            self.assertIn("sandbox", resp.headers["Content-Security-Policy"])
+        with opener.open(base + "/raw?path=pic.png&download=1") as resp:
+            self.assertEqual(resp.headers["Content-Type"], "image/png")
+            self.assertTrue(resp.headers["Content-Disposition"].startswith("attachment"))
+        for bad in ("../agent.json", "../../skills", "/etc/passwd", "notes/../../agent.json"):
+            self.assertEqual(request(base + "/view?path=" + urllib.parse.quote(bad))[0], 400, bad)
+            self.assertIn(request(base + "?path=" + urllib.parse.quote(bad))[0], (400, 404), bad)
+        self.assertEqual(request(base + "/view?path=missing.txt")[0], 404)
+        self.assertEqual(request(self.url + "/api/files/ghost")[0], 404)
+        with mock.patch.object(server, "reveal") as rv:
+            self.assertEqual(request(base + "/reveal?path=notes/a.md", "POST", {})[0], 200)
+            self.assertEqual(request(base + "/reveal?path=notes", "POST", {})[0], 200)
+            self.assertEqual(request(base + "/reveal?path=", "POST", {})[0], 200)
+        self.assertEqual(rv.call_count, 3)
 
     def test_chat_direct(self):
         ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "hello"}]})[1])

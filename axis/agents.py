@@ -20,6 +20,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +34,7 @@ DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_TEXT = 20000
 MAX_ITEMS = 100
+HISTORY_CHARS = int(os.environ.get("AXIS_HISTORY_CHARS", "20000"))
 
 
 class AgentError(Exception):
@@ -171,7 +174,13 @@ def update(name: str, data: Dict[str, Any]) -> Agent:
     if new_name != agent.name:
         if (agents_root() / new_name).exists():
             raise AgentError(f"An agent named '{new_name}' already exists.")
-        os.replace(agent.folder, agents_root() / new_name)
+        try:
+            os.replace(agent.folder, agents_root() / new_name)
+        except OSError as exc:
+            raise AgentError(
+                f"Could not rename the agent's folder ({exc.strerror or exc}). "
+                "Close any of its files that are open in other programs and try again."
+            ) from exc
         agent.name = new_name
     agent.save()
     return agent
@@ -196,7 +205,23 @@ def delete(name: str) -> None:
     folder = agent.folder.resolve()
     if folder.parent != agents_root().resolve():
         raise AgentError("Refusing to delete a folder outside the Axis agents directory.")
-    shutil.rmtree(folder)
+    def retry_writable(func, path, *_):
+        # Windows refuses to delete read-only files; make them writable and retry.
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            pass
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(folder, onexc=retry_writable)
+    else:
+        shutil.rmtree(folder, onerror=retry_writable)
+    if folder.exists():
+        raise AgentError(
+            "Some of the agent's files could not be deleted. Close any of its files that are open "
+            f"in other programs, then delete the agent again. Folder: {folder}"
+        )
 
 
 # ----------------------------------------------------------------- prompts
@@ -220,6 +245,18 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]
         messages.append({"role": item["role"], "content": content})
     if messages[-1]["role"] != "user" or not messages[-1]["content"].strip():
         raise AgentError("The last message must be a non-empty user message.")
+
+    # Keep the newest messages that fit the budget so the model's context window
+    # is not overflowed (Ollama silently drops the oldest text, including instructions).
+    kept, used = [], 0
+    for m in reversed(messages):
+        used += len(m["content"])
+        if kept and used > HISTORY_CHARS:
+            break
+        kept.append(m)
+    messages = list(reversed(kept))
+    while len(messages) > 1 and messages[0]["role"] != "user":
+        messages.pop(0)
 
     if agent is None:
         return messages

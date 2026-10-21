@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-MAX_OUTPUT = 12000
-MAX_READ = 100000
+MAX_OUTPUT = 8000
+MAX_READ = 16000
 PYTHON_TIMEOUT = 60
 
 
@@ -152,7 +152,11 @@ def read_file(ws: Path, args: Dict[str, Any]) -> str:
     data = path.read_bytes()
     if b"\0" in data[:4096]:
         raise ToolError(f"{args['path']} is a binary file and cannot be shown as text.")
-    return _clip(data.decode("utf-8", errors="replace"), MAX_READ)
+    text = data.decode("utf-8", errors="replace")
+    if len(text) > MAX_READ:
+        return text[:MAX_READ] + (f"\n... (file continues for {len(text) - MAX_READ} more characters; "
+                                  "use run_python to read a specific part if you need it)")
+    return text
 
 
 def write_file(ws: Path, args: Dict[str, Any]) -> str:
@@ -267,6 +271,7 @@ def run_python(ws: Path, args: Dict[str, Any]) -> str:
     code = _require(args, "code")
     if not isinstance(code, str) or not code.strip():
         raise ToolError("code must be a non-empty Python program.")
+    code = fix_escaped_code(code)
     ws.mkdir(parents=True, exist_ok=True)
     tmp = ws / ".axis-tmp"
     tmp.mkdir(exist_ok=True)
@@ -276,16 +281,24 @@ def run_python(ws: Path, args: Dict[str, Any]) -> str:
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = None
     try:
-        proc = subprocess.run(
-            [python_executable(), "-c", BOOTSTRAP], input=code, cwd=str(ws), env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=PYTHON_TIMEOUT, **kwargs,
-        )
+        for exe in dict.fromkeys([python_executable(), sys.executable]):
+            try:
+                proc = subprocess.run(
+                    [exe, "-c", BOOTSTRAP], input=code, cwd=str(ws), env=env,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=PYTHON_TIMEOUT, **kwargs,
+                )
+                break
+            except OSError:  # this interpreter cannot be started; try the next one
+                continue
     except subprocess.TimeoutExpired:
         return f"Stopped: the code ran longer than {PYTHON_TIMEOUT} seconds."
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    if proc is None:
+        raise ToolError("Python could not be started on this computer.")
     parts = [f"Exit code: {proc.returncode}"]
     if proc.stdout:
         parts.append("Output:\n" + proc.stdout.rstrip())
@@ -294,6 +307,72 @@ def run_python(ws: Path, args: Dict[str, Any]) -> str:
     if not proc.stdout and not proc.stderr:
         parts.append("(The code printed nothing. Use print() to show results.)")
     return _clip("\n".join(parts))
+
+
+def fix_escaped_code(code: str) -> str:
+    """Small models sometimes send code with literal \\n instead of line breaks."""
+    if "\n" in code or "\\n" not in code:
+        return code
+    try:
+        compile(code, "agent_code.py", "exec")
+        return code
+    except SyntaxError:
+        pass
+    fixed = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    try:
+        compile(fixed, "agent_code.py", "exec")
+        return fixed
+    except SyntaxError:
+        return code
+
+
+# Names small models (Llama in particular) commonly use instead of the real ones.
+TOOL_ALIASES = {
+    "python": "run_python", "ipython": "run_python", "run_code": "run_python", "execute_python": "run_python",
+    "python_exec": "run_python", "code_interpreter": "run_python", "run_python_code": "run_python", "exec_python": "run_python",
+    "ls": "list_files", "list_dir": "list_files", "list_directory": "list_files", "listdir": "list_files",
+    "list_folder": "list_files", "list": "list_files",
+    "cat": "read_file", "open_file": "read_file", "view_file": "read_file", "get_file": "read_file",
+    "create_file": "write_file", "save_file": "write_file", "make_file": "write_file", "write": "write_file",
+    "write_to_file": "write_file", "edit_file": "write_file",
+    "mkdir": "make_folder", "create_folder": "make_folder", "create_directory": "make_folder",
+    "make_directory": "make_folder", "make_dir": "make_folder",
+    "rm": "delete_file", "delete": "delete_file", "remove_file": "delete_file", "remove": "delete_file",
+    "delete_folder": "delete_file",
+}
+ARG_ALIASES = {
+    "path": ("path", "filename", "file_name", "file", "file_path", "filepath", "name", "directory", "dir",
+             "folder", "folder_path", "folder_name", "dirname", "location"),
+    "content": ("content", "contents", "text", "data", "body", "file_content", "value"),
+    "code": ("code", "script", "source", "python_code", "program", "python", "source_code", "cmd", "command"),
+}
+
+
+def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
+    """Map common variations of tool names and argument names onto the real ones."""
+    name = str(name or "").strip()
+    if "." in name:  # e.g. "functions.write_file"
+        name = name.rsplit(".", 1)[-1]
+    key = name.lower().replace("-", "_").replace(" ", "_")
+    if key in TOOL_SPECS:
+        name = key
+    elif key in TOOL_ALIASES and TOOL_ALIASES[key] in allowed:
+        name = TOOL_ALIASES[key]
+    if not isinstance(args, dict) or name not in TOOL_SPECS:
+        return name, args
+    out = dict(args)
+    for real in TOOL_SPECS[name]["parameters"]["properties"]:
+        if real not in out:
+            for alt in ARG_ALIASES.get(real, ()):
+                if alt in out:
+                    out[real] = out.pop(alt)
+                    break
+        value = out.get(real)
+        if isinstance(value, dict) and "value" in value:  # {"type": "string", "value": "..."}
+            out[real] = value["value"]
+    if name == "run_python" and isinstance(out.get("code"), str):
+        out["code"] = fix_escaped_code(out["code"])
+    return name, out
 
 
 HANDLERS: Dict[str, Callable[[Path, Dict[str, Any]], str]] = {
@@ -308,6 +387,7 @@ HANDLERS: Dict[str, Callable[[Path, Dict[str, Any]], str]] = {
 
 def execute(workspace: Path, name: str, args: Any, allowed: List[str]) -> tuple:
     """Run one tool. Returns (ok, text). Never raises for tool-level problems."""
+    name, args = normalize_call(name, args, allowed)
     if name not in allowed or name not in HANDLERS:
         return False, f"Unknown tool '{name}'. Available tools: {', '.join(allowed) or 'none'}."
     if not isinstance(args, dict):
