@@ -100,6 +100,17 @@ BUILTIN: List[Dict[str, Any]] = [
         "tools": ["wikipedia_search", "wikipedia_article"],
     },
     {
+        "id": "image-generation",
+        "name": "Image generation",
+        "description": "Make pictures from text with a local Stable Diffusion model. Pictures are saved in "
+        "images/ in the agent's folder.",
+        "instructions": "When the user asks for a picture, illustration, drawing or photo, call generate_image with a "
+        "detailed prompt (subject, setting, style, lighting, composition). Leave width, height, steps and model out "
+        "unless the user asks for them. Afterwards, say briefly what you made and give the file name; do not "
+        "describe the picture at length, since the user can see it.",
+        "tools": ["generate_image"],
+    },
+    {
         "id": SHARED_SKILL,
         "name": "Shared folder",
         "description": "Let the agent's file actions also reach a folder shared by every agent with this skill, "

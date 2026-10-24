@@ -328,8 +328,10 @@ def list_workspace(agent: Agent, limit: int = 300) -> List[Dict[str, Any]]:
         return []
     files: List[Dict[str, Any]] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d != ".axis-tmp")
+        dirnames[:] = sorted(d for d in dirnames if d not in tool_lib.HIDDEN_NAMES)
         for f in sorted(filenames):
+            if f in tool_lib.HIDDEN_NAMES:
+                continue
             full = Path(dirpath) / f
             try:
                 size = full.stat().st_size

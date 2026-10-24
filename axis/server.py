@@ -31,6 +31,13 @@ Routes:
   PUT    /api/chats/<id>                    create or replace a saved chat
   PATCH  /api/chats/<id>                    rename a saved chat
   DELETE /api/chats/<id>                    delete a saved chat
+  GET    /api/images                        sd-cli status, settings and image models
+  PUT    /api/images/settings               set the sd-cli path, working folder, default model
+  POST   /api/images/models                 add an image model
+  PUT    /api/images/models/<id>            change an image model
+  DELETE /api/images/models/<id>            remove an image model (its files are not touched)
+  GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
+  POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
 """
 
 from __future__ import annotations
@@ -47,14 +54,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, chats, runner, skills, tools
+from . import __version__, agents, backend, chats, images, runner, skills, tools
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
-HIDDEN = {".axis-tmp"}
+HIDDEN = set(tools.HIDDEN_NAMES)
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 
 
@@ -307,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
         parts: List[str] = [urllib.parse.unquote(p) for p in url.path.split("/") if p]
         try:
             return self._dispatch(method, parts, param)
-        except (agents.AgentError, skills.SkillError, chats.ChatError) as exc:
+        except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -396,6 +403,24 @@ class Handler(BaseHTTPRequestHandler):
                 if method == "DELETE":
                     chats.delete(parts[2])
                     return self._json(200, {"deleted": parts[2]})
+
+        elif n >= 2 and parts[1] == "images":
+            if n == 2 and method == "GET":
+                return self._json(200, images.status())
+            if parts[2:] == ["settings"] and method == "PUT":
+                return self._json(200, images.save_settings(self._body()))
+            if parts[2:] == ["gallery"] and method == "GET":
+                return self._json(200, {"images": images.gallery(place(param("place") or SHARED_NAME).workspace)})
+            if parts[2:] == ["generate"] and method == "POST":
+                return self._generate()
+            if n >= 3 and parts[2] == "models":
+                if n == 3 and method == "POST":
+                    return self._json(201, images.create_model(self._body()))
+                if n == 4 and method == "PUT":
+                    return self._json(200, images.update_model(parts[3], self._body()))
+                if n == 4 and method == "DELETE":
+                    images.delete_model(parts[3])
+                    return self._json(200, {"deleted": parts[3]})
 
         elif n >= 2 and parts[1] == "skills":
             if n == 2 and method == "GET":
@@ -498,6 +523,39 @@ class Handler(BaseHTTPRequestHandler):
             200,
             {"ready": True, "server_running": True, "server": conn.label, "url": conn.url, "models": conn.models},
         )
+
+    def _generate(self) -> None:
+        body = self._body()
+        if not isinstance(body, dict):
+            raise agents.AgentError("Request body must be a JSON object.")
+        where = place(str(body.get("place") or SHARED_NAME))
+        source = "images tab" if isinstance(where, SharedPlace) else "images tab (agent folder)"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event: dict) -> None:
+            try:
+                self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError) as exc:
+                raise ClientGone() from exc  # stops sd-cli: the user pressed Cancel or left
+
+        try:
+            record = images.generate(body, where.workspace, source=source, on_event=emit)
+            emit({"image": {**record, "place": where.name}})
+            emit({"done": True})
+        except ClientGone:
+            return
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, images.ImageError) else f"Unexpected error: {exc}"
+            try:
+                emit({"error": message})
+            except ClientGone:
+                return
 
     def _chat(self) -> None:
         body = self._body()

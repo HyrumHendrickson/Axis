@@ -9,7 +9,8 @@ Axis is a small app for chatting with a local AI model and with agents you desig
 * make skills, including built-in actions that let agents run Python, create, read and list files, search the web, and read Wikipedia,
 * create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
 * chat with those agents. Each agent has its own folder, and every file it makes stays there,
-* return to any earlier conversation in Past chats, and
+* return to any earlier conversation in Past chats,
+* make pictures with Stable Diffusion (stable-diffusion.cpp) in the Images tab, and let agents make them too, and
 * browse every agent's folder in the Files tab: open folders, read documents, view images and tables, upload files for agents to work on, and download anything they made, and
 * see each model's memory use, context size and details in the Models tab.
 
@@ -33,11 +34,12 @@ you start the model  ──►  run axis  ──►  browser opens at http://127
 7. [Skills](#skills)
 8. [Llama models](#llama-models)
 9. [Past chats](#past-chats)
-10. [Files and agent folders](#files-and-agent-folders)
-11. [The Models tab](#the-models-tab)
-12. [Settings](#settings)
-13. [Troubleshooting](#troubleshooting)
-14. [Running the tests](#running-the-tests)
+10. [Images](#images)
+11. [Files and agent folders](#files-and-agent-folders)
+12. [The Models tab](#the-models-tab)
+13. [Settings](#settings)
+14. [Troubleshooting](#troubleshooting)
+15. [Running the tests](#running-the-tests)
 
 ---
 
@@ -385,6 +387,7 @@ These let an agent do things, not just write text. File actions work only inside
 | Delete files | Delete files and empty folders |
 | Web search | Search the web (`web_search`) and read the text of a web page (`fetch_page`) |
 | Wikipedia | Find articles (`wikipedia_search`) and read them as plain text (`wikipedia_article`) through the Wikipedia API |
+| Image generation | Make a picture from a text prompt (`generate_image`) with a local Stable Diffusion model. Saved in `images/` in the agent's folder and shown in the chat. See [Images](#images). |
 | Shared folder | Use its file actions in a folder shared by every agent with this skill, as well as its own |
 
 Built-in skills cannot be edited or deleted.
@@ -447,6 +450,58 @@ Chats are stored as `.json` files in `Axis/chats` in your home folder (see [Wher
 
 ---
 
+## Images
+
+Axis makes pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)'s `sd-cli` program. Like chat models, Axis does not download or install anything: you download a release of stable-diffusion.cpp and the model files yourself, then tell Axis where they are.
+
+### Setting up
+
+1. Download a release ZIP for your computer from <https://github.com/leejet/stable-diffusion.cpp/releases> and extract it (for example to `C:\sd`). Put your model files in a `models` folder next to its `bin` folder.
+2. Check that it works from a terminal, for example (PowerShell):
+
+   ```powershell
+   cd C:\sd
+   .\bin\sd-cli.exe --diffusion-model models\z_image_turbo-Q4_0.gguf --llm models\Qwen3-4B-Instruct-2507-Q8_0.gguf `
+     --vae models\ae.safetensors --cfg-scale 1.0 --steps 4 -W 384 -H 384 --flash-attn off,diffusion=on `
+     -p "a lighthouse on a cliff at dusk" -o out_fast.png
+   ```
+
+3. In Axis, open **Models**. Under **Image models**, set the **sd-cli path** (for example `C:\sd\bin\sd-cli.exe`) and click **Save**. Leave it empty if `sd-cli` is on your PATH.
+4. Click **Add image model** and fill in the same files and settings as your command. For the command above:
+
+   | Field | Value |
+   |---|---|
+   | Name | Z-Image Turbo |
+   | Diffusion model | `models\z_image_turbo-Q4_0.gguf` |
+   | Text encoder (LLM) | `models\Qwen3-4B-Instruct-2507-Q8_0.gguf` |
+   | VAE | `models\ae.safetensors` |
+   | Default width / height | 384 / 384 |
+   | Default steps / CFG scale | 4 / 1.0 |
+   | Extra arguments | `--flash-attn off,diffusion=on` |
+
+   Relative paths start at the **working folder**, which is the folder above `bin` when `sd-cli` is in a `bin` folder (here `C:\sd`), otherwise `sd-cli`'s own folder. You can set it yourself under the sd-cli settings. A single-file SD 1.5 or SDXL model goes in **Checkpoint** instead; Flux and SD3 use **CLIP-L** and **T5-XXL**. Anything else `sd-cli` accepts goes in **Extra arguments**.
+
+Each image model card shows its files and sizes (with any file that cannot be found marked), its defaults, and **Generate with this model**. **Make default** chooses the model agents use and the Images tab selects first.
+
+### The Images tab
+
+Click **Images** in the sidebar.
+
+* Pick the **Model** at the top. Its default size, steps, CFG scale and sampler are filled in; **Reset to defaults** puts them back.
+* Write a **Prompt**, and optionally a **Negative prompt** (things to keep out; models run at CFG scale 1, such as turbo models, ignore it).
+* **Resolution** offers common sizes, or type a width and height (multiples of 64 work best). **Swap width and height** turns portrait into landscape.
+* **Steps**, **CFG scale**, **Sampler** and **Seed** (-1 picks a new random seed each time; the seed used is always shown, so a picture can be repeated).
+* **Generate** (or Ctrl+Enter in the prompt). Progress shows the stage (loading the model, sampling, decoding) and the step count. **Cancel** stops `sd-cli`. You can switch pages while it works; the sidebar marks Images as working.
+* Every picture is saved in the shared folder, `Axis/shared/images`. The **Gallery** lists them newest first; **From** also shows any agent's pictures. Click one to see it with its prompt and settings, then **Reuse settings**, **Reuse with seed** (to adjust the prompt of the same picture), **Download**, **Open in Files** or **Delete**.
+
+`sd-cli` starts for each picture, loads the model, makes the picture and exits, so it uses no memory between pictures; the first stage of every picture is loading the model. One picture is made at a time; a second request waits for the first to finish.
+
+### Agents
+
+Give an agent the **Image generation** skill. When asked for a picture it calls `generate_image` with a prompt (and, if you ask, a size, steps, seed or model). The picture is saved in `images/` in the agent's own folder and shown in the chat, with **Open in Files** in the action's details.
+
+---
+
 ## Files and agent folders
 
 ### The Files tab
@@ -474,7 +529,10 @@ Axis/                       in your home folder
 │       ├── agent.json      the agent's settings
 │       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
+├── image-models/           your image models, one .json file each
+├── image-settings.json     the sd-cli path, working folder and default image model
 ├── shared/                 the folder shared by agents with the Shared folder skill
+│   └── images/             pictures made in the Images tab
 └── skills/                 your custom skills, one .json file each
 ```
 
@@ -509,6 +567,8 @@ Models that are installed but not on show an **estimated memory** figure: the do
 
 If a model has no built-in tool support, its card says so; agents with actions still work through Axis's text format, but less reliably.
 
+**Image models** are listed below the chat models, with the sd-cli settings. See [Images](#images).
+
 ---
 
 ## Settings
@@ -532,6 +592,8 @@ Environment variables:
 | `AXIS_NUM_CTX` | Context size Axis asks Ollama for, in tokens (0 = Ollama's own default) | 8192 |
 | `AXIS_HISTORY_CHARS` | How much earlier conversation is sent with each message, in characters | 20000 |
 | `AXIS_SEARCH_URL` | A SearXNG server for the Web search skill (its JSON format must be enabled) | DuckDuckGo |
+| `AXIS_SD_CLI` | Path to stable-diffusion.cpp's `sd-cli`, when it is not set on the Models page | `sd-cli` on the PATH |
+| `AXIS_IMAGE_TIMEOUT` | Longest one picture may take, in seconds | 1800 |
 
 To set one, start Axis like this: `$env:AXIS_NUM_CTX = "16384"; axis` (Windows PowerShell) or `AXIS_NUM_CTX=16384 axis` (Mac).
 
@@ -567,6 +629,9 @@ The page only answers requests from this computer, and only from its own page, s
 | `Unknown tool '...'` in a step | The agent tried an action whose skill is not ticked. Tick it in **Edit agent**, or ignore it. |
 | Run Python says a package is missing | Install it for the Python that runs Axis, e.g. `py -m pip install pandas` (Windows) or `python3 -m pip install pandas` (Mac) |
 | `axis update` fails | Check your internet connection. You can also reinstall by hand: `pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip` |
+| Images says **Set up Stable Diffusion** | Set the sd-cli path and add an image model on the Models page (see [Images](#images)) |
+| An image model shows **Files missing** | A path is wrong, or relative paths start in a different folder than you expect. Use full paths, or set the **Working folder** under the sd-cli settings. |
+| A picture fails with `sd-cli failed` | The last lines from `sd-cli` are shown. Run the same command in a terminal to check it; out-of-memory errors usually need a smaller size, a smaller quantization, or `--offload-to-cpu` in Extra arguments. |
 | Chats disappeared | Conversations are stored per browser and per port. Use the same browser and the default port. |
 
 ---
@@ -587,6 +652,7 @@ axis/
   server.py       local web server and JSON API
   agents.py       agent storage, agent folders, and how messages are assembled
   chats.py        saved conversations (Past chats)
+  images.py       image models, running sd-cli, and the image gallery
   skills.py       the skill library (built-in actions and your skills)
   tools.py        the actions, kept inside each agent's folder
   runner.py       lets an agent use its actions while replying

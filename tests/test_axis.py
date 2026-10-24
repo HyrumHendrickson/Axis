@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, backend, cli, runner, server, skills, tools
+from axis import agents, backend, cli, images, runner, server, skills, tools
 
 LAST_REQUEST: dict = {}
 REQUESTS: list = []
@@ -263,7 +263,7 @@ class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
         self.assertEqual(ids, ["run-python", "list-files", "read-files", "write-files", "delete-files",
-                               "web-search", "wikipedia", "shared-folder"])
+                               "web-search", "wikipedia", "image-generation", "shared-folder"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
         self.assertEqual(s["id"], "plain-english")
         self.assertFalse(s["builtin"])
@@ -1130,6 +1130,183 @@ class TestWebTools(Base):
         with mock.patch.object(tools.web_tools, "_get_json", return_value={"query": {"pages": [{"title": "Nope", "missing": True}]}}):
             self.assertIn("no Wikipedia article", self.run_tool("wikipedia_article", title="Nope")[1])
         self.assertFalse(self.run_tool("wikipedia_search", query="x", lang="en.evil.com/")[0])
+
+
+# ------------------------------------------------------------------ images
+
+FAKE_SD = r'''
+import os, sys
+a = sys.argv[1:]
+get = lambda k: a[a.index(k) + 1]
+steps = int(get("--steps"))
+for key in ("--diffusion-model", "--vae"):
+    if key in a and not os.path.isfile(get(key)):
+        print("missing", get(key)); sys.exit(2)
+if "FAIL" in get("--prompt"):
+    print("error: out of memory"); sys.exit(1)
+print("loading tensors")
+sys.stdout.write("  |=====| 300/300 - 1.0it/s\r")
+print("\nsampling using Euler method")
+for i in range(1, steps + 1):
+    sys.stdout.write("  |==| %d/%d - 0.10s/it\r" % (i, steps))
+print("\ndecoding 1 latents")
+with open(get("--output"), "wb") as f:
+    f.write(b"\x89PNG\r\n\x1a\n" + " ".join(a).encode())
+'''
+
+
+class TestImages(Base):
+    def setUp(self):
+        super().setUp()
+        root = Path(self.home) / "sd"
+        (root / "bin").mkdir(parents=True)
+        (root / "models").mkdir()
+        (root / "models" / "z.gguf").write_bytes(b"x" * 10)
+        (root / "models" / "ae.safetensors").write_bytes(b"y" * 5)
+        script = root / "bin" / "fake_sd.py"
+        script.write_text(FAKE_SD)
+        if os.name == "nt":
+            self.cli = root / "bin" / "sd-cli.cmd"
+            self.cli.write_text(f'@"{sys.executable}" "{script}" %*\n')
+        else:
+            self.cli = root / "bin" / "sd-cli"
+            self.cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+            self.cli.chmod(0o755)
+        self.root = root
+
+    def add_model(self, **extra):
+        images.save_settings({"sd_cli": str(self.cli)})
+        data = {"name": "Z-Image Turbo", "diffusion_model": "models/z.gguf", "vae": "models\\ae.safetensors".replace("\\", os.sep),
+                "steps": 4, "cfg_scale": 1, "width": 384, "height": 384, "extra_args": "--flash-attn off,diffusion=on"}
+        data.update(extra)
+        return images.create_model(data)
+
+    def test_settings_and_models(self):
+        st = images.status()
+        self.assertFalse(st["ready"])
+        m = self.add_model()
+        self.assertEqual(m["id"], "z-image-turbo")
+        self.assertEqual(Path(images.workdir()), self.root)  # the folder above bin/
+        self.assertEqual(m["missing"], [])
+        self.assertEqual(m["disk_size"], 15)
+        st = images.status()
+        self.assertTrue(st["ready"])
+        self.assertEqual(st["default_model"], "z-image-turbo")
+        with self.assertRaises(images.ImageError):
+            images.create_model({"name": "z-image turbo", "diffusion_model": "a"})  # same name
+        with self.assertRaises(images.ImageError):
+            images.create_model({"name": "Nothing"})  # no model file
+        with self.assertRaises(images.ImageError):
+            images.create_model({"name": "Bad", "model": "a.safetensors", "steps": 0})
+        changed = images.update_model(m["id"], {"llm": "models/missing.gguf", "width": 500})
+        self.assertEqual(changed["missing"], ["models/missing.gguf"])
+        self.assertEqual(changed["width"], 496)  # rounded down to a multiple of 8
+        with self.assertRaises(images.ImageError):
+            images.generate({"prompt": "x"}, Path(self.home) / "shared")
+        images.delete_model(m["id"])
+        self.assertEqual(images.list_models(), [])
+
+    def test_split_args_and_command(self):
+        self.assertEqual(images.split_args('--flash-attn off,diffusion=on --x "C:\\a b\\c.gguf"'),
+                         ["--flash-attn", "off,diffusion=on", "--x", "C:\\a b\\c.gguf"])
+        m = self.add_model(sampler="euler")
+        params = images.resolve_params(m, {"prompt": "hi", "seed": 7})
+        cmd = images.build_command(self.cli, m, params, Path("out.png"), self.root)
+        self.assertIn("--diffusion-model", cmd)
+        self.assertEqual(cmd[cmd.index("--steps") + 1], "4")
+        self.assertEqual(cmd[cmd.index("--cfg-scale") + 1], "1")
+        self.assertEqual(cmd[cmd.index("--seed") + 1], "7")
+        self.assertEqual(cmd[cmd.index("--sampling-method") + 1], "euler")
+        self.assertIn("off,diffusion=on", cmd)
+        self.assertGreaterEqual(images.resolve_params(m, {"prompt": "hi"})["seed"], 0)  # random seed chosen by Axis
+        with self.assertRaises(images.ImageError):
+            images.resolve_params(m, {"prompt": " "})
+        with self.assertRaises(images.ImageError):
+            images.resolve_params(m, {"prompt": "x", "sampler": "nope"})
+
+    def test_generate_and_gallery(self):
+        self.add_model()
+        shared = Path(self.home) / "shared"
+        events = []
+        rec = images.generate({"prompt": "a lighthouse on a cliff", "width": 512, "height": 512}, shared, on_event=events.append)
+        self.assertTrue((shared / rec["path"]).is_file())
+        self.assertEqual((rec["width"], rec["steps"]), (512, 4))
+        progress = [e["progress"] for e in events if "progress" in e]
+        self.assertEqual(progress[-1], {"step": 4, "steps": 4})
+        self.assertNotIn({"step": 300, "steps": 300}, progress)  # loading bars are not steps
+        self.assertIn({"phase": "Sampling"}, events)
+        written = (shared / rec["path"]).read_bytes().decode(errors="replace")
+        self.assertIn(str(self.root / "models" / "z.gguf"), written)
+        gallery = images.gallery(shared)
+        self.assertEqual([g["prompt"] for g in gallery], ["a lighthouse on a cliff"])
+        listing = tools.list_files(shared, {"path": "images"})
+        self.assertNotIn(images.INDEX_NAME, listing)
+        with self.assertRaises(images.ImageError) as ctx:
+            images.generate({"prompt": "FAIL please"}, shared)
+        self.assertIn("out of memory", str(ctx.exception))
+        self.assertEqual(len(list((shared / "images").glob("*.png"))), 1)
+
+    def test_cancel_kills_sd_cli(self):
+        self.add_model()
+
+        def stop(event):
+            if "progress" in event:
+                raise RuntimeError("browser left")
+
+        with self.assertRaises(RuntimeError):
+            images.generate({"prompt": "x"}, Path(self.home) / "shared", on_event=stop)
+        self.assertFalse(images._LOCK.locked())
+        self.assertEqual(list((Path(self.home) / "shared" / "images").glob("*.png")), [])
+
+    def test_agent_tool(self):
+        self.add_model()
+        self.assertIn("image-generation", skills.BUILTIN_IDS)
+        agent = agents.create({"name": "artist", "skills": ["image-generation"]})
+        self.assertEqual(agents.tool_names(agent), ["generate_image"])
+        ok, out = tools.execute(agent.workspace, "create_image", {"description": "a red fox"}, ["generate_image"])
+        self.assertTrue(ok, out)
+        self.assertTrue(out.startswith("Saved images/"), out)
+        self.assertEqual(len(list((agent.workspace / "images").glob("*.png"))), 1)
+        self.assertEqual([f["path"].startswith("images/") for f in agents.list_workspace(agent)], [True])
+        ok, out = tools.execute(agent.workspace, "generate_image", {"prompt": "x", "model": "nope"}, ["generate_image"])
+        self.assertFalse(ok)
+        self.assertIn("Unknown image model", out)
+
+    def test_routes(self):
+        url = self.axis_server(self.model_server(OllamaHandler, ["llama3.1:8b"]))
+        st = json.loads(request(url + "/api/images")[1])
+        self.assertFalse(st["ready"])
+        self.assertEqual(request(url + "/api/images/settings", "PUT", {"sd_cli": str(self.cli)})[0], 200)
+        body = {"name": "Z-Image Turbo", "diffusion_model": "models/z.gguf", "steps": 3, "cfg_scale": 1}
+        code, text = request(url + "/api/images/models", "POST", body)
+        self.assertEqual(code, 201, text)
+        self.assertEqual(request(url + "/api/images/models", "POST", body)[0], 400)
+        self.assertEqual(request(url + "/api/images/models/z-image-turbo", "PUT", {"steps": 2})[0], 200)
+        code, text = request(url + "/api/images/generate", "POST", {"prompt": "a cat", "width": 256, "height": 256})
+        events = chat_events(text)
+        self.assertEqual(events[-1], {"done": True}, events)
+        image = next(e["image"] for e in events if "image" in e)
+        self.assertEqual((image["place"], image["steps"], image["width"]), ("_shared", 2, 256))
+        gallery = json.loads(request(url + "/api/images/gallery?place=_shared")[1])["images"]
+        self.assertEqual(gallery[0]["path"], image["path"])
+        listing = json.loads(request(url + "/api/files/_shared?path=images")[1])
+        self.assertEqual([e["name"] for e in listing["entries"]], [image["file"]])
+        view = json.loads(request(url + "/api/files/_shared/view?path=" + urllib.parse.quote(image["path"]))[1])
+        self.assertEqual(view["kind"], "image")
+        events = chat_events(request(url + "/api/images/generate", "POST", {"prompt": " "})[1])
+        self.assertIn("error", events[-1])
+        self.assertEqual(request(url + "/api/images/models/z-image-turbo", "DELETE")[0], 200)
+        self.assertEqual(request(url + "/api/images/models/z-image-turbo", "DELETE")[0], 404)
+
+    def test_agent_chat_uses_tool(self):
+        self.add_model()
+        url = self.axis_server(self.model_server(OllamaHandler, ["llama3.1:8b"]))
+        request(url + "/api/agents", "POST", {"name": "artist", "skills": ["image-generation"]})
+        msg = 'TOOL generate_image {"prompt": "a red fox in snow"}'
+        events = chat_events(request(url + "/api/chat", "POST", {"agent": "artist", "messages": [{"role": "user", "content": msg}]})[1])
+        result = next(e["tool_result"] for e in events if "tool_result" in e)
+        self.assertTrue(result["ok"], result)
+        self.assertRegex(result["output"], r"^Saved images/\S+\.png ")
 
 
 class TestCli(Base):

@@ -240,6 +240,40 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .summary-line { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
 .fb-list.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 
+/* ---------- images ---------- */
+.ig { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; flex: 1; min-height: 0; }
+.ig-form { overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); padding: 18px 18px 24px; }
+.ig-form .field { margin-bottom: 14px; }
+.ig-form label.lbl { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.ig-form textarea, .ig-form input[type=text], .ig-form input[type=number], .ig-form select { width: 100%; max-width: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: var(--surface); }
+.ig-form textarea { resize: vertical; min-height: 96px; }
+.ig-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
+.ig-pair span { color: var(--muted); font-size: 13px; }
+.ig-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ig-seed { display: flex; gap: 6px; } .ig-seed input { flex: 1; }
+.ig-go { display: flex; gap: 8px; margin-top: 6px; } .ig-go .btn { flex: 1; }
+.ig-main { overflow-y: auto; padding: 20px 24px; min-width: 0; }
+.ig-stage { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 14px; margin-bottom: 22px; }
+.ig-stage img { display: block; max-width: 100%; max-height: 62vh; margin: 0 auto; border-radius: 6px; background: repeating-conic-gradient(var(--code) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; }
+.ig-meta { color: var(--muted); font-size: 13px; margin: 10px 0 0; overflow-wrap: anywhere; }
+.ig-prompt { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ig-progress { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 10px 0 6px; }
+.ig-progress i { display: block; height: 100%; width: 0; background: var(--tan); transition: width .3s; }
+.ig-progress.indef i { width: 30%; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+.ig-log { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ig-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+.ig-head h3 { font: 400 20px/1.3 var(--serif); margin: 0; flex: 1; }
+.ig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ig-thumb { border: 1px solid var(--line); border-radius: 8px; padding: 0; background: var(--surface); cursor: pointer; overflow: hidden; aspect-ratio: 1; }
+.ig-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ig-thumb[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }
+.chat-image { margin: 6px 0 10px; }
+.chat-image img { display: block; max-width: min(100%, 512px); border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; }
+.chat-image small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.img-form .ig-two { margin-bottom: 0; }
+@media (max-width: 760px) { .ig { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .ig-form { border-right: 0; border-bottom: 1px solid var(--line); max-height: 55vh; } .ig-main { padding-left: 14px; padding-right: 14px; } }
+
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 
@@ -284,6 +318,12 @@ const S = {
   chatList: null,               // last /api/chats result, for Past chats
   history: { agent: "*", sort: "new", query: "" },   // Past chats filter and order
   unseen: false,                // a reply finished while the browser tab was hidden
+  images: null,                 // last /api/images result: sd-cli, settings and image models
+  imageForm: { model: "", prompt: "", negative_prompt: "", width: 512, height: 512, steps: 20, cfg_scale: 7, sampler: "", seed: -1 },
+  imageJob: null,               // the picture being made (kept here so it survives switching pages)
+  imageSelected: null,          // the picture shown large in the Images tab
+  imageError: null,
+  galleryPlace: "_shared",      // whose images/ folder the gallery shows
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -526,6 +566,7 @@ function renderNav() {
   fill($("nav"), 
     item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT }), !!S.streams[DIRECT]),
     item("Past chats", "Earlier conversations", v.kind === "history", () => go({ kind: "history" })),
+    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
     item("Models", "Memory, context and details", v.kind === "models", () => go({ kind: "models" })),
@@ -558,6 +599,7 @@ function renderMain() {
   if (S.view.kind === "files") return renderFiles();
   if (S.view.kind === "models") return renderModels();
   if (S.view.kind === "history") return renderHistory();
+  if (S.view.kind === "images") return renderImages();
   renderChat();
 }
 
@@ -724,6 +766,7 @@ const STEP_TEXT = {
   fetch_page: ["Reading", "Read"],
   wikipedia_search: ["Searching Wikipedia for", "Searched Wikipedia for"],
   wikipedia_article: ["Reading Wikipedia:", "Read Wikipedia:"],
+  generate_image: ["Making a picture of", "Made a picture of"],
 };
 const SHARED = "_shared";   // the Files tab's name for the folder agents share
 function hasShared(agent) {
@@ -741,7 +784,7 @@ function openInFiles(agent, path, isFile) {
 function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
 function stepLabel(p) {
   const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
-  const arg = p.args && ["path", "query", "title", "url"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
+  const arg = p.args && ["path", "query", "title", "url", "prompt"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
   const target = arg ? " " + (arg.length > 80 ? arg.slice(0, 80) + "\u2026" : arg) : "";
   const state = stepState(p);
   return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
@@ -760,14 +803,29 @@ function stepView(p, agent, wasOpen) {
     if ((p.name === "write_file" || p.name === "read_file") && path) body.append(link("Open in Files", path, true));
     else if (p.name === "make_folder" && path) body.append(link("Open folder in Files", path, false));
     else if (p.name === "run_python" || p.name === "list_files") body.append(link("Browse this agent\u2019s files", "", false));
+    else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Files", imagePath(p), true));
   }
   const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
   if (wasOpen) d.open = true;
   return d;
 }
+// The picture a generate_image step saved, from its result ("Saved images/x.png (...)").
+function imagePath(p) {
+  const m = p.ok && typeof p.output === "string" ? p.output.match(/^Saved (images\/\S+?\.(?:png|jpe?g|webp)) /) : null;
+  return m ? m[1] : "";
+}
+function chatImage(p, agent) {
+  const path = imagePath(p);
+  if (!agent || !path) return null;
+  const src = filesUrl(agent, "raw", path);
+  return h("figure", { class: "chat-image" },
+    h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || path, loading: "lazy" })),
+    h("small", {}, path));
+}
 function partsView(parts, agent, openSteps) {
-  return parts.map((p) => {
-    if (p.type === "tool") return stepView(p, agent, openSteps && openSteps.has(p.id));
+  return parts.flatMap((p) => {
+    if (p.type === "tool") return p.name === "generate_image" ? [stepView(p, agent, openSteps && openSteps.has(p.id)), chatImage(p, agent)].filter(Boolean)
+      : stepView(p, agent, openSteps && openSteps.has(p.id));
     const d = h("div", { class: "msg ai" }); d.innerHTML = markdown(p.text);
     for (const pre of d.querySelectorAll("pre")) {
       const code = pre.querySelector("code") || pre;
@@ -883,7 +941,7 @@ function retry(target) {
 
 function streamsChanged() {
   renderNav();
-  const busy = Object.keys(S.streams).length;
+  const busy = Object.keys(S.streams).length + (S.imageJob ? 1 : 0);
   document.title = busy ? "Working\u2026 \u00b7 Axis" : S.unseen ? "Reply ready \u00b7 Axis" : "Axis";
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.unseen) { S.unseen = false; streamsChanged(); } });
@@ -1065,7 +1123,7 @@ function renderEditor() {
   const custom = pickList(false);
   const skillPicker = h("div", {},
     h("div", { class: "subhead" }, "Actions"),
-    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, search the web or read Wikipedia. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
+    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, search the web, read Wikipedia or make pictures. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
     pickList(true),
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
@@ -1537,30 +1595,381 @@ function modelCard(m, d) {
 
 function renderModels() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Models"),
-    h("button", { class: "btn small", onclick: () => { S.models = null; renderModels(); } }, "Refresh"));
+    h("button", { class: "btn small", onclick: () => { S.models = null; S.images = null; renderModels(); } }, "Refresh"));
   const d = S.models;
   if (!d) {
     loadModels();
-    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "hint" }, "Reading model details\u2026"))));
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "hint" }, "Reading model details\u2026"), imageModelsSection())));
   }
   const running = d.models.filter((m) => m.running), installed = d.models.filter((m) => !m.running);
   const body = [];
   if (!d.models.length) {
-    body.push(h("div", { class: "empty" }, h("h3", {}, "No models found"),
-      h("p", {}, d.message || "Start Ollama or llama.cpp with a model, then click Refresh.")));
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models"),
+      h("p", { class: "hint" }, d.message || "No chat models found. Start Ollama or llama.cpp with a model, then click Refresh.")));
   } else {
     const total = running.reduce((a, m) => a + (m.memory || 0), 0);
     body.push(h("p", { class: "summary-line" }, [d.server, d.url].filter(Boolean).join(" at "),
       total ? ` \u00b7 ${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}` : ""));
-    body.push(h("div", { class: "skill-group" }, h("h3", {}, "On now"),
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models on now"),
       running.length ? running.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "No model is loaded. Turn one on with the command under an installed model.")));
     if (d.kind === "ollama") {
-      body.push(h("div", { class: "skill-group" }, h("h3", {}, "Installed"),
+      body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models installed"),
         h("p", { class: "hint" }, `Downloaded but not loaded. Memory estimates assume the context of ${fmt(d.axis_context || 4096)} tokens that Axis asks for, and are approximate.`),
         installed.length ? installed.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "Every installed model is on.")));
     }
   }
+  body.push(imageModelsSection());
   fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, body)));
+  if (S.view.focus === "images" && S.images) { const el = $("image-models"); if (el) el.scrollIntoView(); S.view.focus = null; }
+}
+
+/* ---------------------------------------------------------------- images */
+// Pictures made with stable-diffusion.cpp. The Images tab saves to the shared folder (shared/images);
+// agents with the Image generation skill save to images/ in their own folder.
+const RESOLUTIONS = [
+  [384, 384, "Square, small"], [512, 512, "Square"], [768, 768, "Square, large"], [1024, 1024, "Square, XL"],
+  [512, 768, "Portrait 2:3"], [768, 512, "Landscape 3:2"], [832, 1216, "Portrait, XL"], [1216, 832, "Landscape, XL"],
+  [576, 1024, "Tall 9:16"], [1024, 576, "Wide 16:9"],
+];
+let imagesLoading = null;
+function loadImages() {
+  if (imagesLoading) return imagesLoading;
+  imagesLoading = api("/api/images")
+    .then((d) => { S.images = d; })
+    .catch((e) => { S.images = { ready: false, message: e.message, models: [], samplers: [] }; })
+    .finally(() => { imagesLoading = null; });
+  return imagesLoading;
+}
+const imageModel = (id) => ((S.images && S.images.models) || []).find((m) => m.id === id) || null;
+function imageForm() {
+  const f = S.imageForm;
+  const models = (S.images && S.images.models) || [];
+  if (!imageModel(f.model)) { f.model = (S.images && S.images.default_model) || (models[0] && models[0].id) || ""; applyModelDefaults(f); }
+  return f;
+}
+function applyModelDefaults(f) {
+  const m = imageModel(f.model);
+  if (!m) return;
+  Object.assign(f, { width: m.width || 512, height: m.height || 512, steps: m.steps || 20, cfg_scale: m.cfg_scale ?? 7, sampler: m.sampler || "" });
+}
+function saveImageForm() { store("axis.imageForm", S.imageForm); }
+const imageUrl = (place, path, dl) => filesUrl(place, "raw", path, dl ? "&download=1" : "");
+
+function renderImages() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Images"));
+  if (!S.images) {
+    loadImages().then(() => { if (S.view.kind === "images") renderImages(); });
+    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
+  }
+  const st = S.images;
+  if (!st.ready) {
+    bar.append(h("button", { class: "btn small", onclick: () => { S.images = null; renderImages(); } }, "Check again"));
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "gate" },
+      h("h3", {}, "Set up Stable Diffusion"),
+      h("p", {}, "Axis makes pictures with stable-diffusion.cpp\u2019s sd-cli program, using model files you have downloaded. It does not download anything itself."),
+      h("ol", {},
+        h("li", {}, st.sd_cli ? ["sd-cli found: ", h("code", {}, st.sd_cli)]
+          : ["Download a release of stable-diffusion.cpp for your computer from ", h("a", { href: "https://github.com/leejet/stable-diffusion.cpp/releases", target: "_blank", rel: "noopener" }, "its GitHub page"), ", extract it, and give Axis the path to sd-cli on the Models page."]),
+        h("li", {}, st.models.length ? `${st.models.length} image model${st.models.length === 1 ? "" : "s"} set up.`
+          : "On the Models page, under Image models, click Add image model and list the files it uses (diffusion model, text encoder, VAE).")),
+      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "images" }) }, "Open Image models")))));
+  }
+
+  const f = imageForm();
+  const model = imageModel(f.model);
+  const job = S.imageJob;
+  const set = (key, cast) => (e) => { f[key] = cast ? cast(e.target.value) : e.target.value; saveImageForm(); };
+  const num = (v) => (v === "" ? "" : Number(v));
+
+  const modelSel = h("select", { "aria-label": "Image model", disabled: !!job, onchange: (e) => { f.model = e.target.value; applyModelDefaults(f); saveImageForm(); renderImages(); } },
+    st.models.map((m) => { const o = h("option", { value: m.id }, m.name + (m.missing.length ? " (files missing)" : "")); o.selected = m.id === f.model; return o; }));
+  bar.append(h("label", {}, "Model", modelSel));
+
+  const prompt = h("textarea", { id: "ig-prompt", rows: 4, placeholder: "a lighthouse on a cliff at dusk, oil painting", oninput: set("prompt"),
+    onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generateImage(); } } });
+  prompt.value = f.prompt || "";
+  const negative = h("textarea", { rows: 2, placeholder: "blurry, low quality, text, watermark", oninput: set("negative_prompt") });
+  negative.value = f.negative_prompt || "";
+
+  const w = h("input", { type: "number", min: 64, max: 2048, step: 64, value: f.width, "aria-label": "Width" });
+  const hh = h("input", { type: "number", min: 64, max: 2048, step: 64, value: f.height, "aria-label": "Height" });
+  const preset = h("select", { "aria-label": "Resolution" });
+  const syncPreset = () => {
+    const i = RESOLUTIONS.findIndex(([a, b]) => a === Number(w.value) && b === Number(hh.value));
+    fill(preset, h("option", { value: "custom" }, "Custom"), RESOLUTIONS.map(([a, b, label], j) => {
+      const o = h("option", { value: String(j) }, `${a} \u00d7 ${b}  ${label}`); o.selected = j === i; return o; }));
+    if (i < 0) preset.value = "custom";
+  };
+  const onSize = () => { f.width = num(w.value); f.height = num(hh.value); saveImageForm(); syncPreset(); };
+  w.addEventListener("input", onSize); hh.addEventListener("input", onSize);
+  preset.addEventListener("change", () => {
+    const r = RESOLUTIONS[Number(preset.value)]; if (!r) return;
+    w.value = r[0]; hh.value = r[1]; onSize();
+  });
+  syncPreset();
+
+  const sampler = h("select", { "aria-label": "Sampler", onchange: set("sampler") },
+    h("option", { value: "" }, "Model default"), st.samplers.map((x) => { const o = h("option", { value: x }, x); o.selected = x === f.sampler; return o; }));
+  const seed = h("input", { type: "number", min: -1, step: 1, value: f.seed ?? -1, "aria-label": "Seed", oninput: set("seed", num) });
+
+  const form = h("div", { class: "ig-form" },
+    h("div", { class: "field" }, h("label", { class: "lbl", for: "ig-prompt" }, "Prompt"), prompt),
+    h("details", { class: "field", open: !!f.negative_prompt }, h("summary", { class: "lbl", style: "cursor:pointer" }, "Negative prompt"),
+      h("p", { class: "hint", style: "margin:4px 0" }, "Things to keep out. Ignored by models run at CFG scale 1 (most turbo models)."), negative),
+    h("div", { class: "field" }, h("label", { class: "lbl" }, "Resolution"), preset,
+      h("div", { class: "ig-pair", style: "margin-top:6px" }, w, h("span", {}, "\u00d7"), hh),
+      h("button", { class: "link", style: "margin-top:4px", onclick: () => { [w.value, hh.value] = [hh.value, w.value]; onSize(); } }, "Swap width and height")),
+    h("div", { class: "ig-two" },
+      h("div", { class: "field" }, h("label", { class: "lbl" }, "Steps"),
+        h("input", { type: "number", min: 1, max: 150, value: f.steps, oninput: set("steps", num) })),
+      h("div", { class: "field" }, h("label", { class: "lbl" }, "CFG scale"),
+        h("input", { type: "number", min: 0, max: 30, step: 0.5, value: f.cfg_scale, oninput: set("cfg_scale", num) }))),
+    h("div", { class: "field" }, h("label", { class: "lbl" }, "Sampler"), sampler),
+    h("div", { class: "field" }, h("label", { class: "lbl" }, "Seed"),
+      h("div", { class: "ig-seed" }, seed, h("button", { class: "btn small", title: "Pick a new random seed each time", onclick: () => { seed.value = -1; f.seed = -1; saveImageForm(); } }, "Random")),
+      h("p", { class: "hint", style: "margin:4px 0 0" }, "-1 picks a new seed for every picture. Use a fixed seed to make small changes to the same picture.")),
+    model ? h("button", { class: "link", onclick: () => { applyModelDefaults(f); saveImageForm(); renderImages(); } }, `Reset to ${model.name}\u2019s defaults`) : null,
+    h("div", { class: "ig-go" },
+      job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
+          : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0, onclick: generateImage }, "Generate")),
+    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images."),
+    model && model.missing.length ? h("p", { class: "form-error" }, `Missing files: ${model.missing.join(", ")}. Fix the paths on the Models page.`) : null);
+
+  const main = h("div", { class: "ig-main" }, h("div", { id: "ig-stage" }), h("div", { id: "ig-gallery" }));
+  fill($("main"), bar, h("div", { class: "ig" }, form, main));
+  drawStage();
+  loadGallery();
+  if (!job) prompt.focus({ preventScroll: true });
+}
+
+function drawStage() {
+  const box = $("ig-stage"); if (!box) return;
+  const job = S.imageJob;
+  if (job) {
+    const p = job.progress;
+    const pct = p ? Math.round(100 * p.step / p.steps) : null;
+    return fill(box, h("div", { class: "ig-stage", role: "status" },
+      h("div", { class: "typing" }, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+        h("span", { class: "typing-label" }, job.queued ? "Waiting for the previous picture to finish" : (job.phase || "Starting")),
+        p ? h("span", { class: "elapsed" }, `step ${p.step} of ${p.steps}`) : null,
+        h("span", { class: "elapsed", "data-since": String(job.started) }, elapsedText(job.started))),
+      h("div", { class: "ig-progress" + (pct === null ? " indef" : "") }, h("i", { style: pct === null ? null : `width:${pct}%` })),
+      h("div", { class: "ig-log" }, job.log || ""),
+      h("p", { class: "ig-prompt" }, job.prompt)));
+  }
+  if (S.imageError) return fill(box, h("div", { class: "ig-stage" }, h("p", { class: "form-error", style: "white-space:pre-wrap;margin:0" }, S.imageError)));
+  const sel = S.imageSelected;
+  if (!sel) return fill(box, h("div", { class: "ig-stage" }, h("div", { class: "empty", style: "margin:6vh auto" },
+    h("h3", {}, "No picture yet"), h("p", {}, "Write a prompt and click Generate. The first picture takes longer while sd-cli loads the model."))));
+  const meta = [sel.model, sel.width && `${sel.width}\u00d7${sel.height}`, sel.steps && `${sel.steps} steps`,
+    sel.cfg_scale !== undefined && `CFG ${sel.cfg_scale}`, sel.sampler, sel.seed !== undefined && `seed ${sel.seed}`,
+    sel.seconds && `${sel.seconds} s`, when(sel.created)].filter(Boolean).join(" \u00b7 ");
+  const reuse = (withSeed) => {
+    const f = S.imageForm;
+    if (sel.model_id && imageModel(sel.model_id)) f.model = sel.model_id;
+    for (const k of ["prompt", "negative_prompt", "width", "height", "steps", "cfg_scale", "sampler"]) if (sel[k] !== undefined) f[k] = sel[k];
+    f.seed = withSeed && sel.seed !== undefined ? sel.seed : -1;
+    saveImageForm(); renderImages();
+  };
+  fill(box, h("div", { class: "ig-stage" },
+    h("a", { href: imageUrl(sel.place, sel.path), target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src: imageUrl(sel.place, sel.path), alt: sel.prompt || sel.file })),
+    sel.prompt ? h("p", { class: "ig-prompt" }, sel.prompt) : null,
+    sel.negative_prompt ? h("p", { class: "ig-meta" }, "Negative: " + sel.negative_prompt) : null,
+    h("p", { class: "ig-meta" }, meta || sel.file),
+    h("div", { class: "fb-actions", style: "margin:10px 0 0" },
+      sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
+      sel.seed !== undefined ? h("button", { class: "btn small", title: "Same settings and seed, so you can adjust the prompt", onclick: () => reuse(true) }, "Reuse with seed") : null,
+      h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
+      h("button", { class: "btn small", onclick: () => openInFiles(sel.place, sel.path, true) }, "Open in Files"),
+      h("button", { class: "btn small danger", onclick: () => deleteImage(sel) }, "Delete"))));
+}
+
+async function loadGallery() {
+  const box = $("ig-gallery"); if (!box) return;
+  const place = S.galleryPlace = (S.galleryPlace === SHARED || agentByName(S.galleryPlace)) ? S.galleryPlace : SHARED;
+  let list;
+  try { list = (await api("/api/images/gallery?place=" + encodeURIComponent(place))).images.map((i) => ({ ...i, place })); }
+  catch (e) { return fill(box, h("p", { class: "form-error" }, e.message)); }
+  if (S.view.kind !== "images" || place !== S.galleryPlace) return;
+  S.gallery = list;
+  if (!S.imageSelected && !S.imageJob && !S.imageError && list.length) { S.imageSelected = list[0]; drawStage(); }
+  const pick = h("select", { "aria-label": "Show pictures from", onchange: (e) => { S.galleryPlace = e.target.value; loadGallery(); } },
+    [[SHARED, "Shared folder"], ...S.agents.map((a) => [a.name, a.name])].map(([v, label]) => { const o = h("option", { value: v }, label); o.selected = v === place; return o; }));
+  fill(box, h("div", { class: "ig-head" }, h("h3", {}, "Gallery"), h("label", { class: "hint", style: "margin:0;display:flex;gap:6px;align-items:center" }, "From", pick),
+      h("span", { class: "hint", style: "margin:0" }, `${list.length} picture${list.length === 1 ? "" : "s"}`)),
+    list.length ? h("div", { class: "ig-grid" }, list.map((img) => h("button", { class: "ig-thumb", title: img.prompt || img.file,
+      "aria-current": S.imageSelected && S.imageSelected.path === img.path && S.imageSelected.place === img.place ? "true" : "false",
+      onclick: () => { S.imageSelected = img; S.imageError = null; drawStage(); loadGallery(); } },
+      h("img", { src: imageUrl(img.place, img.path), alt: img.prompt || img.file, loading: "lazy" }))))
+    : h("p", { class: "hint" }, place === SHARED ? "Pictures you make here are saved in shared/images and listed here." : `${place} has not made any pictures yet. Give it the Image generation skill.`));
+}
+
+async function deleteImage(img) {
+  if (!confirm(`Delete ${img.file}? This cannot be undone.`)) return;
+  try { await api(filesUrl(img.place, "", img.path), { method: "DELETE" }); }
+  catch (e) { return toast(e.message); }
+  toast("Deleted");
+  S.imageSelected = null; drawStage(); loadGallery();
+}
+
+async function generateImage() {
+  if (S.imageJob) return;
+  const f = imageForm();
+  const prompt = (($("ig-prompt") || {}).value ?? f.prompt ?? "").trim();
+  if (!prompt) { toast("Write a prompt first."); return; }
+  f.prompt = prompt; saveImageForm();
+  const job = S.imageJob = { controller: new AbortController(), started: Date.now(), prompt, phase: "", progress: null, log: "", queued: false };
+  S.imageError = null;
+  streamsChanged();
+  if (S.view.kind === "images") renderImages();
+  let frame = 0;
+  const paint = () => { frame = 0; if (S.view.kind === "images") drawStage(); };
+  const schedule = () => { if (!frame) frame = setTimeout(paint, 120); };
+  let result = null, error = null;
+  try {
+    const body = { place: SHARED, model: f.model, prompt, negative_prompt: f.negative_prompt || "", width: f.width, height: f.height,
+      steps: f.steps, cfg_scale: f.cfg_scale, sampler: f.sampler || "", seed: f.seed ?? -1 };
+    const res = await fetch("/api/images/generate", { method: "POST", signal: job.controller.signal,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.queued) job.queued = true;
+        if (ev.phase) { job.phase = ev.phase; job.queued = false; }
+        if (ev.progress) job.progress = ev.progress;
+        if (ev.log) job.log = ev.log;
+        if (ev.image) result = ev.image;
+        if (ev.error) error = ev.error;
+        schedule();
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") error = e.name === "TypeError" ? "Axis is not responding. Check that the axis window is still open." : e.message;
+  }
+  clearTimeout(frame);
+  S.imageJob = null;
+  if (result) { S.imageSelected = { ...result, place: SHARED }; S.galleryPlace = SHARED; }
+  else if (error) S.imageError = error;
+  if (document.hidden && result) S.unseen = true;
+  streamsChanged();
+  if (S.view.kind === "images") renderImages();
+  else if (result || error) toast(error ? "The picture failed" : "Picture ready");
+  loadImages();
+}
+
+/* Image models on the Models page */
+function imageSettingsCard(st) {
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const cli = h("input", { type: "text", value: st.sd_cli_setting || "", placeholder: st.sd_cli || "C:\\sd\\bin\\sd-cli.exe", "aria-label": "sd-cli path" });
+  const wd = h("input", { type: "text", value: st.workdir_setting || "", placeholder: st.workdir || "", "aria-label": "Working folder" });
+  const def = h("select", { "aria-label": "Default image model" }, st.models.map((m) => { const o = h("option", { value: m.id }, m.name); o.selected = m.id === st.default_model; return o; }));
+  const save = async () => {
+    err.hidden = true;
+    try { S.images = await api("/api/images/settings", { method: "PUT", body: { sd_cli: cli.value, workdir: wd.value, default_model: def.value || "" } }); toast("Saved"); renderModels(); }
+    catch (e) { err.textContent = e.message; err.hidden = false; }
+  };
+  return h("div", { class: "model-card" },
+    h("h4", {}, "sd-cli", st.sd_cli ? h("span", { class: "chip on" }, "Found") : h("span", { class: "chip" }, "Not found")),
+    err,
+    h("p", { class: "hint", style: "margin-top:8px" }, st.sd_cli ? ["Using ", h("code", {}, st.sd_cli), "."] : st.message),
+    h("div", { class: "field" }, h("label", {}, "sd-cli path"), h("p", { class: "hint" }, "Leave empty to find sd-cli on your PATH (or set AXIS_SD_CLI)."), cli),
+    h("div", { class: "field" }, h("label", {}, "Working folder"),
+      h("p", { class: "hint" }, ["sd-cli runs here, and relative model paths (like models\\ae.safetensors) start here. Empty means: ", h("code", {}, st.workdir), "."]), wd),
+    st.models.length ? h("div", { class: "field" }, h("label", {}, "Default image model"), h("p", { class: "hint" }, "Used by agents and selected first in the Images tab."), def) : null,
+    h("div", { class: "model-actions" }, h("button", { class: "btn small primary", onclick: save }, "Save")));
+}
+
+function imageModelEditor(m, onDone) {
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const st = S.images || {};
+  const v = m || { width: 512, height: 512, steps: 20, cfg_scale: 7, sampler: "" };
+  const input = (key, placeholder, type) => h("input", { type: type || "text", value: v[key] ?? "", placeholder: placeholder || "", "data-key": key,
+    ...(type === "number" ? { step: key === "cfg_scale" ? 0.5 : key === "steps" ? 1 : 64 } : {}) });
+  const fld = (label, hint, el) => h("div", { class: "field" }, h("label", {}, label), hint ? h("p", { class: "hint" }, hint) : null, el);
+  const sampler = h("select", { "data-key": "sampler" }, h("option", { value: "" }, "sd-cli default"),
+    (st.samplers || []).map((x) => { const o = h("option", { value: x }, x); o.selected = x === v.sampler; return o; }));
+  const form = h("form", { class: "form skill-card img-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    const data = {};
+    for (const el of form.querySelectorAll("[data-key]")) data[el.dataset.key] = el.type === "number" ? (el.value === "" ? null : Number(el.value)) : el.value;
+    try {
+      if (m) await api("/api/images/models/" + encodeURIComponent(m.id), { method: "PUT", body: data });
+      else await api("/api/images/models", { method: "POST", body: data });
+      await loadImages(); toast(m ? "Image model saved" : "Image model added"); onDone();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; err.scrollIntoView({ block: "nearest" }); }
+  } }, err,
+    fld("Name", null, input("name", "for example: Z-Image Turbo")),
+    fld("Description", null, input("description", "Optional note")),
+    h("p", { class: "hint" }, ["Give the files the model needs. Paths can be full paths or relative to the working folder (", h("code", {}, st.workdir || ""), "). Use a checkpoint for SD 1.5 / SDXL single-file models, or a diffusion model plus its text encoder and VAE for Flux, SD3, Qwen-Image or Z-Image."]),
+    fld("Diffusion model", "--diffusion-model", input("diffusion_model", "models\\z_image_turbo-Q4_0.gguf")),
+    fld("Text encoder (LLM)", "--llm, for Z-Image and Qwen-Image", input("llm", "models\\Qwen3-4B-Instruct-2507-Q8_0.gguf")),
+    fld("VAE", "--vae", input("vae", "models\\ae.safetensors")),
+    fld("Checkpoint", "--model, a single-file SD 1.5 / SDXL model", input("model", "models\\sd_xl_base_1.0.safetensors")),
+    h("div", { class: "ig-two" }, fld("CLIP-L", "--clip_l, for Flux and SD3", input("clip_l")), fld("T5-XXL", "--t5xxl, for Flux and SD3", input("t5xxl"))),
+    h("div", { class: "ig-two" }, fld("Default width", null, input("width", "512", "number")), fld("Default height", null, input("height", "512", "number"))),
+    h("div", { class: "ig-two" }, fld("Default steps", null, input("steps", "20", "number")), fld("Default CFG scale", "1.0 for turbo models", input("cfg_scale", "7", "number"))),
+    h("div", { class: "ig-two" }, fld("Sampler", null, sampler), fld("Scheduler", "Optional, for example karras", input("scheduler"))),
+    fld("Extra arguments", "Added to every sd-cli run, for example: --flash-attn off,diffusion=on  or  --offload-to-cpu", input("extra_args", "--flash-attn off,diffusion=on")),
+    h("div", { class: "form-actions" },
+      h("button", { class: "btn primary", type: "submit" }, m ? "Save image model" : "Add image model"),
+      h("button", { class: "btn", type: "button", onclick: onDone }, "Cancel")));
+  setTimeout(() => { const n = form.querySelector("[data-key=name]"); if (n) n.focus(); }, 0);
+  return form;
+}
+
+function imageModelCard(m, st) {
+  const rows = [];
+  const add = (label, value, note, bad) => rows.push(h("div", { class: "kv" }, h("dt", {}, label),
+    h("dd", { style: bad ? "color:var(--bad)" : null }, String(value), note ? h("small", {}, note) : null)));
+  for (const file of m.files) add(file.label, file.path, file.exists ? size(file.size) : "file not found", !file.exists);
+  if (m.disk_size) add("Size on disk", size(m.disk_size));
+  add("Default size", `${m.width} \u00d7 ${m.height}`);
+  add("Default steps", m.steps);
+  add("CFG scale", m.cfg_scale);
+  add("Sampler", m.sampler || "sd-cli default");
+  if (m.scheduler) add("Scheduler", m.scheduler);
+  if (m.extra_args) add("Extra arguments", m.extra_args);
+  const isDefault = m.id === st.default_model;
+  const card = h("div", { class: "model-card" },
+    h("h4", {}, m.name, h("span", { class: "chip" }, "Image"), isDefault ? h("span", { class: "chip on" }, "Default") : null,
+      m.missing.length ? h("span", { class: "chip", style: "color:var(--bad)" }, "Files missing") : null),
+    m.description ? h("p", { class: "hint", style: "margin:6px 0 0" }, m.description) : null,
+    h("dl", { class: "kv-grid" }, rows),
+    m.missing.length ? h("p", { class: "model-note" }, "Some files were not found. Check the paths and the working folder.") : null,
+    h("div", { class: "model-actions" },
+      h("button", { class: "btn small primary", disabled: !st.sd_cli || m.missing.length > 0,
+        onclick: () => { S.imageForm.model = m.id; applyModelDefaults(S.imageForm); saveImageForm(); go({ kind: "images" }); } }, "Generate with this model"),
+      h("button", { class: "btn small", onclick: () => card.replaceWith(imageModelEditor(m, renderModels)) }, "Edit"),
+      isDefault ? null : h("button", { class: "btn small", onclick: async () => {
+        try { S.images = await api("/api/images/settings", { method: "PUT", body: { default_model: m.id } }); renderModels(); } catch (e) { toast(e.message); } } }, "Make default"),
+      h("button", { class: "btn small danger", onclick: async () => {
+        if (!confirm(`Remove ${m.name} from Axis? Its files are not deleted.`)) return;
+        try { await api("/api/images/models/" + encodeURIComponent(m.id), { method: "DELETE" }); await loadImages(); renderModels(); } catch (e) { toast(e.message); } } }, "Remove")));
+  return card;
+}
+
+function imageModelsSection() {
+  const st = S.images;
+  if (!st) {
+    loadImages().then(() => { if (S.view.kind === "models") renderModels(); });
+    return h("div", { class: "skill-group", id: "image-models" }, h("h3", {}, "Image models"), h("p", { class: "hint" }, "Loading\u2026"));
+  }
+  const slot = h("div", {});
+  return h("div", { class: "skill-group", id: "image-models" },
+    h("div", { class: "section-head" }, h("h3", {}, "Image models"),
+      h("button", { class: "btn small primary", onclick: () => fill(slot, imageModelEditor(null, renderModels)) }, "Add image model")),
+    h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp\u2019s sd-cli. Each picture starts sd-cli, which loads the model, makes the picture and exits, so no memory is used between pictures."),
+    slot,
+    st.models.length ? st.models.map((m) => imageModelCard(m, st)) : h("p", { class: "hint" }, "No image models yet. Click Add image model."),
+    imageSettingsCard(st));
 }
 
 /* ---------------------------------------------------------------- skills */
@@ -1622,7 +2031,7 @@ function renderSkills() {
         h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
         custom.length ? custom.map(customCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent act: files, Python, web search and Wikipedia. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder."),
+        h("p", { class: "hint" }, "These let an agent act: files, Python, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder."),
         builtin.map((sk) => h("div", { class: "skill-card" },
           h("h4", {}, sk.name, h("span", { class: "tag" }, "Built in")),
           h("p", {}, sk.description),
@@ -1635,10 +2044,13 @@ function renderSkills() {
   if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) S.drafts = drafts;
   const current = recall("axis.current", {});
   if (current && typeof current === "object" && !Array.isArray(current)) S.current = current;
+  const form = recall("axis.imageForm", null);
+  if (form && typeof form === "object" && !Array.isArray(form)) Object.assign(S.imageForm, form);
   await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
   await migrateOldChats();
   renderMain();
   loadModels();
+  loadImages();
   setInterval(refreshStatus, 4000);
   setInterval(tick, 1000);
 })();

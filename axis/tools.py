@@ -20,13 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from . import web_tools
+from . import images, web_tools
 
 SHARED_PREFIX = "shared"
 SHARED_ENV = "AXIS_SHARED_DIR"
 MAX_OUTPUT = 8000
 MAX_READ = 16000
 PYTHON_TIMEOUT = 60
+# Axis bookkeeping files that agents and the Files tab do not show.
+HIDDEN_NAMES = {".axis-tmp", images.INDEX_NAME}
 
 
 class ToolError(Exception):
@@ -92,6 +94,24 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
 
 
 TOOL_SPECS.update(web_tools.SPECS)
+TOOL_SPECS["generate_image"] = {
+    "description": "Make a picture from a text description with a local Stable Diffusion model. "
+    "The picture is saved as a PNG in images/ in your folder and shown to the user. "
+    "Describe the subject, style, lighting and composition in the prompt.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "What the picture should show, in detail"},
+            "negative_prompt": {"type": "string", "description": "Things to keep out of the picture (optional)"},
+            "width": {"type": "integer", "description": "Width in pixels, a multiple of 64 (optional; the model's default if omitted)"},
+            "height": {"type": "integer", "description": "Height in pixels, a multiple of 64 (optional)"},
+            "steps": {"type": "integer", "description": "Sampling steps (optional; the model's default if omitted)"},
+            "seed": {"type": "integer", "description": "Seed for a repeatable picture (optional; random if omitted)"},
+            "model": {"type": "string", "description": "Name of the image model to use (optional; the default if omitted)"},
+        },
+        "required": ["prompt"],
+    },
+}
 
 
 def specs(names: List[str]) -> List[Dict[str, Any]]:
@@ -187,7 +207,7 @@ def list_files(ws: Where, args: Dict[str, Any]) -> str:
     if not folder.is_dir():
         raise ToolError(f"{args.get('path')} is a file, not a folder.")
     entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    entries = [e for e in entries if e.name != ".axis-tmp"]
+    entries = [e for e in entries if e.name not in HIDDEN_NAMES]
     lines = []
     if places(ws).shared is not None and not prefix and folder == root:
         # The shared folder appears at the top of the agent's own folder.
@@ -421,6 +441,10 @@ TOOL_ALIASES = {
     "wiki_search": "wikipedia_search", "wikipedia_page": "wikipedia_article", "get_wikipedia": "wikipedia_article",
     "wiki_article": "wikipedia_article", "wikipedia_summary": "wikipedia_article", "read_wikipedia": "wikipedia_article",
     "get_wikipedia_article": "wikipedia_article", "wikipedia_get": "wikipedia_article",
+    "image": "generate_image", "create_image": "generate_image", "make_image": "generate_image",
+    "draw": "generate_image", "draw_image": "generate_image", "text_to_image": "generate_image",
+    "txt2img": "generate_image", "image_generation": "generate_image", "generate_picture": "generate_image",
+    "stable_diffusion": "generate_image", "paint": "generate_image",
 }
 ARG_ALIASES = {
     "path": ("path", "filename", "file_name", "file", "file_path", "filepath", "name", "directory", "dir",
@@ -435,6 +459,9 @@ ARG_ALIASES = {
     "start": ("start", "offset", "start_char", "from", "position"),
     "intro_only": ("intro_only", "summary", "summary_only", "intro", "short"),
     "lang": ("lang", "language", "wiki_lang"),
+    "prompt": ("prompt", "description", "image_prompt", "text", "query", "positive_prompt"),
+    "negative_prompt": ("negative_prompt", "negative", "neg_prompt", "avoid"),
+    "steps": ("steps", "num_steps", "sampling_steps", "num_inference_steps"),
 }
 
 
@@ -474,6 +501,16 @@ def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
     return run
 
 
+def generate_image(ws: Where, args: Dict[str, Any]) -> str:
+    p = places(ws)
+    try:
+        rec = images.generate(args, p.personal, source="agent")
+    except images.ImageError as exc:
+        raise ToolError(str(exc)) from exc
+    return (f"Saved {rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
+            f"model {rec['model']}, {rec['seconds']} s). The user can see the picture.")
+
+
 FILE_TOOLS = ("list_files", "read_file", "write_file", "make_folder", "delete_file")
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "list_files": list_files,
@@ -482,6 +519,7 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "make_folder": make_folder,
     "delete_file": delete_file,
     "run_python": run_python,
+    "generate_image": generate_image,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }
 
