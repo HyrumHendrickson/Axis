@@ -1,8 +1,11 @@
-"""Actions an agent can take. Every action works inside the agent's own folder.
+"""Actions an agent can take. File actions work inside the agent's own folder.
 
-The file tools refuse any path outside the folder. Python code runs with the
+When the agent has the Shared folder skill, paths that start with "shared/"
+point into ~/Axis/shared, a folder every such agent can read and write. The file
+tools refuse any other path outside the agent's folder. Python code runs with the
 folder as its working directory, and a guard blocks writing, deleting or
-renaming files outside it and starting other programs. The guard keeps
+renaming files outside it (and the shared folder, when enabled) and starting
+other programs. The guard keeps
 ordinary code contained; it is not a security sandbox against deliberately
 hostile code.
 """
@@ -13,9 +16,14 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from . import web_tools
+
+SHARED_PREFIX = "shared"
+SHARED_ENV = "AXIS_SHARED_DIR"
 MAX_OUTPUT = 8000
 MAX_READ = 16000
 PYTHON_TIMEOUT = 60
@@ -83,6 +91,9 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
 }
 
 
+TOOL_SPECS.update(web_tools.SPECS)
+
+
 def specs(names: List[str]) -> List[Dict[str, Any]]:
     """Tool definitions in the OpenAI/Ollama function format."""
     return [{"type": "function", "function": {"name": n, **TOOL_SPECS[n]}} for n in names if n in TOOL_SPECS]
@@ -108,6 +119,48 @@ def resolve(workspace: Path, rel: Any, allow_root: bool = False) -> Path:
     return full
 
 
+@dataclass
+class Places:
+    """The folders an agent may use: its own, and the shared one when enabled."""
+
+    personal: Path
+    shared: Optional[Path] = None
+
+
+Where = Union[Path, Places]
+
+
+def places(ws: Where) -> Places:
+    return ws if isinstance(ws, Places) else Places(Path(ws))
+
+
+def locate(ws: Where, rel: Any, allow_root: bool = False) -> Tuple[Path, Path, str]:
+    """Resolve a tool path. Returns (root folder, full path, prefix for display).
+
+    With a shared folder, "shared" and "shared/..." point into it; everything
+    else is inside the agent's own folder.
+    """
+    p = places(ws)
+    if p.shared is not None and isinstance(rel, str):
+        norm = rel.strip().replace("\\", "/")
+        while norm.startswith("./"):
+            norm = norm[2:]
+        head, _, tail = norm.partition("/")
+        if head == SHARED_PREFIX:
+            p.shared.mkdir(parents=True, exist_ok=True)
+            if not tail.strip("/") and not allow_root:
+                raise ToolError("Give a file or folder name inside the shared folder, like shared/notes.txt.")
+            return p.shared.resolve(), resolve(p.shared, tail.strip("/"), allow_root=True), SHARED_PREFIX + "/"
+    return p.personal.resolve(), resolve(p.personal, rel, allow_root), ""
+
+
+def _show(root: Path, full: Path, prefix: str) -> str:
+    rel = full.relative_to(root).as_posix()
+    if rel == ".":
+        return prefix.rstrip("/") or "."
+    return prefix + rel
+
+
 def _rel(workspace: Path, p: Path) -> str:
     return p.relative_to(workspace.resolve()).as_posix() or "."
 
@@ -127,17 +180,21 @@ def _require(args: Dict[str, Any], key: str) -> Any:
 # ---------------------------------------------------------------------- tools
 
 
-def list_files(ws: Path, args: Dict[str, Any]) -> str:
-    folder = resolve(ws, args.get("path"), allow_root=True)
+def list_files(ws: Where, args: Dict[str, Any]) -> str:
+    root, folder, prefix = locate(ws, args.get("path"), allow_root=True)
     if not folder.exists():
         raise ToolError(f"{args.get('path')} does not exist.")
     if not folder.is_dir():
         raise ToolError(f"{args.get('path')} is a file, not a folder.")
     entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     entries = [e for e in entries if e.name != ".axis-tmp"]
-    if not entries:
-        return f"{_rel(ws, folder)} is empty."
     lines = []
+    if places(ws).shared is not None and not prefix and folder == root:
+        # The shared folder appears at the top of the agent's own folder.
+        entries = [e for e in entries if e.name != SHARED_PREFIX]
+        lines.append(f"{SHARED_PREFIX}/  (shared with other agents)")
+    if not entries and not lines:
+        return f"{_show(root, folder, prefix)} is empty."
     for e in entries[:500]:
         if e.is_dir():
             lines.append(f"{e.name}/")
@@ -151,8 +208,8 @@ def list_files(ws: Path, args: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def read_file(ws: Path, args: Dict[str, Any]) -> str:
-    path = resolve(ws, _require(args, "path"))
+def read_file(ws: Where, args: Dict[str, Any]) -> str:
+    _, path, _ = locate(ws, _require(args, "path"))
     if not path.is_file():
         raise ToolError(f"{args['path']} is not a file in your folder.")
     total = path.stat().st_size
@@ -169,8 +226,8 @@ def read_file(ws: Path, args: Dict[str, Any]) -> str:
     return text
 
 
-def write_file(ws: Path, args: Dict[str, Any]) -> str:
-    path = resolve(ws, _require(args, "path"))
+def write_file(ws: Where, args: Dict[str, Any]) -> str:
+    root, path, prefix = locate(ws, _require(args, "path"))
     content = _require(args, "content")
     if not isinstance(content, str):
         content = str(content)
@@ -178,19 +235,19 @@ def write_file(ws: Path, args: Dict[str, Any]) -> str:
         raise ToolError(f"{args['path']} is a folder.")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    return f"Wrote {_rel(ws, path)} ({len(content.encode('utf-8'))} bytes)."
+    return f"Wrote {_show(root, path, prefix)} ({len(content.encode('utf-8'))} bytes)."
 
 
-def make_folder(ws: Path, args: Dict[str, Any]) -> str:
-    path = resolve(ws, _require(args, "path"))
+def make_folder(ws: Where, args: Dict[str, Any]) -> str:
+    root, path, prefix = locate(ws, _require(args, "path"))
     if path.is_file():
         raise ToolError(f"{args['path']} is already a file.")
     path.mkdir(parents=True, exist_ok=True)
-    return f"Folder {_rel(ws, path)} is ready."
+    return f"Folder {_show(root, path, prefix)} is ready."
 
 
-def delete_file(ws: Path, args: Dict[str, Any]) -> str:
-    path = resolve(ws, _require(args, "path"))
+def delete_file(ws: Where, args: Dict[str, Any]) -> str:
+    _, path, _ = locate(ws, _require(args, "path"))
     if path.is_symlink() or path.is_file():
         path.unlink()
         return f"Deleted {args['path']}."
@@ -208,7 +265,9 @@ def delete_file(ws: Path, args: Dict[str, Any]) -> str:
 BOOTSTRAP = r'''
 import os, sys
 _code = sys.stdin.read()
-_WS = os.path.normcase(os.path.realpath(os.getcwd()))
+_ROOTS = [os.path.normcase(os.path.realpath(os.getcwd()))]
+if os.environ.get("AXIS_SHARED_DIR"):
+    _ROOTS.append(os.path.normcase(os.path.realpath(os.environ["AXIS_SHARED_DIR"])))
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.getcwd())
 def _inside(p):
@@ -218,7 +277,7 @@ def _inside(p):
         full = os.path.normcase(os.path.realpath(os.fsdecode(p)))
     except Exception:
         return False
-    return full == _WS or full.startswith(_WS.rstrip(os.sep) + os.sep)
+    return any(full == r or full.startswith(r.rstrip(os.sep) + os.sep) for r in _ROOTS)
 _WRITE = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_TRUNC", 0)
 _ONE = {"os.remove", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod", "os.chown", "os.utime", "shutil.rmtree", "os.removexattr", "os.setxattr"}
 _TWO = {"os.rename", "os.link"}
@@ -277,15 +336,20 @@ def python_executable() -> str:
     return sys.executable
 
 
-def run_python(ws: Path, args: Dict[str, Any]) -> str:
+def run_python(where: Where, args: Dict[str, Any]) -> str:
     code = _require(args, "code")
     if not isinstance(code, str) or not code.strip():
         raise ToolError("code must be a non-empty Python program.")
     code = fix_escaped_code(code)
+    p = places(where)
+    ws = p.personal
     ws.mkdir(parents=True, exist_ok=True)
     tmp = ws / ".axis-tmp"
     tmp.mkdir(exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON") and k != SHARED_ENV}
+    if p.shared is not None:
+        p.shared.mkdir(parents=True, exist_ok=True)
+        env[SHARED_ENV] = str(p.shared.resolve())
     env.update({"TMPDIR": str(tmp), "TEMP": str(tmp), "TMP": str(tmp), "MPLCONFIGDIR": str(tmp),
                 "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1", "MPLBACKEND": "Agg"})
     kwargs: Dict[str, Any] = {}
@@ -349,12 +413,28 @@ TOOL_ALIASES = {
     "make_directory": "make_folder", "make_dir": "make_folder",
     "rm": "delete_file", "delete": "delete_file", "remove_file": "delete_file", "remove": "delete_file",
     "delete_folder": "delete_file",
+    "search": "web_search", "search_web": "web_search", "internet_search": "web_search", "google": "web_search",
+    "google_search": "web_search", "bing_search": "web_search", "duckduckgo_search": "web_search", "websearch": "web_search",
+    "fetch": "fetch_page", "fetch_url": "fetch_page", "open_url": "fetch_page", "browse": "fetch_page",
+    "get_url": "fetch_page", "read_url": "fetch_page", "visit": "fetch_page", "read_page": "fetch_page", "get_page": "fetch_page",
+    "wikipedia": "wikipedia_search", "wiki": "wikipedia_search", "search_wikipedia": "wikipedia_search",
+    "wiki_search": "wikipedia_search", "wikipedia_page": "wikipedia_article", "get_wikipedia": "wikipedia_article",
+    "wiki_article": "wikipedia_article", "wikipedia_summary": "wikipedia_article", "read_wikipedia": "wikipedia_article",
+    "get_wikipedia_article": "wikipedia_article", "wikipedia_get": "wikipedia_article",
 }
 ARG_ALIASES = {
     "path": ("path", "filename", "file_name", "file", "file_path", "filepath", "name", "directory", "dir",
              "folder", "folder_path", "folder_name", "dirname", "location"),
     "content": ("content", "contents", "text", "data", "body", "file_content", "value"),
     "code": ("code", "script", "source", "python_code", "program", "python", "source_code", "cmd", "command"),
+    "query": ("query", "q", "search", "search_query", "search_term", "term", "terms", "keywords", "topic", "text"),
+    "url": ("url", "link", "href", "address", "page", "website", "uri"),
+    "title": ("title", "page", "article", "page_title", "topic", "subject", "name", "query"),
+    "max_results": ("max_results", "num_results", "number_of_results", "count", "limit", "n", "results", "top_k", "k"),
+    "max_chars": ("max_chars", "max_length", "max_characters", "chars", "characters", "length", "size"),
+    "start": ("start", "offset", "start_char", "from", "position"),
+    "intro_only": ("intro_only", "summary", "summary_only", "intro", "short"),
+    "lang": ("lang", "language", "wiki_lang"),
 }
 
 
@@ -385,18 +465,32 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
     return name, out
 
 
-HANDLERS: Dict[str, Callable[[Path, Dict[str, Any]], str]] = {
+def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
+    def run(_ws: Where, args: Dict[str, Any]) -> str:
+        try:
+            return web_tools.HANDLERS[name](args)
+        except web_tools.WebError as exc:
+            raise ToolError(str(exc)) from exc
+    return run
+
+
+FILE_TOOLS = ("list_files", "read_file", "write_file", "make_folder", "delete_file")
+HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
     "make_folder": make_folder,
     "delete_file": delete_file,
     "run_python": run_python,
+    **{n: _web(n) for n in web_tools.HANDLERS},
 }
 
 
-def execute(workspace: Path, name: str, args: Any, allowed: List[str]) -> tuple:
-    """Run one tool. Returns (ok, text). Never raises for tool-level problems."""
+def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: Optional[Path] = None) -> tuple:
+    """Run one tool. Returns (ok, text). Never raises for tool-level problems.
+
+    shared is the shared folder when the agent may use it, otherwise None.
+    """
     name, args = normalize_call(name, args, allowed)
     if name not in allowed or name not in HANDLERS:
         return False, f"Unknown tool '{name}'. Available tools: {', '.join(allowed) or 'none'}."
@@ -404,7 +498,7 @@ def execute(workspace: Path, name: str, args: Any, allowed: List[str]) -> tuple:
         return False, "Tool arguments must be a JSON object."
     try:
         workspace.mkdir(parents=True, exist_ok=True)
-        return True, HANDLERS[name](workspace, args)
+        return True, HANDLERS[name](Places(workspace, shared), args)
     except ToolError as exc:
         return False, f"Error: {exc}"
     except OSError as exc:

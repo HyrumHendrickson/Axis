@@ -29,7 +29,8 @@ from typing import Any, Dict, List, Optional
 
 from . import chats as chat_lib
 from . import skills as skill_lib
-from .paths import axis_home
+from . import tools as tool_lib
+from .paths import axis_home, shared_root
 
 DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -265,12 +266,23 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]
         return messages
 
     system = agent.system_prompt
+    names = tool_names(agent)
+    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + ("run_python",))
     chosen = [skill_lib.get(i) for i in agent.skills if skill_lib.exists(i)]
+    # A skill that only changes how file actions work means nothing without them.
+    needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
+    chosen = [s for s in chosen if uses_files or s["id"] not in needs_files]
     if chosen:
         system += "\n\nYou have the following skills. Use them when relevant.\n"
         system += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
-    if tool_names(agent):
+    if uses_files and shared_folder(agent) is not None:
+        system += "\n\n" + skill_lib.SHARED_WORKSPACE_NOTE
+        if "run_python" in names:
+            system += " " + skill_lib.SHARED_PYTHON_NOTE
+    elif uses_files:
         system += "\n\n" + skill_lib.WORKSPACE_NOTE
+    elif names:
+        system += "\n\n" + skill_lib.TOOLS_NOTE
 
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
@@ -292,6 +304,15 @@ def tool_names(agent: Optional[Agent]) -> List[str]:
                 if t not in names:
                     names.append(t)
     return names
+
+
+def shared_folder(agent: Optional[Agent]) -> Optional[Path]:
+    """The shared folder, if this agent may use it (it has the Shared folder skill)."""
+    if agent is None or skill_lib.SHARED_SKILL not in agent.skills:
+        return None
+    root = shared_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def remove_skill_everywhere(skill_id: str) -> None:

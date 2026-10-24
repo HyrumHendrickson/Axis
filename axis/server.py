@@ -13,6 +13,7 @@ Routes:
   GET    /api/agents/<name>/files           every file in the agent's folder (flat list)
   POST   /api/agents/<name>/open-folder     show the folder in Explorer/Finder
   GET    /api/files/<name>?path=dir         one folder of an agent's workspace
+                                            (<name> "_shared" means the folder shared by agents)
   GET    /api/files/<name>/view?path=file   a file prepared for preview
   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
@@ -44,9 +45,10 @@ import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from . import __version__, agents, backend, chats, runner, skills, tools
+from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
@@ -54,6 +56,35 @@ MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
 HIDDEN = {".axis-tmp"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+
+
+# The Files tab's name for the shared folder. It can never clash with an agent,
+# because agent names must start with a letter or number.
+SHARED_NAME = "_shared"
+
+
+class SharedPlace:
+    """Stands in for an agent in the file routes so the shared folder can be browsed."""
+
+    name = SHARED_NAME
+
+    @property
+    def workspace(self) -> Path:
+        return shared_root()
+
+
+Place = Union[agents.Agent, SharedPlace]
+
+
+def place(name: str) -> Place:
+    if name == SHARED_NAME:
+        shared_root().mkdir(parents=True, exist_ok=True)
+        return SharedPlace()
+    return agents.load(name)
+
+
+def _owner(agent: Place) -> str:
+    return "the shared folder" if isinstance(agent, SharedPlace) else f"{agent.name}'s folder"
 
 
 class ClientGone(Exception):
@@ -87,7 +118,7 @@ def _count(folder: Path) -> Optional[int]:
         return None
 
 
-def folder_listing(agent: agents.Agent, rel: str) -> Dict[str, Any]:
+def folder_listing(agent: "Place", rel: str) -> Dict[str, Any]:
     ws = agent.workspace
     ws.mkdir(parents=True, exist_ok=True)
     try:
@@ -95,7 +126,7 @@ def folder_listing(agent: agents.Agent, rel: str) -> Dict[str, Any]:
     except tools.ToolError as exc:
         raise agents.AgentError(str(exc)) from exc
     if not folder.is_dir():
-        raise agents.AgentError(f"Folder '{rel}' does not exist in {agent.name}'s folder.")
+        raise agents.AgentError(f"Folder '{rel}' does not exist in {_owner(agent)}.")
     entries = []
     for child in folder.iterdir():
         if child.name in HIDDEN:
@@ -118,17 +149,17 @@ def folder_listing(agent: agents.Agent, rel: str) -> Dict[str, Any]:
     return {"agent": agent.name, "path": "" if path == "." else path, "workspace": str(ws), "entries": entries}
 
 
-def file_target(agent: agents.Agent, rel: str) -> Path:
+def file_target(agent: "Place", rel: str) -> Path:
     try:
         path = tools.resolve(agent.workspace, rel)
     except tools.ToolError as exc:
         raise agents.AgentError(str(exc)) from exc
     if not path.is_file():
-        raise agents.AgentError(f"File '{rel}' does not exist in {agent.name}'s folder.")
+        raise agents.AgentError(f"File '{rel}' does not exist in {_owner(agent)}.")
     return path
 
 
-def file_preview(agent: agents.Agent, rel: str) -> Dict[str, Any]:
+def file_preview(agent: "Place", rel: str) -> Dict[str, Any]:
     path = file_target(agent, rel)
     st = path.stat()
     info: Dict[str, Any] = {
@@ -159,7 +190,7 @@ def file_preview(agent: agents.Agent, rel: str) -> Dict[str, Any]:
     return {**info, "kind": "text", "text": text, "truncated": truncated}
 
 
-def delete_path(agent: agents.Agent, rel: str) -> str:
+def delete_path(agent: "Place", rel: str) -> str:
     """Delete a file or a whole folder inside the agent's folder (never the folder itself)."""
     try:
         target = tools.resolve(agent.workspace, rel)
@@ -170,11 +201,11 @@ def delete_path(agent: agents.Agent, rel: str) -> str:
     elif target.exists() or target.is_symlink():
         target.unlink()
     else:
-        raise agents.AgentError(f"'{rel}' does not exist in {agent.name}'s folder.")
+        raise agents.AgentError(f"'{rel}' does not exist in {_owner(agent)}.")
     return target.relative_to(agent.workspace.resolve()).as_posix()
 
 
-def make_dir(agent: agents.Agent, rel: str) -> str:
+def make_dir(agent: "Place", rel: str) -> str:
     agent.workspace.mkdir(parents=True, exist_ok=True)
     try:
         target = tools.resolve(agent.workspace, rel)
@@ -323,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"opened": str(agent.workspace)})
 
         elif n >= 3 and parts[1] == "files":
-            agent = agents.load(parts[2])
+            agent = place(parts[2])
             action = parts[3] if n == 4 else ""
             if n == 3 and method == "GET":
                 return self._json(200, folder_listing(agent, param("path")))
@@ -344,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                 except tools.ToolError as exc:
                     raise agents.AgentError(str(exc)) from exc
                 if not target.exists():
-                    raise agents.AgentError(f"'{param('path')}' does not exist in {agent.name}'s folder.")
+                    raise agents.AgentError(f"'{param('path')}' does not exist in {_owner(agent)}.")
                 reveal(target)
                 return self._json(200, {"revealed": str(target)})
 
@@ -421,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
         with path.open("rb") as f:
             shutil.copyfileobj(f, self.wfile, 256 * 1024)
 
-    def _upload(self, agent: agents.Agent, rel_dir: str, name: str) -> Dict[str, Any]:
+    def _upload(self, agent: "Place", rel_dir: str, name: str) -> Dict[str, Any]:
         length = self._length()
         if length > MAX_UPLOAD:
             raise agents.AgentError(f"Files larger than {MAX_UPLOAD // (1024 * 1024)} MB cannot be uploaded.")
@@ -435,7 +466,7 @@ class Handler(BaseHTTPRequestHandler):
         except tools.ToolError as exc:
             raise agents.AgentError(str(exc)) from exc
         if not folder.is_dir():
-            raise agents.AgentError(f"Folder '{rel_dir}' does not exist in {agent.name}'s folder.")
+            raise agents.AgentError(f"Folder '{rel_dir}' does not exist in {_owner(agent)}.")
         stem, dot, ext = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
         target, n = folder / name, 2
         while target.exists():  # never overwrite: report.txt -> report (2).txt
@@ -494,7 +525,8 @@ class Handler(BaseHTTPRequestHandler):
             model = backend.resolve_model(conn, requested)
             emit({"model": model})
             runner.reply(conn, model, messages, emit,
-                         tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None)
+                         tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None,
+                         shared=agents.shared_folder(agent))
             emit({"done": True})
         except ClientGone:
             return

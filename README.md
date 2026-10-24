@@ -6,7 +6,7 @@ Axis is a small app for chatting with a local AI model and with agents you desig
 
 * see whether your model server is running and which models are on,
 * chat with a model directly,
-* make skills, including built-in actions that let agents run Python and create, read and list files,
+* make skills, including built-in actions that let agents run Python, create, read and list files, search the web, and read Wikipedia,
 * create agents with their own system prompt, config (instructions added to every message), and chosen skills, and
 * chat with those agents. Each agent has its own folder, and every file it makes stays there,
 * return to any earlier conversation in Past chats, and
@@ -374,7 +374,7 @@ Click **Skills** in the sidebar to see and manage the skill library. Every agent
 
 ### Built-in actions
 
-These let an agent do things, not just write text. Each one works only inside that agent's own folder.
+These let an agent do things, not just write text. File actions work only inside that agent's own folder (and the shared folder, if the agent has **Shared folder**).
 
 | Skill | The agent can |
 |---|---|
@@ -383,10 +383,19 @@ These let an agent do things, not just write text. Each one works only inside th
 | Read files | Read text files in its folder |
 | Make files | Create or overwrite text files, and make folders |
 | Delete files | Delete files and empty folders |
+| Web search | Search the web (`web_search`) and read the text of a web page (`fetch_page`) |
+| Wikipedia | Find articles (`wikipedia_search`) and read them as plain text (`wikipedia_article`) through the Wikipedia API |
+| Shared folder | Use its file actions in a folder shared by every agent with this skill, as well as its own |
 
 Built-in skills cannot be edited or deleted.
 
 Actions need a model that can call tools. See [Llama models](#llama-models) for which ones work best.
+
+**The agent chooses how much text comes back.** Web search and Wikipedia take `max_results` (1 to 10) and `max_chars` (200 to 20,000), so a large model can ask for a lot of detail while a small model with a short context asks for a little. Long pages and articles end with a note such as `start=3000`; the agent calls again with that value to read the next part. `wikipedia_article` also takes `intro_only` for just the opening summary, and both Wikipedia actions take `lang` (for example `la` for the Latin Wikipedia).
+
+Web search uses DuckDuckGo by default and needs no account. If DuckDuckGo starts limiting requests, point Axis at a [SearXNG](https://docs.searxng.org/) server with `AXIS_SEARCH_URL` (see [Settings](#settings)). `fetch_page` refuses links to your own computer and local network, so an agent cannot use it to reach Axis, your model server, or devices at home.
+
+**Shared folder** adds no actions of its own. It changes what the file actions (and Run Python) an agent already has can reach: paths that start with `shared/` go to `Axis/shared`, and everything else stays in the agent's own folder. Give it to two or more agents and they can leave files and messages for each other, for example `shared/inbox/to-writer.md`. An agent with Shared folder but no file actions cannot do anything with it. In Run Python, the shared folder's path is in `os.environ["AXIS_SHARED_DIR"]`. While the skill is on, a folder named `shared` inside the agent's own folder is hidden from its file actions (the files are not touched, and reappear if the skill is removed).
 
 **Run Python uses your own Python**, the one Axis was installed with, so packages you have installed there (for example `pip install pandas`) are available to agent code.
 
@@ -444,7 +453,7 @@ Chats are stored as `.json` files in `Axis/chats` in your home folder (see [Wher
 
 Click **Files** in the sidebar to look through what your agents have made.
 
-* Pick an agent at the top. Its folder is listed on the left: click a folder to go into it, **Up one folder** or the path above the list to go back.
+* Pick an agent at the top, or **Shared folder** to see the folder agents share. Its folder is listed on the left: click a folder to go into it, **Up one folder** or the path above the list to go back.
 * Click a file to open it on the right. Text and code are shown as-is; Markdown is shown formatted (with **Show source**); CSV files are shown as a table; images are shown as pictures; PDFs open in a viewer; web pages (`.html`) are shown as source with **Preview page** to see them rendered.
 * **Download** saves a copy; **Show in folder** opens Explorer or Finder with the file selected; **Copy text** copies a text file; **Delete** removes it. Axis never runs files you click.
 * **Upload** (or dragging files onto the list) copies files from your computer into the folder you are viewing, so an agent can read or process them. An upload never replaces an existing file: a second `data.csv` is saved as `data (2).csv`. Files up to 512 MB can be uploaded.
@@ -465,12 +474,13 @@ Axis/                       in your home folder
 │       ├── agent.json      the agent's settings
 │       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
+├── shared/                 the folder shared by agents with the Shared folder skill
 └── skills/                 your custom skills, one .json file each
 ```
 
 How Axis keeps files in the agent's folder:
 
-* The file actions refuse any path outside the folder, including `..`, absolute paths such as `C:\` or `/Users`, and links that point outside.
+* The file actions refuse any path outside the folder (other than `shared/...` for agents with Shared folder), including `..`, absolute paths such as `C:\` or `/Users`, and links that point outside.
 * Run Python starts in the folder, and blocks writing, renaming or deleting files anywhere else and starting other programs. Code can still *read* files elsewhere (for example to import installed packages).
 * Renaming an agent moves its folder; deleting an agent deletes its folder and everything in it, along with its saved chats.
 
@@ -521,6 +531,7 @@ Environment variables:
 | `AXIS_PYTHON` | Python used by the Run Python action | The Python Axis was installed with |
 | `AXIS_NUM_CTX` | Context size Axis asks Ollama for, in tokens (0 = Ollama's own default) | 8192 |
 | `AXIS_HISTORY_CHARS` | How much earlier conversation is sent with each message, in characters | 20000 |
+| `AXIS_SEARCH_URL` | A SearXNG server for the Web search skill (its JSON format must be enabled) | DuckDuckGo |
 
 To set one, start Axis like this: `$env:AXIS_NUM_CTX = "16384"; axis` (Windows PowerShell) or `AXIS_NUM_CTX=16384 axis` (Mac).
 

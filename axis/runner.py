@@ -144,8 +144,8 @@ class HideToolBlocks:
 
 
 class Session:
-    def __init__(self, workspace: Path, allowed: List[str], emit):
-        self.workspace, self.allowed, self.emit = workspace, allowed, emit
+    def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None):
+        self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
         self.done: Dict[str, str] = {}  # call signature -> result
         self.repeats = 0
 
@@ -161,7 +161,7 @@ class Session:
         elif not isinstance(args, dict):
             ok, output = False, "Error: the arguments were not valid JSON. Call the tool again with a JSON object."
         else:
-            ok, output = tools.execute(self.workspace, name, args, self.allowed)
+            ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared)
             if ok:
                 self.done[sig] = output
         self.emit({"tool_result": {"id": call_id, "ok": ok, "output": output}})
@@ -175,8 +175,12 @@ def reply(
     emit: Callable[[Dict[str, Any]], None],
     tool_names: Optional[List[str]] = None,
     workspace: Optional[Path] = None,
+    shared: Optional[Path] = None,
 ) -> None:
-    """Produce one reply, running tools as the model asks for them."""
+    """Produce one reply, running tools as the model asks for them.
+
+    shared is the folder shared between agents, or None if this agent may not use it.
+    """
     say = lambda t: emit({"t": t})  # noqa: E731
 
     def complete(*args, **kwargs) -> backend.Turn:
@@ -200,7 +204,7 @@ def reply(
     if text_mode:
         use_text_mode()
     specs = tools.specs(tool_names)
-    session = Session(workspace, tool_names, emit)
+    session = Session(workspace, tool_names, emit, shared=shared)
 
     for step in range(MAX_STEPS):
         emit({"round": step})

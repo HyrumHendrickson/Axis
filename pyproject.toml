@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "axis-agent-manager"
-version = "3.3.0"
+version = "3.4.0"
 description = "A local web app for chatting with agents on a model served by Ollama or llama.cpp"
 readme = "README.md"
 requires-python = ">=3.9"

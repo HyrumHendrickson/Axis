@@ -720,8 +720,20 @@ const STEP_TEXT = {
   write_file: ["Writing", "Wrote"],
   make_folder: ["Making folder", "Made folder"],
   delete_file: ["Deleting", "Deleted"],
+  web_search: ["Searching the web for", "Searched the web for"],
+  fetch_page: ["Reading", "Read"],
+  wikipedia_search: ["Searching Wikipedia for", "Searched Wikipedia for"],
+  wikipedia_article: ["Reading Wikipedia:", "Read Wikipedia:"],
 };
+const SHARED = "_shared";   // the Files tab's name for the folder agents share
+function hasShared(agent) {
+  const a = S.agents.find((x) => x.name === agent);
+  return !!(a && a.skills.includes("shared-folder"));
+}
 function openInFiles(agent, path, isFile) {
+  if (agent !== SHARED && hasShared(agent) && (path === "shared" || path.startsWith("shared/"))) {
+    agent = SHARED; path = path.replace(/^shared\/?/, "");
+  }
   const dir = isFile ? path.split("/").slice(0, -1).join("/") : path;
   S.files = { agent, dir, file: isFile ? path : "" };
   go({ kind: "files" });
@@ -729,7 +741,8 @@ function openInFiles(agent, path, isFile) {
 function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
 function stepLabel(p) {
   const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
-  const target = p.args && typeof p.args.path === "string" && p.args.path ? " " + p.args.path : "";
+  const arg = p.args && ["path", "query", "title", "url"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
+  const target = arg ? " " + (arg.length > 80 ? arg.slice(0, 80) + "\u2026" : arg) : "";
   const state = stepState(p);
   return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
 }
@@ -1052,7 +1065,7 @@ function renderEditor() {
   const custom = pickList(false);
   const skillPicker = h("div", {},
     h("div", { class: "subhead" }, "Actions"),
-    h("p", { class: "hint" }, "Let the agent work with files in its own folder."),
+    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, search the web or read Wikipedia. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
     pickList(true),
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
@@ -1199,7 +1212,9 @@ function parseCsv(text, limit) {
 let filesTimer = null;
 function renderFiles() {
   const names = S.agents.map((a) => a.name);
+  if (names.length) names.push(SHARED);
   if (!names.includes(S.files.agent)) S.files = { agent: names[0] || "", dir: "", file: "" };
+  const label = (n) => n === SHARED ? "Shared folder" : n;
   const f = S.files;
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Files"));
   if (!f.agent) {
@@ -1210,7 +1225,7 @@ function renderFiles() {
     return;
   }
   const pick = h("select", { "aria-label": "Agent", onchange: (e) => { S.files = { agent: e.target.value, dir: "", file: "" }; renderFiles(); } },
-    names.map((n) => { const o = h("option", { value: n }, n); o.selected = n === f.agent; return o; }));
+    names.map((n) => { const o = h("option", { value: n }, label(n)); o.selected = n === f.agent; return o; }));
   const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   bar.append(
     h("label", {}, "Agent", pick),
@@ -1222,7 +1237,7 @@ function renderFiles() {
 
   const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
   const segs = f.dir ? f.dir.split("/") : [];
-  crumbs.append(h("button", { onclick: () => openDir("") }, f.agent));
+  crumbs.append(h("button", { onclick: () => openDir("") }, f.agent === SHARED ? "shared" : f.agent));
   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), h("button", { onclick: () => openDir(segs.slice(0, i + 1).join("/")) }, seg)));
 
   const list = h("div", { class: "fb-list", id: "fb-list", role: "list",
@@ -1304,7 +1319,7 @@ async function loadListing(force) {
       h("small", {}, isDir ? (e.items === null ? "" : `${e.items} item${e.items === 1 ? "" : "s"}`) : `${size(e.size)}  ${when(e.modified)}`)));
   }
   if (!data.entries.length) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
-    "This agent has not made any files yet. Ask it to make something in a chat."));
+    f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat."));
   fill(list, rows);
 }
 function markCurrent() {
@@ -1607,7 +1622,7 @@ function renderSkills() {
         h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
         custom.length ? custom.map(customCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent work with files. Each agent can only reach its own folder."),
+        h("p", { class: "hint" }, "These let an agent act: files, Python, web search and Wikipedia. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder."),
         builtin.map((sk) => h("div", { class: "skill-card" },
           h("h4", {}, sk.name, h("span", { class: "tag" }, "Built in")),
           h("p", {}, sk.description),

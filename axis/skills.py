@@ -1,6 +1,9 @@
 """The skill library shared by all agents.
 
-Built-in skills give an agent actions (tools) that work inside its own folder.
+Built-in skills give an agent actions (tools): working with files in its own
+folder, running Python, searching the web and reading Wikipedia. The Shared
+folder skill adds no tools of its own; it lets the file actions an agent already
+has also reach ~/Axis/shared, which every agent with that skill can use.
 Custom skills are named instructions written by the user; they are stored as
 ~/Axis/skills/<id>.json. Agents choose skills by id.
 """
@@ -19,12 +22,25 @@ from .paths import axis_home
 MAX_TEXT = 20000
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
-WORKSPACE_NOTE = (
-    "You have your own folder for files. All paths are relative to that folder "
-    "(for example: notes/todo.txt). You cannot reach files outside it. "
+TOOLS_NOTE = (
     "Use a tool only when the request needs one; for ordinary conversation, just reply. "
     "After using tools, tell the user what you did and name any files you created."
 )
+WORKSPACE_NOTE = (
+    "You have your own folder for files. All paths are relative to that folder "
+    "(for example: notes/todo.txt). You cannot reach files outside it. " + TOOLS_NOTE
+)
+SHARED_WORKSPACE_NOTE = (
+    "You have your own folder for files, and a shared folder that other agents also use. "
+    "Paths are relative to your own folder (for example: notes/todo.txt). To use the shared folder, "
+    "start the path with shared/ (for example: shared/plan.md; use shared to list it). "
+    "You cannot reach any other files. " + TOOLS_NOTE
+)
+SHARED_PYTHON_NOTE = (
+    "In run_python, your own folder is the working directory and the shared folder's full path is "
+    "os.environ['AXIS_SHARED_DIR']."
+)
+SHARED_SKILL = "shared-folder"
 
 BUILTIN: List[Dict[str, Any]] = [
     {
@@ -63,6 +79,38 @@ BUILTIN: List[Dict[str, Any]] = [
         "description": "Delete files and empty folders in the agent's folder.",
         "instructions": "Use delete_file only when the user asks you to remove something.",
         "tools": ["delete_file"],
+    },
+    {
+        "id": "web-search",
+        "name": "Web search",
+        "description": "Search the web and read web pages. The agent chooses how much text to get back.",
+        "instructions": "Use web_search for current events, facts you are unsure of, or anything after your training. "
+        "Then use fetch_page on the most relevant link to read it. Both take max_chars: ask for only as much "
+        "text as you need (small for a quick fact, larger for detail), and use start to read further into a long "
+        "page. Say which sites your answer came from.",
+        "tools": ["web_search", "fetch_page"],
+    },
+    {
+        "id": "wikipedia",
+        "name": "Wikipedia",
+        "description": "Look up and read Wikipedia articles through the Wikipedia API.",
+        "instructions": "Use wikipedia_search to find the exact article title, then wikipedia_article to read it. "
+        "Set intro_only to true when a summary is enough. Use max_chars to limit how much text comes back and "
+        "start to continue a long article. Mention the article you used.",
+        "tools": ["wikipedia_search", "wikipedia_article"],
+    },
+    {
+        "id": SHARED_SKILL,
+        "name": "Shared folder",
+        "description": "Let the agent's file actions also reach a folder shared by every agent with this skill, "
+        "so agents can pass files and messages to each other.",
+        "instructions": "There is a shared folder that other agents can read and change. Put paths in it under "
+        "shared/ (for example shared/notes.md). Use it to leave files or messages for other agents and to pick "
+        "up theirs. Other agents may change shared files at any time, so read a shared file again before "
+        "relying on it, and do not overwrite another agent's file unless asked. Name messages clearly, "
+        "for example shared/inbox/to-writer.md.",
+        "tools": [],
+        "needs_files": True,
     },
 ]
 BUILTIN_IDS = {s["id"] for s in BUILTIN}

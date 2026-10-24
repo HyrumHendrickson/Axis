@@ -262,7 +262,8 @@ def tool_msg(name, **args):
 class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
-        self.assertEqual(ids, ["run-python", "list-files", "read-files", "write-files", "delete-files"])
+        self.assertEqual(ids, ["run-python", "list-files", "read-files", "write-files", "delete-files",
+                               "web-search", "wikipedia", "shared-folder"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
         self.assertEqual(s["id"], "plain-english")
         self.assertFalse(s["builtin"])
@@ -651,7 +652,7 @@ class TestServer(Base):
         self.assertEqual((st["ready"], st["server_running"]), (False, True))
 
     def test_skill_routes(self):
-        self.assertEqual(len(json.loads(request(self.url + "/api/skills")[1])), 5)
+        self.assertEqual(len(json.loads(request(self.url + "/api/skills")[1])), len(skills.BUILTIN))
         code, text = request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "5-7-5"})
         self.assertEqual(code, 201, text)
         self.assertEqual(request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "x"})[0], 400)
@@ -864,6 +865,19 @@ class TestFileManagement(Base):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
 
+    def test_browse_shared_folder(self):
+        shared = Path(self.home) / "shared"
+        self.base = self.url + "/api/files/_shared"
+        status, body = request(self.base + "?path=")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["agent"], "_shared")
+        self.assertEqual(self.upload("note.txt", b"for everyone")[0], 201)
+        self.assertEqual((shared / "note.txt").read_bytes(), b"for everyone")
+        status, body = request(self.base + "/view?path=missing.txt")
+        self.assertEqual(status, 404)
+        self.assertIn("the shared folder", body)
+        self.assertEqual(request(self.base + "?path=../agents")[0], 400)
+
     def test_upload_never_overwrites(self):
         self.assertEqual(self.upload("data.csv", b"a,b\n1,2\n"), (201, {"path": "data.csv", "size": 8}))
         self.assertEqual(self.upload("data.csv", b"x")[1]["path"], "data (2).csv")
@@ -977,6 +991,145 @@ class TestToolRobustness(Base):
 
 
 # ---------------------------------------------------------------------- cli
+
+
+class TestSharedFolder(Base):
+    def setUp(self):
+        super().setUp()
+        self.a = Path(self.home) / "a"
+        self.b = Path(self.home) / "b"
+        self.shared = Path(self.home) / "shared"
+        for d in (self.a, self.b):
+            d.mkdir()
+        self.all = list(tools.FILE_TOOLS) + ["run_python"]
+
+    def test_shared_paths_need_the_skill(self):
+        ok, out = tools.execute(self.a, "write_file", {"path": "shared/x.txt", "content": "hi"}, self.all)
+        self.assertTrue(ok)  # without the skill, shared/ is just a subfolder of the agent's own folder
+        self.assertTrue((self.a / "shared" / "x.txt").is_file())
+        self.assertFalse(self.shared.exists())
+
+    def test_agents_exchange_files(self):
+        ok, out = tools.execute(self.a, "write_file", {"path": "shared/inbox/b.md", "content": "hello b"}, self.all,
+                                shared=self.shared)
+        self.assertTrue(ok, out)
+        self.assertIn("shared/inbox/b.md", out)
+        self.assertEqual(tools.execute(self.b, "read_file", {"path": "shared/inbox/b.md"}, self.all, shared=self.shared),
+                         (True, "hello b"))
+        ok, listing = tools.execute(self.b, "list_files", {}, self.all, shared=self.shared)
+        self.assertIn("shared/", listing)
+        self.assertIn("inbox/", tools.execute(self.b, "list_files", {"path": "shared"}, self.all, shared=self.shared)[1])
+        # personal files stay personal
+        tools.execute(self.a, "write_file", {"path": "mine.txt", "content": "x"}, self.all, shared=self.shared)
+        self.assertFalse(tools.execute(self.b, "read_file", {"path": "mine.txt"}, self.all, shared=self.shared)[0])
+
+    def test_shared_folder_is_contained(self):
+        for bad in ("shared/../a/secret.txt", "shared/../../x.txt", "shared"):
+            ok, out = tools.execute(self.b, "write_file", {"path": bad, "content": "x"}, self.all, shared=self.shared)
+            self.assertFalse(ok, bad)
+        self.assertFalse(tools.execute(self.b, "delete_file", {"path": "shared"}, self.all, shared=self.shared)[0])
+        self.assertTrue(self.shared.is_dir())
+
+    def test_python_can_write_shared_only_when_enabled(self):
+        code = "import os\nopen(os.path.join(os.environ['AXIS_SHARED_DIR'], 'p.txt'), 'w').write('py')\nprint('ok')"
+        ok, out = tools.execute(self.a, "run_python", {"code": code}, self.all, shared=self.shared)
+        self.assertIn("ok", out)
+        self.assertEqual((self.shared / "p.txt").read_text(), "py")
+        target = str(self.shared / "q.txt")
+        ok, out = tools.execute(self.a, "run_python", {"code": f"open({target!r}, 'w').write('x')"}, self.all)
+        self.assertIn("not allowed", out)
+        self.assertFalse((self.shared / "q.txt").exists())
+
+    def test_prompt_mentions_shared_folder_only_with_file_actions(self):
+        a = agents.create({"name": "talker", "skills": ["shared-folder"]})
+        system = agents.build_messages(a, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertNotIn("shared", system.lower())
+        self.assertIsNone(agents.shared_folder(None))
+        b = agents.create({"name": "filer", "skills": ["write-files", "shared-folder"]})
+        system = agents.build_messages(b, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertIn("shared/", system)
+        self.assertEqual(agents.shared_folder(b), Path(self.home) / "shared")
+        c = agents.create({"name": "searcher", "skills": ["web-search"]})
+        system = agents.build_messages(c, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertNotIn("own folder", system)
+        self.assertEqual(agents.tool_names(c), ["web_search", "fetch_page"])
+
+
+class TestWebTools(Base):
+    DDG_HTML = (
+        '<div class="result"><h2><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&amp;rut=1">'
+        'Example <b>A</b></a></h2><a class="result__snippet" href="#">First <b>snippet</b> text.</a></div>'
+        '<div class="result result--ad"><a class="result__a" href="https://duckduckgo.com/y.js?ad=1">Ad</a></div>'
+        '<div class="result"><a class="result__a" href="https://example.org/b">Example B</a>'
+        '<div class="result__snippet">Second snippet.</div></div>'
+    )
+
+    def run_tool(self, name, **args):
+        return tools.execute(Path(self.home), name, args, list(tools.HANDLERS))
+
+    def test_web_search_parses_and_respects_sizes(self):
+        with mock.patch.object(tools.web_tools, "_http", return_value=(200, "text/html", self.DDG_HTML)):
+            ok, out = self.run_tool("web_search", query="example")
+            self.assertTrue(ok, out)
+            self.assertIn("1. Example A\n   https://example.com/a\n   First snippet text.", out)
+            self.assertIn("2. Example B", out)
+            self.assertNotIn("y.js", out)
+            ok, out = self.run_tool("web_search", query="example", max_results="1")
+            self.assertNotIn("Example B", out)
+            ok, out = self.run_tool("search", q="example", max_chars=200, count=10)  # aliases
+            self.assertTrue(ok, out)
+            self.assertLessEqual(len(out), 400)
+
+    def test_web_search_rate_limited(self):
+        with mock.patch.object(tools.web_tools, "_http", return_value=(202, "text/html", "<p>anomaly</p>")):
+            ok, out = self.run_tool("web_search", query="x")
+        self.assertFalse(ok)
+        self.assertIn("limiting", out)
+
+    def test_searxng(self):
+        data = {"results": [{"title": "S", "url": "https://s.example", "content": "c"}]}
+        with mock.patch.dict(os.environ, {"AXIS_SEARCH_URL": "http://127.0.0.1:9"}), \
+                mock.patch.object(tools.web_tools, "_get_json", return_value=data) as got:
+            ok, out = self.run_tool("web_search", query="q")
+        self.assertIn("https://s.example", out)
+        self.assertEqual(got.call_args[0][0], "http://127.0.0.1:9/search")
+
+    def test_fetch_page_reads_in_pieces(self):
+        html = ("<html><head><title>T</title><style>x{}</style></head><body><script>bad()</script>"
+                "<h1>Head</h1><p>" + "word " * 200 + "</p></body></html>")
+        with mock.patch.object(tools.web_tools, "_http", return_value=(200, "text/html", html)):
+            ok, out = self.run_tool("fetch_page", url="https://example.com", max_chars=300)
+            self.assertTrue(ok, out)
+            self.assertIn("# Head", out)
+            self.assertNotIn("bad()", out)
+            self.assertIn("start=", out)
+            nxt = int(out.rsplit("start=", 1)[1].split()[0])
+            ok, out2 = self.run_tool("fetch_page", url="https://example.com", start=nxt)
+            self.assertIn(f"Showing characters {nxt}-", out2)
+
+    def test_fetch_page_refuses_local_addresses(self):
+        for url in ("http://127.0.0.1:8765/api/agents", "http://localhost/", "file:///etc/passwd", "http://10.0.0.1/"):
+            ok, out = self.run_tool("fetch_page", url=url)
+            self.assertFalse(ok, url)
+
+    def test_wikipedia(self):
+        search = {"query": {"search": [{"title": "Cicero", "snippet": '<span class="searchmatch">Cicero</span> was', "wordcount": 9000}]}}
+        article = {"query": {"pages": [{"title": "Cicero", "fullurl": "https://en.wikipedia.org/wiki/Cicero",
+                                        "extract": "Marcus Tullius Cicero was a Roman statesman. " * 100}]}}
+        with mock.patch.object(tools.web_tools, "_get_json", return_value=search) as got:
+            ok, out = self.run_tool("wikipedia_search", query="Cicero", max_results=3, lang="la")
+        self.assertIn("1. Cicero  (9000 words)\n   Cicero was", out)
+        self.assertEqual(got.call_args[0][0], "https://la.wikipedia.org/w/api.php")
+        self.assertEqual(got.call_args[0][1]["srlimit"], 3)
+        with mock.patch.object(tools.web_tools, "_get_json", return_value=article) as got:
+            ok, out = self.run_tool("wikipedia_article", title="Cicero", intro_only="true", max_chars=500)
+        self.assertTrue(ok, out)
+        self.assertEqual(got.call_args[0][1]["exintro"], 1)
+        self.assertIn("https://en.wikipedia.org/wiki/Cicero", out)
+        self.assertIn("more characters", out)
+        with mock.patch.object(tools.web_tools, "_get_json", return_value={"query": {"pages": [{"title": "Nope", "missing": True}]}}):
+            self.assertIn("no Wikipedia article", self.run_tool("wikipedia_article", title="Nope")[1])
+        self.assertFalse(self.run_tool("wikipedia_search", query="x", lang="en.evil.com/")[0])
 
 
 class TestCli(Base):
