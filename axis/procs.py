@@ -153,18 +153,24 @@ def _kill_pid(pid: int, timeout: float = STOP_TIMEOUT) -> None:
             pass
         return
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)  # Axis starts each program in its own session (group id = pid)
     except OSError:
-        return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not _pid_alive(pid):
             return
         time.sleep(0.1)
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)
     except OSError:
-        pass
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 def port_free(port: int) -> bool:
@@ -363,16 +369,17 @@ def stop(key: str, timeout: float = STOP_TIMEOUT) -> bool:
     if m.proc is not None:
         if m.proc.poll() is None:
             try:
-                m.proc.terminate()
+                _terminate_tree(m.proc)
                 m.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                m.proc.kill()
+                _kill_tree(m.proc)
                 try:
                     m.proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
             except OSError:
                 pass
+        _reap_group(m.proc)
         _close(m)
     elif m.pid:
         # Taken over from an earlier Axis. Only end it if it still answers on its
@@ -380,6 +387,54 @@ def stop(key: str, timeout: float = STOP_TIMEOUT) -> bool:
         if http_status(m.url) is not None:
             _kill_pid(m.pid, timeout)
     return True
+
+
+def _terminate_tree(proc: subprocess.Popen) -> None:
+    """Ask a program and everything it started to stop.
+
+    `ollama serve` runs each model in a child process, and so may other servers; ending only
+    the parent can leave those running and holding memory.
+    """
+    if os.name == "nt":
+        _taskkill(proc.pid)
+        if proc.poll() is None:
+            proc.terminate()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)  # started with start_new_session, so its group id is its pid
+    except OSError:
+        proc.terminate()
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    if os.name == "nt":
+        _taskkill(proc.pid)
+        if proc.poll() is None:
+            proc.kill()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+
+
+def _reap_group(proc: subprocess.Popen) -> None:
+    """End anything the program started that outlived it (POSIX; Windows uses taskkill /T above)."""
+    if os.name == "nt":
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass  # the group is already empty
+
+
+def _taskkill(pid: int) -> None:
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _close(m: Managed) -> None:

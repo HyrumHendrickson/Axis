@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +31,31 @@ NUM_CTX = int(os.environ.get("AXIS_NUM_CTX", "8192"))
 
 # Local servers should never be reached through a system HTTP proxy.
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# Models Axis asked Ollama to keep loaded (keep_alive -1), as (server url, model name).
+# Ollama never unloads these on its own, so Axis unloads them when it quits; otherwise they
+# stay in memory (and in `ollama ps`) whenever Ollama was started outside Axis.
+_PINNED: set = set()
+_PINNED_LOCK = threading.Lock()
+
+
+def pin_ollama(url: str, model: str) -> None:
+    with _PINNED_LOCK:
+        _PINNED.add((url.rstrip("/"), model))
+
+
+def unpin_ollama(url: str, model: str) -> None:
+    with _PINNED_LOCK:
+        _PINNED.discard((url.rstrip("/"), model))
+
+
+def take_pinned_ollama() -> List[tuple]:
+    """Every model Axis pinned in Ollama, forgetting them (called once when Axis quits)."""
+    with _PINNED_LOCK:
+        out = sorted(_PINNED)
+        _PINNED.clear()
+    return out
+
 
 START_HELP = (
     "Start a model on the Models page, or from a terminal:\n"
@@ -299,6 +325,7 @@ def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional
         body["options"] = options
     if tools:
         body["tools"] = tools
+    pin_ollama(backend.url, model)
     with _open(backend.url + "/api/chat", body, timeout=GENERATE_TIMEOUT) as resp:
         for raw in resp:
             line = raw.decode("utf-8", errors="replace").strip()

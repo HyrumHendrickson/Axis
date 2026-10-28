@@ -377,11 +377,13 @@ def ollama_load(url: str, name: str, job: jobs.Job) -> Dict[str, Any]:
     body: Dict[str, Any] = {"model": name, "keep_alive": -1, "stream": False}
     if backend.NUM_CTX > 0:
         body["options"] = {"num_ctx": backend.NUM_CTX}  # load at Axis's size, so the first chat does not reload it
+    backend.pin_ollama(url, name)
     _ollama_call(url, "/api/generate", body, timeout=START_TIMEOUT)
     return {"model": name}
 
 
 def ollama_unload(url: str, name: str, job: Optional[jobs.Job] = None) -> Dict[str, Any]:
+    backend.unpin_ollama(url, name)
     if not ollama_version(url):
         return {"model": name}  # Ollama is not running, so nothing is loaded
     if job:
@@ -1065,7 +1067,19 @@ def auto_install_engines() -> List[jobs.Job]:
 
 
 def shutdown() -> None:
-    """Stop every program Axis started (called when Axis exits)."""
+    """Stop every program Axis started (called when Axis exits).
+
+    Models Axis loaded into Ollama are unloaded first. Axis loads them with keep_alive -1,
+    so when Ollama runs on its own (desktop app, system service) they would otherwise stay
+    in memory after Axis quits. Then llama-server, sd-server and any `ollama serve` that Axis
+    started are stopped, together with the programs they started.
+    """
+    for url, name in backend.take_pinned_ollama():
+        try:
+            if ollama_version(url):
+                _ollama_call(url, "/api/generate", {"model": name, "keep_alive": 0, "stream": False}, timeout=15)
+        except Exception:
+            pass  # Ollama is gone or busy; it frees the memory when it stops
     procs.stop_all()
 
 

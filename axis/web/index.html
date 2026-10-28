@@ -90,6 +90,8 @@ a.btn { display: inline-block; text-decoration: none; color: var(--ink); line-he
 .bar label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
 select { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 8px; max-width: 240px; }
 .menu-btn { display: none; }
+.bar .quit-btn { margin-left: auto; }
+.bar .quit-btn:hover { color: var(--bad); border-color: var(--bad); }
 .note { padding: 8px 24px; font-size: 13px; color: var(--warn); background: var(--surface); border-bottom: 1px solid var(--line); }
 
 .thread { flex: 1; overflow-y: auto; padding: 24px; }
@@ -627,8 +629,6 @@ function renderNav() {
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
           (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name }), !!S.streams[a.name]))
       : h("p", { class: "nav-empty" }, "No agents yet."),
-    h("h2", {}, "Axis"),
-    item("Quit Axis", "Stop Axis and the models it started", false, quitAxis),
   );
 }
 
@@ -638,8 +638,19 @@ async function quitAxis() {
                     : "Quit Axis? Models that Axis started will be stopped.")) return;
   try { await api("/api/quit", { method: "POST" }); } catch (e) { toast(e.message); return; }
   S.status = { ready: false, axisDown: true, message: "You quit Axis.", models: [] };
+  // Axis's own window (browser app mode) can close itself; an ordinary tab cannot, so it shows the stopped page.
+  window.close();
   renderStatus(); go({ kind: "chat", agent: DIRECT });
 }
+
+// Quit sits at the right end of the top bar of every page, not in the sidebar.
+function quitButton() {
+  return h("button", { class: "btn small quit-btn", title: "Stop Axis and the models it started", onclick: quitAxis }, "Quit Axis");
+}
+new MutationObserver(() => {
+  const bar = $("main").querySelector(":scope > .bar");
+  if (bar && !bar.querySelector(".quit-btn") && !(S.status && S.status.axisDown)) bar.append(quitButton());
+}).observe($("main"), { childList: true });
 
 /* ------------------------------------------------------------------ chat */
 function matchModel(want, models) {
