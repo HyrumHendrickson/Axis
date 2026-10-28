@@ -1407,6 +1407,39 @@ class TestShortcut(Base):
         self.assertFalse(t.is_alive())
         srv.server_close()
 
+    def test_axis_quit_stops_every_copy(self):
+        from axis import instances
+        servers = []
+        for _ in range(2):
+            srv = server.make_server(0, None)
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            port = srv.server_address[1]
+            rec = instances._folder() / f"{os.getpid()}-{port}.json"   # one process here, so name by port too
+            rec.parent.mkdir(parents=True, exist_ok=True)
+            rec.write_text(json.dumps({"pid": os.getpid(), "port": port}), encoding="utf-8")
+            servers.append((srv, t, rec))
+        # Both records name this test process, so the pid check passes for both.
+        self.assertEqual(len(instances.find([])), 2)
+        with mock.patch.object(cli.manager, "shutdown", return_value=["m:1b"]) as stop, \
+                redirect_stdout(io.StringIO()) as out:
+            code = cli.main(["quit", "--timeout", "10"])
+        self.assertEqual(code, 0)
+        for srv, t, _ in servers:
+            t.join(10)
+            self.assertFalse(t.is_alive())
+            srv.server_close()
+        stop.assert_called_once()
+        self.assertIn("Stopped 2 copies of Axis", out.getvalue())
+        self.assertIn("Unloaded from Ollama: m:1b", out.getvalue())
+
+    def test_axis_quit_with_nothing_running(self):
+        with mock.patch.object(cli.manager, "shutdown", return_value=[]), \
+                mock.patch.object(cli.instances, "ping", return_value=None), \
+                redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["quit"]), 0)
+        self.assertIn("No Axis was running", out.getvalue())
+
     def test_quit_refuses_other_sites(self):
         url = self.axis_server(None)
         status, _ = request(url + "/api/quit", "POST", {}, {"Origin": "http://evil.example"})
@@ -1550,7 +1583,7 @@ class TestCloseWithWindow(Base):
         order = []
         real_shutdown = srv.shutdown
         try:
-            with mock.patch.object(cli.manager, "shutdown", side_effect=lambda: order.append("models")), \
+            with mock.patch.object(cli.manager, "shutdown", side_effect=lambda *a, **k: order.append("models")), \
                     mock.patch.object(srv, "shutdown", side_effect=lambda: (order.append("axis"), real_shutdown())), \
                     redirect_stdout(io.StringIO()) as out:
                 request(srv.url + "/api/page?id=w", "POST", {})

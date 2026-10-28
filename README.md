@@ -288,7 +288,7 @@ The first time you run `axis` (or `axis setup`), Axis adds itself to your apps, 
 | macOS | `~/Applications/Axis.app`, so it shows in Launchpad and Spotlight; drag it to the Dock to keep it there |
 | Linux | Your desktop's app menu (`~/.local/share/applications/axis.desktop`) |
 
-Opening the app starts Axis in the background and opens the Axis window; no terminal window is shown. Close the window to stop Axis, or use **Quit Axis** at the bottom of the sidebar (needed when Axis fell back to a browser tab). Its output goes to `axis.log` in your data folder. The `axis` command still works, and both open the same Axis.
+Opening the app starts Axis in the background and opens the Axis window; no terminal window is shown. Close the window to stop Axis, or use **Quit Axis** at the top right of the page (needed when Axis fell back to a browser tab). Its output goes to `axis.log` in your data folder. The `axis` command still works, and both open the same Axis.
 
 Run `axis shortcut` to make the app again (for example after deleting it), `axis shortcut --remove` to remove it (Axis will not add it back), and `axis shortcut --no-desktop` on Windows to skip the desktop shortcut. `axis uninstall` removes it. Set `AXIS_NO_SHORTCUT=1` to stop Axis from adding it on the first run.
 
@@ -307,11 +307,12 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | `axis` | Start Axis and open it in its own window |
 | `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
-| `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. |
+| `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. `--check` only reports whether a newer version is available. |
+| `axis quit` | Stop every running copy of Axis and every model: each model loaded in Ollama is unloaded (Ollama itself keeps running), and llama-server and sd-server are stopped. |
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
 
-When the page opens, Axis checks GitHub quietly for a newer version. The badge at the top of the sidebar shows **Up to date** (green) or **Out of date**; click **Out of date**, then **Update now**, to install the new version from the page. Restart Axis afterwards (Ctrl+C, then `axis`) and reload the page. The check needs no account, sends nothing about you, and shows nothing when you are offline. Set `AXIS_NO_UPDATE_CHECK=1` to turn it off.
+When the page opens, and every half hour after, Axis checks GitHub for a newer version. It compares both the version number and the installed files with the newest commit on `main`, so a change pushed without raising the version is found too (when GitHub's API limit of 60 requests an hour is reached, only the version is compared). The badge at the top of the sidebar shows **Up to date** (green), **Out of date**, or **Update check failed** with the reason and a **Check again** button; click **Out of date**, then **Update now**, to install the new version from the page. Restart Axis afterwards (Ctrl+C, then `axis`) and reload the page. The check needs no account and sends nothing about you. Set `AXIS_NO_UPDATE_CHECK=1` to turn it off.
 
 The version number is kept in one place, `axis/VERSION`. To release a new version, change that file and push to `main`.
 
@@ -640,7 +641,8 @@ Project layout:
 
 ```
 axis/
-  cli.py          the `axis`, `axis update`, `axis shortcut`, and `axis uninstall` commands
+  cli.py          the `axis`, `axis update`, `axis quit`, `axis shortcut`, and `axis uninstall` commands
+  instances.py    running copies of Axis, so `axis quit` can stop them all
   shortcut.py     the Start menu / Applications / app menu launcher
   icons/          the app icon for Windows (.ico), macOS (.icns), and Linux (.png)
   server.py       local web server and JSON API

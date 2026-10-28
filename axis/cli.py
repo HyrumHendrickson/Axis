@@ -5,6 +5,7 @@
     axis update       download the latest Axis from GitHub and install it
     axis uninstall    remove the Axis program (optionally your data too)
     axis shortcut     add Axis to the Start menu / Applications / app menu (or --remove it)
+    axis quit         stop every running Axis and unload every model (Ollama itself keeps running)
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, appwindow, engines, jobs, manager, server, shortcut, tools, updates
+from . import __version__, appwindow, engines, instances, jobs, manager, server, shortcut, tools, updates
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
@@ -85,16 +86,19 @@ def cmd_serve(args) -> int:
             print("First start: installing " + " and ".join(j.label.split(" ", 1)[1] for j in started)
                   + " in the background. Progress is on the Models page.")
     _stop_on_terminate()
+    record = instances.register(httpd.server_address[1])
     if not args.no_browser:
         threading.Timer(0.5, _open_window, args=(httpd, args.tab)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping the models Axis started...")
+        print("\nStopping the models...")
         print("Axis stopped.")
     finally:
-        manager.shutdown()  # llama-server, sd-server and ollama serve, when Axis started them
+        # Unload every Ollama model; stop llama-server, sd-server and ollama serve when Axis started them.
+        manager.shutdown(httpd.model_url)
         httpd.server_close()
+        instances.unregister(record)
     return 0
 
 
@@ -119,8 +123,8 @@ def _watch_window(httpd, grace: float = WINDOW_GRACE, stale: float = WINDOW_STAL
             time.sleep(every)
             if httpd.pages.all_closed(time.monotonic(), stale, grace):
                 break
-        print("The Axis window was closed. Stopping the models Axis started...")
-        manager.shutdown()
+        print("The Axis window was closed. Stopping the models...")
+        manager.shutdown(httpd.model_url)
         print("Axis stopped.")
         httpd.shutdown()  # serve_forever returns and cmd_serve finishes
 
@@ -206,10 +210,35 @@ def cmd_shortcut(args) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------- quit
+
+
+def cmd_quit(args) -> int:
+    """Stop every running Axis, then make sure no model is left running or loaded."""
+    ports = list(range(DEFAULT_PORT, DEFAULT_PORT + 20))  # where make_server looks for a free port
+    if args.port and args.port not in ports:
+        ports.append(args.port)
+    stopped = instances.quit_all(ports, timeout=args.timeout)
+    # Anything an Axis left behind (one that crashed, or did not finish stopping): llama-server and
+    # sd-server it started, and every model loaded in Ollama. Ollama itself is left running.
+    from . import procs
+    leftovers = [m.key for m in procs.running()]
+    unloaded = manager.shutdown(args.url)
+    print(("Stopped " + (f"{stopped} copies of Axis" if stopped != 1 else "1 copy of Axis"))
+          if stopped else "No Axis was running.")
+    if leftovers:
+        print(f"Stopped {len(leftovers)} model server(s) left running: " + ", ".join(leftovers))
+    if unloaded:
+        print("Unloaded from Ollama: " + ", ".join(unloaded))
+    return 0
+
+
 # --------------------------------------------------------------------- update
 
 
 def cmd_update(args) -> int:
+    if args.check:
+        return _check_update()
     source = args.source or REPO_ZIP
     print(f"Updating Axis {__version__} from {source}")
     result = subprocess.run(updates.pip_command(source))
@@ -223,6 +252,29 @@ def cmd_update(args) -> int:
     print(f"\nAxis updated: {__version__} -> {new}.")
     print("If Axis is open in another window, stop it with Ctrl+C and run axis again.")
     return 0
+
+
+def _check_update() -> int:
+    if updates.disabled():
+        print("The update check is turned off (AXIS_NO_UPDATE_CHECK).")
+        return 0
+    updates.check(force=True)
+    deadline = time.time() + 30
+    while updates.state()["status"] == "checking" and time.time() < deadline:
+        time.sleep(0.2)
+    st = updates.state()
+    if st["status"] == "outdated":
+        what = f"Axis {st['latest']} is available (you have {st['current']})"
+        if st.get("changed") and not updates.is_newer(st["latest"] or "", st["current"]):
+            what = f"A newer build of Axis {st['current']} is on GitHub ({st['changed']} file(s) differ)"
+        print(what + ". Run `axis update` to install it.")
+        return 0
+    if st["status"] == "current":
+        print(f"Axis {st['current']} is up to date." + ("" if st.get("compared") else
+              " (Only the version number was compared; GitHub did not answer the file check.)"))
+        return 0
+    print(f"Could not check for updates: {st.get('error') or 'no answer from GitHub'}", file=sys.stderr)
+    return 1
 
 
 # ------------------------------------------------------------------ uninstall
@@ -363,12 +415,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     u = sub.add_parser("update", help="install the latest Axis from GitHub")
     u.add_argument("--source", help="install from this URL, ZIP file or folder instead of GitHub")
+    u.add_argument("--check", action="store_true", help="only check whether a newer Axis is on GitHub")
     u.set_defaults(func=cmd_update)
 
     sc = sub.add_parser("shortcut", help="add Axis to the Start menu, Applications or app menu")
     sc.add_argument("--remove", action="store_true", help="remove the shortcut instead")
     sc.add_argument("--no-desktop", action="store_true", help="Windows: do not also put a shortcut on the desktop")
     sc.set_defaults(func=cmd_shortcut)
+
+    q = sub.add_parser("quit", help="stop every running Axis and unload every model")
+    q.add_argument("--timeout", type=float, default=45.0,
+                   help="seconds to wait for each Axis to stop before ending it (default 45)")
+    q.set_defaults(func=cmd_quit)
 
     x = sub.add_parser("uninstall", help="remove Axis from this computer")
     x.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation (keeps your data)")

@@ -27,8 +27,12 @@ class UpdateTests(unittest.TestCase):
         updates._state.update(status="idle", latest=None, error="", installed=None, log="", checked_at=0.0)
         self.env = mock.patch.dict("os.environ", {"AXIS_NO_UPDATE_CHECK": ""})
         self.env.start()
+        # No network: GitHub's file list is unavailable unless a test provides one.
+        self.tree = mock.patch.object(updates, "fetch_tree", side_effect=OSError("offline"))
+        self.tree.start()
 
     def tearDown(self):
+        self.tree.stop()
         self.env.stop()
         updates._state.clear()
         updates._state.update(self._saved)
@@ -57,6 +61,49 @@ class UpdateTests(unittest.TestCase):
 
     def test_up_to_date(self):
         self.assertEqual(self._check_with(return_value=axis.__version__)["status"], "current")
+
+    def test_blob_hash_matches_git(self):
+        self.assertEqual(updates.blob_hash(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")
+
+    def _tree(self, changed=False):
+        files = {}
+        for rel in ("VERSION", "cli.py"):
+            data = (updates.PACKAGE_DIR / rel).read_bytes()
+            files[rel] = updates.blob_hash(data + (b"#" if changed and rel == "cli.py" else b""))
+        files["not_packaged.txt"] = "0" * 40   # missing locally: ignored
+        return "abc1234def", files
+
+    def test_same_version_with_changed_files_is_outdated(self):
+        self.tree.stop()
+        with mock.patch.object(updates, "fetch_tree", return_value=self._tree(changed=True)):
+            st = self._check_with(return_value=axis.__version__)
+        self.tree.start()
+        self.assertEqual((st["status"], st["changed"], st["compared"]), ("outdated", 1, True))
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            updates.start_update()
+            self.assertTrue(wait_for(lambda: updates._state["status"] in ("updated", "failed")))
+        self.assertEqual(run.call_args_list[0].args[0][-1], updates.COMMIT_ZIP.format(commit="abc1234def"))
+
+    def test_same_files_is_current(self):
+        self.tree.stop()
+        with mock.patch.object(updates, "fetch_tree", return_value=self._tree()):
+            st = self._check_with(return_value=axis.__version__)
+        self.tree.start()
+        self.assertEqual((st["status"], st["changed"], st["compared"]), ("current", 0, True))
+
+    def test_local_copy_ahead_is_not_outdated(self):
+        self.tree.stop()
+        with mock.patch.object(updates, "fetch_tree", return_value=self._tree(changed=True)):
+            st = self._check_with(return_value="0.0.1")
+        self.tree.start()
+        self.assertEqual(st["status"], "current")
+
+    def test_failed_check_can_be_retried(self):
+        self.assertEqual(self._check_with(side_effect=OSError("offline"))["status"], "unknown")
+        self.assertEqual(self._check_with(return_value=axis.__version__)["status"], "unknown")  # recent: not retried
+        with mock.patch.object(updates, "fetch_latest", return_value=axis.__version__):
+            updates.check(force=True)
+            self.assertTrue(wait_for(lambda: updates._state["status"] == "current"))
 
     def test_offline_is_silent(self):
         self.assertEqual(self._check_with(side_effect=OSError("offline"))["status"], "unknown")

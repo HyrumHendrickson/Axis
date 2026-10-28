@@ -50,6 +50,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .upd.warn { background: var(--warn); color: var(--accent-ink); cursor: pointer; }
 .upd.bad { background: var(--bad); color: var(--accent-ink); cursor: pointer; }
 .upd.busy { cursor: pointer; }
+button.upd { cursor: pointer; }
 button.upd:hover { filter: brightness(1.12); }
 .upd-pop { position: absolute; top: 70px; left: 12px; right: 12px; z-index: 50; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 13px; }
 .upd-pop h3 { margin: 0 0 6px; font-size: 14px; }
@@ -90,7 +91,9 @@ a.btn { display: inline-block; text-decoration: none; color: var(--ink); line-he
 .bar label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
 select { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 8px; max-width: 240px; }
 .menu-btn { display: none; }
-.bar .quit-btn { margin-left: auto; }
+/* Quit is pinned to the top-right corner of every page's top bar, even when the bar wraps onto more lines. */
+.bar.has-quit { position: relative; padding-right: 120px; }
+.bar .quit-btn { position: absolute; top: 13px; right: 24px; }
 .bar .quit-btn:hover { color: var(--bad); border-color: var(--bad); }
 .note { padding: 8px 24px; font-size: 13px; color: var(--warn); background: var(--surface); border-bottom: 1px solid var(--line); }
 
@@ -333,6 +336,8 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
   .app.menu-open .side { transform: none; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
   .menu-btn { display: inline-block; }
   .bar, .thread, .composer, .editor { padding-left: 14px; padding-right: 14px; }
+  .bar.has-quit { padding-right: 110px; }
+  .bar .quit-btn { right: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
@@ -635,7 +640,7 @@ function renderNav() {
 async function quitAxis() {
   const busy = Object.keys(S.streams).length > 0 || !!S.imageJob;
   if (!confirm(busy ? "A reply or picture is still being made. Quit Axis anyway?"
-                    : "Quit Axis? Models that Axis started will be stopped.")) return;
+                    : "Quit Axis? Every running model will be stopped.")) return;
   try { await api("/api/quit", { method: "POST" }); } catch (e) { toast(e.message); return; }
   S.status = { ready: false, axisDown: true, message: "You quit Axis.", models: [] };
   // Axis's own window (browser app mode) can close itself; an ordinary tab cannot, so it shows the stopped page.
@@ -645,11 +650,14 @@ async function quitAxis() {
 
 // Quit sits at the right end of the top bar of every page, not in the sidebar.
 function quitButton() {
-  return h("button", { class: "btn small quit-btn", title: "Stop Axis and the models it started", onclick: quitAxis }, "Quit Axis");
+  return h("button", { class: "btn small quit-btn", title: "Stop Axis and every running model", onclick: quitAxis }, "Quit Axis");
 }
 new MutationObserver(() => {
   const bar = $("main").querySelector(":scope > .bar");
-  if (bar && !bar.querySelector(".quit-btn") && !(S.status && S.status.axisDown)) bar.append(quitButton());
+  if (bar && !bar.querySelector(".quit-btn") && !(S.status && S.status.axisDown)) {
+    bar.classList.add("has-quit");
+    bar.append(quitButton());
+  }
 }).observe($("main"), { childList: true });
 
 /* ------------------------------------------------------------------ chat */
@@ -2514,6 +2522,13 @@ async function refreshUpdate() {
   const st = S.update && S.update.status;
   if (st === "checking" || st === "updating") updTimer = setTimeout(refreshUpdate, 1500);
 }
+async function recheckUpdate() {
+  try { S.update = await api("/api/update/check", { method: "POST" }); } catch (e) { toast(e.message); return; }
+  renderUpdate();
+  clearTimeout(updTimer);
+  updTimer = setTimeout(refreshUpdate, 1500);
+}
+setInterval(refreshUpdate, 30 * 60 * 1000);   // a long-running Axis looks for updates again
 async function startUpdate() {
   try { S.update = await api("/api/update", { method: "POST" }); } catch (e) { toast(e.message); return; }
   renderUpdate();
@@ -2527,10 +2542,12 @@ function renderUpdate() {
     updating: ["busy", "Updating\u2026", true],
     updated:  ["ok", "Restart Axis", true],
     failed:   ["bad", "Update failed", true],
+    unknown:  ["", "Update check failed", true],
   }[st];
-  if (!badge) { fill($("upd")); fill($("upd-pop")); return; }   // checking, unknown, off: show nothing
+  if (!badge) { fill($("upd")); fill($("upd-pop")); return; }   // checking or turned off: show nothing
   const [tone, label, clickable] = badge;
-  const title = st === "current" ? `Axis ${u.current} is the newest version` : null;
+  const title = st === "current" ? `Axis ${u.current} is the newest version`
+    + (u.compared ? "" : " (version number checked; GitHub did not answer the file check)") : null;
   fill($("upd"), clickable
     ? h("button", { class: "upd " + tone, "aria-expanded": updOpen ? "true" : "false",
         onclick: (e) => { e.stopPropagation(); updOpen = !updOpen; renderUpdate(); } }, label)
@@ -2538,9 +2555,13 @@ function renderUpdate() {
   if (!clickable || !updOpen) { fill($("upd-pop")); return; }
   const close = h("button", { class: "btn small", onclick: () => { updOpen = false; renderUpdate(); } }, "Close");
   let body;
+  const sameVersion = u.latest === u.current;
   if (st === "outdated") body = [
-    h("h3", {}, `Axis ${u.latest} is available`),
-    h("p", {}, `You have ${u.current}. Updating replaces the program only; your agents, skills, chats and files are kept.`),
+    h("h3", {}, sameVersion ? `A newer build of Axis ${u.current} is available` : `Axis ${u.latest} is available`),
+    h("p", {}, (sameVersion
+        ? `${u.changed} file${u.changed === 1 ? "" : "s"} changed on GitHub` + (u.commit ? ` (commit ${u.commit.slice(0, 7)})` : "") + ". "
+        : `You have ${u.current}. `)
+      + "Updating replaces the program only; your agents, skills, chats and files are kept."),
     h("div", { class: "row" }, close, h("button", { class: "btn small primary", onclick: startUpdate }, "Update now"))];
   else if (st === "updating") body = [
     h("h3", {}, "Updating Axis\u2026"),
@@ -2550,6 +2571,11 @@ function renderUpdate() {
     h("h3", {}, `Axis ${u.installed || u.latest || ""} is installed`.trim()),
     h("p", {}, "Restart Axis to use it: press Ctrl+C in the window running axis, run axis again, then reload this page."),
     h("div", { class: "row" }, close)];
+  else if (st === "unknown") body = [
+    h("h3", {}, "Axis could not check for updates"),
+    h("p", {}, u.error || "GitHub did not answer."),
+    h("p", {}, "You can update from a terminal at any time: ", h("code", {}, u.command)),
+    h("div", { class: "row" }, close, h("button", { class: "btn small primary", onclick: recheckUpdate }, "Check again"))];
   else body = [
     h("h3", {}, "The update did not install"),
     h("p", {}, u.error || "pip reported an error."),

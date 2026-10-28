@@ -446,6 +446,13 @@ class TestDownloads(Base):
 
 
 class TestOllama(Base):
+    def test_shutdown_unloads_every_model(self):
+        fake = self.ollama(installed=["a:1b", "b:1b"], loaded=["a:1b", "b:1b"])  # b was not loaded by Axis
+        unloaded = manager.shutdown(fake.url)
+        self.assertEqual(sorted(unloaded), ["a:1b", "b:1b"])
+        self.assertEqual(fake.loaded, [])
+        self.assertTrue(manager.ollama_version(fake.url))      # Ollama itself keeps running
+
     def test_install_start_stop_delete(self):
         fake = self.ollama(installed=["llama3.2:3b"])
         url = self.axis(fake.url)

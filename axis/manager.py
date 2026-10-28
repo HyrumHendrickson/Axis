@@ -1066,21 +1066,40 @@ def auto_install_engines() -> List[jobs.Job]:
     return engines.auto_install(ENGINE_FINDERS)
 
 
-def shutdown() -> None:
-    """Stop every program Axis started (called when Axis exits).
-
-    Models Axis loaded into Ollama are unloaded first. Axis loads them with keep_alive -1,
-    so when Ollama runs on its own (desktop app, system service) they would otherwise stay
-    in memory after Axis quits. Then llama-server, sd-server and any `ollama serve` that Axis
-    started are stopped, together with the programs they started.
-    """
-    for url, name in backend.take_pinned_ollama():
+def unload_all_ollama(urls: List[str]) -> List[str]:
+    """Unload every model loaded in Ollama at these addresses. Ollama itself keeps running."""
+    done = []
+    for url in dict.fromkeys(u.rstrip("/") for u in urls if u):
         try:
-            if ollama_version(url):
-                _ollama_call(url, "/api/generate", {"model": name, "keep_alive": 0, "stream": False}, timeout=15)
+            if not ollama_version(url):
+                continue
+            for name in ollama_loaded(url):
+                try:
+                    _ollama_call(url, "/api/generate", {"model": name, "keep_alive": 0, "stream": False}, timeout=30)
+                    done.append(name)
+                except Exception:
+                    pass  # Ollama is busy; it frees the memory when it stops
         except Exception:
-            pass  # Ollama is gone or busy; it frees the memory when it stops
+            pass
+    return done
+
+
+def shutdown(server_url: Optional[str] = None) -> List[str]:
+    """Stop every model (called when Axis exits). Returns the Ollama models that were unloaded.
+
+    Every model loaded in Ollama is unloaded, not just the ones Axis loaded, so no model keeps
+    holding memory after Axis quits; Ollama itself is left running unless Axis started it. Then
+    llama-server (one per llama.cpp model), sd-server and any `ollama serve` that Axis started
+    are stopped, together with the programs they started.
+    """
+    urls = [url for url, _ in backend.take_pinned_ollama()]
+    try:
+        urls.append(ollama_url(server_url))
+    except Exception:
+        pass
+    unloaded = unload_all_ollama(urls)
     procs.stop_all()
+    return unloaded
 
 
 backend.add_url_source(chat_urls)

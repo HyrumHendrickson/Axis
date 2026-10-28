@@ -406,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parts[0] != "api":
             pass
         elif parts[1:] == ["ping"] and method == "GET":
-            return self._json(200, {"app": "axis", "version": __version__})
+            return self._json(200, {"app": "axis", "version": __version__, "pid": os.getpid()})
         elif parts[1:] == ["quit"] and method == "POST":
             # Stop serve_forever from another thread; cli.cmd_serve then stops the models Axis started.
             threading.Thread(target=self.server.shutdown, daemon=True).start()
