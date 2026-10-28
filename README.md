@@ -41,6 +41,10 @@ python3 -m pipx ensurepath
 # 2. Install Axis
 pipx install git+https://github.com/HyrumHendrickson/Axis.git
 
+# 2. Install Axis (Backup)
+# if step two fails, try this step
+pipx install https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip
+
 # 3. Run Axis
 axis
 ```
