@@ -249,6 +249,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .form .install-row input[type=text] { flex: 1; width: auto; min-width: 200px; font: 14px/1.6 var(--mono); padding: 8px 10px 9px; height: auto; overflow: visible; }
 .install select, .model-card select { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--surface); max-width: 100%; }
 .model-card input[type=number] { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--surface); width: 12em; }
+.catalog { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+.catalog button { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 3px 10px; cursor: pointer; font: 13px/1.5 var(--mono); }
+.catalog button:hover, .catalog button[aria-pressed="true"] { border-color: var(--accent); }
+.catalog small { color: var(--muted); font-family: var(--sans, inherit); margin-left: 6px; }
 .choose-list { list-style: none; padding: 0; margin: 8px 0 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
 .choose-list li { display: flex; gap: 12px; align-items: center; padding: 6px 8px 6px 12px; border-top: 1px solid var(--line); }
 .choose-list li:first-child { border-top: 0; }
@@ -356,7 +360,7 @@ const S = {
   galleryPlace: "_shared",      // whose images/ folder the gallery shows
   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
   manageError: "",              // the last error from a Models page action
-  install: { engine: "", name: "", role: "checkpoint", target: "", choose: null, message: "", error: "", sending: false },
+  install: { engine: "", name: "", role: "checkpoint", target: "", advanced: false, choose: null, message: "", error: "", sending: false },
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -1605,7 +1609,7 @@ const jobSig = (d) => JSON.stringify(((d && d.jobs) || []).map((j) => [j.id, j.s
 function runSig(d) {
   if (!d || !d.llamacpp) return "";
   return JSON.stringify([d.ollama, d.llamacpp.binary, d.llamacpp.models.map((m) => [m.id, m.running, m.ready, !!m.crashed]),
-    d.image.running, Object.keys(d.image.crashed || {}), d.image.sd_server]);
+    d.image.running, Object.keys(d.image.crashed || {}), d.image.sd_server, d.engines]);
 }
 function doneText(j) {
   const named = j.label.replace(/^(Installing|Starting|Stopping|Deleting) /, "");
@@ -1622,7 +1626,7 @@ function onManage(before, d) {
     jobsSeen.add(j.id);
     if (first) continue;   // finished before this page opened: nothing to announce
     finished = true;
-    if (j.engine === "image") imageDone = true;
+    if (j.engine === "image" || j.engine === "engine") imageDone = true;
     if (j.state === "done") toast(doneText(j));
     else if (j.state === "failed") toast(j.label + " failed. Details are on the Models page.");
   }
@@ -1825,11 +1829,36 @@ function engineLines(m) {
         o.local ? h("button", { class: "btn small primary", onclick: () => manageAction("ollama/start", {}) }, "Start Ollama") : null]
       : h("span", {}, "Ollama is not installed. ", extLink("https://ollama.com/download", "Download Ollama"), " to install models with it."));
   const job = busyJob("ollama", "");
-  const llama = h("div", { class: "engine-line" }, h("span", { class: "dot " + (l.binary ? "ok" : "") }),
-    l.binary ? h("span", {}, ["llama.cpp: ", h("code", {}, l.binary)])
-      : h("span", {}, "llama-server was not found. ", extLink("https://github.com/ggml-org/llama.cpp/releases", "Install llama.cpp"),
-        ", then set its path under Engine settings below if Axis still cannot find it."));
-  return [ollama, job ? busyView(job) : null, llama];
+  return [ollama, job ? busyView(job) : null, engineLine(m, "llama")];
+}
+/* llama.cpp and stable-diffusion.cpp: Axis installs and updates them itself. */
+const engineBuild = { llama: "auto", sd: "auto" };
+function engineLine(m, key) {
+  const e = (m.engines || {})[key];
+  if (!e) return null;
+  const job = busyJob("engine", key);
+  const program = key === "llama" ? "llama-server" : "sd-cli";
+  const builds = e.builds || [];
+  const pick = builds.length > 1 ? h("select", { "aria-label": "Build", "data-free": "1", onchange: (ev) => { engineBuild[key] = ev.target.value; } },
+    [["auto", "Best for this computer"]].concat(builds.map((b) => [b, e.build_labels[b] || b])).map(([v, t]) => {
+      const o = h("option", { value: v }, t); o.selected = engineBuild[key] === v; return o; })) : null;
+  const install = (label) => h("button", { class: "btn small" + (e.binary ? "" : " primary"),
+    onclick: () => manageAction("engines/install", { engine: key, build: engineBuild[key] }) }, label);
+  let text, actions = [];
+  if (e.binary && e.axis) {
+    text = h("span", {}, `${e.label} ${e.installed && e.installed.tag ? e.installed.tag : ""}`,
+      e.installed && e.installed.build ? h("small", { class: "hint" }, ` (${e.build_labels[e.installed.build] || e.installed.build}), installed by Axis`) : null);
+    if (!job) actions = [pick, install("Update")];
+  } else if (e.binary) {
+    text = h("span", {}, `${e.label}: `, h("code", {}, e.binary));
+  } else if (!builds.length) {
+    text = h("span", {}, `${e.label} has no ready-made build for this computer. Build it from source and set the path to ${program} below.`);
+  } else {
+    text = h("span", {}, `${e.label} is not installed. Axis installs it with your first model, or install it now.`);
+    if (!job) actions = [pick, install("Install " + e.label)];
+  }
+  return [h("div", { class: "engine-line" }, h("span", { class: "dot " + (e.binary ? "ok" : job ? "warn" : "") }), text, actions),
+    job ? busyView(job) : null];
 }
 
 /* --- install */
@@ -1841,23 +1870,39 @@ const IMAGE_ROLES = [
   ["clip_l", "A CLIP-L text encoder, added to one of my image models"],
   ["t5xxl", "A T5-XXL text encoder, added to one of my image models"],
 ];
+function catalogChips(list, onPick) {
+  if (!list || !list.length) return null;
+  return h("div", { class: "catalog", role: "group", "aria-label": "Models you can install by name" },
+    list.map((c) => h("button", { type: "button", title: c.description || c.title || "", "aria-pressed": S.install.name.trim() === c.name ? "true" : "false",
+      onclick: () => onPick(c.name) }, c.name, c.size ? h("small", {}, c.size) : null)));
+}
 function installPanel(m) {
   const I = S.install;
   if (!I.engine) I.engine = (m.ollama.running || m.ollama.binary) ? "ollama" : "llamacpp";
   const imgModels = (S.images && S.images.models) || [];
-  const component = !["checkpoint", "diffusion_model"].includes(I.role);
+  const cat = m.catalog || { image: [], chat: [] };
+  const simple = I.engine === "image" && !I.advanced;
+  const component = !simple && !["checkpoint", "diffusion_model"].includes(I.role);
+  const noEngine = (key) => m.engines && m.engines[key] && !m.engines[key].binary;
   const info = {
     ollama: { ph: "llama3.1:8b",
       hint: ["A name from ", extLink("https://ollama.com/library", "ollama.com/library"), ", including the size after the colon, like llama3.1:8b or qwen3:4b. GGUF models on Hugging Face work too: hf.co/owner/name:Q4_K_M."],
       warn: !m.ollama.running && !m.ollama.binary ? "Ollama is not installed. Download it from ollama.com/download, or install with llama.cpp instead."
         : !m.ollama.running ? "Ollama is not running. Axis will start it." : null },
-    llamacpp: { ph: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
-      hint: ["A GGUF model on ", extLink("https://huggingface.co/models?library=gguf", "Hugging Face"), ", written owner/name. Add a quantization after a colon to pick one; otherwise Q4_K_M is chosen, or you choose from a list. A link copied from the site works too."],
-      warn: m.llamacpp.binary ? null : "llama-server was not found. You can install models now and start them once llama.cpp is set up." },
-    image: { ph: component ? "Comfy-Org/z_image_turbo/split_files/vae/ae.safetensors" : "stable-diffusion-v1-5/stable-diffusion-v1-5",
-      hint: ["A model on ", extLink("https://huggingface.co/models?pipeline_tag=text-to-image", "Hugging Face"), ", written owner/name, optionally followed by the path of one file. When the repository has several model files you choose one. Models with separate parts (Flux, Z-Image) are installed one file at a time: first the diffusion model, then its VAE and text encoder."],
-      warn: (S.images && !S.images.sd_cli && !S.images.sd_server) ? "stable-diffusion.cpp was not found. You can install models now; set the sd-cli path under Image models to use them." : null },
+    llamacpp: { ph: "llama3.1:8b",
+      hint: ["A short name like llama3.1:8b, or any GGUF model on ", extLink("https://huggingface.co/models?library=gguf", "Hugging Face"), ", written owner/name. Add a quantization after a colon to pick one; otherwise Q4_K_M is chosen, or you choose from a list. A link copied from the site works too."],
+      warn: noEngine("llama") ? "llama.cpp is not installed yet. Axis installs it first, as part of this install." : null },
+    image: simple ? { ph: "z-image-turbo",
+      hint: ["The name of an image model. Axis downloads every file it needs and sets it up with good settings. Add :q8 for the larger, higher-quality version where there is one (z-image-turbo:q8). ",
+        h("button", { class: "link", type: "button", onclick: () => { I.advanced = true; I.choose = null; I.error = ""; renderModels(); } }, "Install one file from Hugging Face instead")],
+      warn: noEngine("sd") ? "stable-diffusion.cpp is not installed yet. Axis installs it first, as part of this install." : null }
+    : { ph: component ? "Comfy-Org/z_image_turbo/split_files/vae/ae.safetensors" : "stable-diffusion-v1-5/stable-diffusion-v1-5",
+      hint: ["A model on ", extLink("https://huggingface.co/models?pipeline_tag=text-to-image", "Hugging Face"), ", written owner/name, optionally followed by the path of one file. When the repository has several model files you choose one. Models with separate parts (Flux, Z-Image) are installed one file at a time: first the diffusion model, then its VAE and text encoder. ",
+        h("button", { class: "link", type: "button", onclick: () => { I.advanced = false; I.choose = null; I.error = ""; renderModels(); } }, "Install by name instead")],
+      warn: noEngine("sd") ? "stable-diffusion.cpp is not installed yet. Axis installs it first, as part of this install." : null },
   }[I.engine];
+  const pickName = (name) => { I.name = name; I.choose = null; I.error = ""; renderModels(); const el = $("install-name"); if (el) el.focus(); };
+  const chips = simple ? catalogChips(cat.image, pickName) : I.engine === "image" ? null : catalogChips(cat.chat, pickName);
   const seg = h("div", { class: "seg", role: "group", "aria-label": "What to install" },
     [["ollama", "Chat model, Ollama"], ["llamacpp", "Chat model, llama.cpp"], ["image", "Image model"]].map(([k, label]) =>
       h("button", { type: "button", "aria-pressed": I.engine === k ? "true" : "false",
@@ -1875,10 +1920,11 @@ function installPanel(m) {
   return h("div", { class: "install" },
     h("div", { class: "section-head" }, h("h3", {}, "Install a model")),
     seg,
-    I.engine === "image" ? h("div", { class: "install-row", style: "margin-bottom:8px" }, role,
+    I.engine === "image" && !simple ? h("div", { class: "install-row", style: "margin-bottom:8px" }, role,
       component && !imgModels.length ? h("span", { class: "hint", style: "margin:0" }, "Install a diffusion model first; then add its parts to it.") : target) : null,
     h("div", { class: "install-row" }, input,
       h("button", { class: "btn primary", disabled: I.sending || (I.engine === "image" && component && !imgModels.length), onclick: () => submitInstall() }, I.sending ? "Looking it up\u2026" : "Install")),
+    chips,
     h("p", { class: "hint", style: "margin:8px 0 0" }, info.hint),
     info.warn ? h("p", { class: "model-note" }, info.warn) : null,
     I.error ? h("p", { class: "form-error", role: "alert", style: "margin:10px 0 0;white-space:pre-wrap" }, I.error) : null,
@@ -1895,7 +1941,7 @@ async function submitInstall(choice) {
   I.sending = true; renderModels();
   try {
     const body = { engine: I.engine, name: I.name, choice: choice || "" };
-    if (I.engine === "image") Object.assign(body, { role: I.role, target: I.target || "" });
+    if (I.engine === "image" && I.advanced) Object.assign(body, { role: I.role, target: I.target || "" });
     const r = await api("/api/manage/install", { method: "POST", body });
     if (r.choose) { I.choose = r.choose; I.message = r.message; }
     else { I.choose = null; I.message = ""; I.name = ""; }
@@ -1966,7 +2012,7 @@ function renderModels() {
     running.length && total ? h("p", { class: "summary-line" }, `${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}.`) : null,
     (d.errors || []).map((e) => h("p", { class: "model-note" }, e)),
     cards.length ? cards.map((c) => c.el)
-      : h("p", { class: "hint" }, "No chat models are installed yet. Install one above, for example llama3.1:8b with Ollama.")));
+      : h("p", { class: "hint" }, "No chat models are installed yet. Install one above, for example llama3.1:8b.")));
   body.push(imageModelsSection());
   body.push(engineSettings(m));
   keepPlace(() => fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body))));
@@ -2020,9 +2066,9 @@ function renderImages() {
       h("p", {}, "Axis makes pictures with stable-diffusion.cpp. Install image models on the Models page, or point Axis at model files you already have."),
       h("ol", {},
         h("li", {}, st.sd_cli || st.sd_server ? ["stable-diffusion.cpp found: ", h("code", {}, st.sd_cli || st.sd_server)]
-          : ["Download a release of stable-diffusion.cpp for your computer from ", h("a", { href: "https://github.com/leejet/stable-diffusion.cpp/releases", target: "_blank", rel: "noopener" }, "its GitHub page"), ", extract it, and give Axis the path to sd-cli on the Models page."]),
+          : "stable-diffusion.cpp is not installed yet. Axis installs it with your first image model."),
         h("li", {}, st.models.length ? `${st.models.length} image model${st.models.length === 1 ? "" : "s"} set up.`
-          : "On the Models page, choose Image model under Install a model and type a Hugging Face name, or add files you already have.")),
+          : "On the Models page, choose Image model under Install a model and type a name such as z-image-turbo or sd1.5.")),
       h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "images" }) }, "Open Image models")))));
   }
 
@@ -2348,7 +2394,8 @@ function imageModelsSection() {
   return h("div", { class: "skill-group", id: "image-models" },
     h("div", { class: "section-head" }, h("h3", {}, "Image models"),
       h("button", { class: "btn small", onclick: () => fill(slot, imageModelEditor(null, renderModels)) }, "Add files I already have")),
-    h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp. Install one above, or add files you already have. When a model is on, it stays in memory in sd-server and pictures start at once; otherwise each picture runs sd-cli, which loads the model and exits, using no memory between pictures."),
+    h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp. Install one above by name, or add files you already have. When a model is on, it stays in memory in sd-server and pictures start at once; otherwise each picture runs sd-cli, which loads the model and exits, using no memory between pictures."),
+    S.manage && S.manage.engines ? engineLine(S.manage, "sd") : null,
     slot,
     st.models.length ? st.models.map((m) => imageModelCard(m, st)) : h("p", { class: "hint" }, "No image models yet."),
     imageSettingsCard(st));

@@ -40,12 +40,15 @@ Routes:
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
   GET    /api/manage                        engines, installed models, what is running, and jobs
   POST   /api/manage/install                install a model {engine, name, choice?, role?, target?}
-                                            (answers {choose: [...]} when the user must pick a file)
+                                            (answers {choose: [...]} when the user must pick a file;
+                                            an image name such as z-image-turbo installs every file it needs)
   POST   /api/manage/start                  start a model {engine, model}
   POST   /api/manage/stop                   stop a model {engine, model}
   POST   /api/manage/delete                 delete a model and its files {engine, model, files?}
   POST   /api/manage/ollama/start           start the Ollama server
   POST   /api/manage/ollama/stop            stop the Ollama server (only if Axis started it)
+  POST   /api/manage/engines/install        install or update llama.cpp or stable-diffusion.cpp {engine, build?}
+  POST   /api/manage/engines/remove         remove the copy Axis installed {engine}
   PUT    /api/manage/settings               llama-server path, context size, extra arguments
   POST   /api/manage/jobs/<id>/cancel       cancel an install or start
   DELETE /api/manage/jobs/<id>              remove a finished job from the list
@@ -65,7 +68,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, chats, hub, images, jobs, manager, procs, runner, skills, tools
+from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, procs, runner, skills, tools
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -326,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
-                hub.HubError, jobs.JobError, procs.ProcessError) as exc:
+                hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -446,6 +449,10 @@ class Handler(BaseHTTPRequestHandler):
             if n == 4 and parts[2] == "ollama" and parts[3] in ("start", "stop") and method == "POST":
                 result = manager.ollama_server(parts[3], url)
                 return self._json(202 if "job" in result else 200, result)
+            if n == 4 and parts[2] == "engines" and parts[3] in ("install", "remove") and method == "POST":
+                if parts[3] == "install":
+                    return self._json(202, manager.install_engine(self._body()))
+                return self._json(200, manager.remove_engine(self._body()))
             if parts[2:] == ["settings"] and method == "PUT":
                 manager.save_settings(self._body())
                 return self._json(200, manager.state(url))

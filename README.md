@@ -23,10 +23,10 @@ Axis runs a small web app on your computer and opens it in your browser. It talk
 - **Files** tab lets you browse, preview, upload to, and download from every agent's folder.
 - **Models** tab installs, starts, stops, and deletes chat and image models, and shows memory use, context size, and capabilities for each.
 
-Axis manages models itself. Type a model name from [ollama.com/library](https://ollama.com/library) or [Hugging Face](https://huggingface.co/models) on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis drives Ollama, llama.cpp's `llama-server`, and stable-diffusion.cpp's `sd-server` for you. You install those programs once; Axis does not install them.
+Axis manages models itself. Type a model name such as `llama3.1:8b` or `z-image-turbo` on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis installs llama.cpp and stable-diffusion.cpp for you the first time it starts, so nothing else is needed. Ollama is optional; Axis uses it when it is installed.
 
 ```
-install Ollama or llama.cpp  ->  run `axis`  ->  Models page: Install, then Start
+pipx install Axis  ->  run `axis`  ->  Models page: type a name, Install, then Start
 ```
 
 ## Quick start
@@ -41,13 +41,11 @@ python3 -m pipx ensurepath
 # 2. Install Axis
 pipx install git+https://github.com/HyrumHendrickson/Axis.git
 
-# 3. Install Ollama from https://ollama.com/download (or llama.cpp; see below)
-
-# 4. Run Axis
+# 3. Run Axis
 axis
 ```
 
-In the page that opens, go to **Models**, type `llama3.1:8b` under **Install a model**, click **Install**, then **Start**.
+On its first start Axis downloads llama.cpp and stable-diffusion.cpp in the background (progress is on the **Models** page). Go to **Models**, choose **Chat model, llama.cpp**, type `llama3.1:8b`, click **Install**, then **Start**. For pictures, choose **Image model**, type `z-image-turbo` (or `sd1.5` for a small one), click **Install**, then **Start**.
 
 On Windows, replace `python3` with `py`. If `axis` is not found after step 2, see [Fixing PATH problems](#fixing-path-problems).
 
@@ -193,11 +191,36 @@ If a Linux or Homebrew Python refuses `pip install --user` with an "externally-m
 
 ---
 
-## Install a model engine
+## Model engines
 
-Axis needs at least one of the following programs installed. Ollama is simpler. Axis starts and stops them as needed; you only install them once.
+Axis runs chat models with **llama.cpp** or **Ollama**, and image models with **stable-diffusion.cpp**. Axis starts and stops them as needed.
 
-### Option 1: Ollama (recommended)
+### llama.cpp and stable-diffusion.cpp: installed by Axis
+
+pip and pipx cannot run programs while a package is installed, so Axis installs these two itself:
+
+- **On its first start**, in the background, when they are not already on your computer. Turn this off with `axis --no-engine-install` or `AXIS_NO_ENGINE_INSTALL=1`.
+- **From the Models page**, with **Install** (or **Update**) next to each engine.
+- **Automatically**, as the first step of installing or starting a model that needs one.
+- **From a terminal**, with `axis setup`, for example right after `pipx install`.
+
+Axis downloads the latest release from each project's GitHub page, checks it against the published SHA-256 checksum, and keeps it in `Axis/engines` in your home folder. No administrator rights are needed and nothing is installed system-wide. It picks the build for your computer:
+
+| Computer | llama.cpp | stable-diffusion.cpp |
+|----------|-----------|----------------------|
+| Windows, NVIDIA GPU | CUDA (with its runtime) | CUDA (with its runtime) |
+| Windows, other GPU | Vulkan | Vulkan |
+| Windows on ARM | CPU / Vulkan | not available |
+| macOS, Apple Silicon | Metal | Metal |
+| macOS, Intel | CPU | not available |
+| Linux x86-64 | Vulkan when `vulkaninfo` works, otherwise CPU | Vulkan when `vulkaninfo` works, otherwise CPU |
+| Linux ARM64 | CPU / Vulkan | not available |
+
+If a build does not run (for example, a missing GPU driver), Axis tries the next one. To choose a build yourself, use the menu next to **Install** on the Models page, or `axis setup --build vulkan` (`cpu`, `vulkan`, `cuda`, `rocm`, `metal`). Where no ready-made build exists, build the program from source and set its path on the Models page.
+
+A copy you installed yourself still works: a path set on the Models page or in `AXIS_LLAMA_SERVER`, `AXIS_SD_CLI`, or `AXIS_SD_SERVER` takes priority over the copy Axis installed. Copies on your PATH are used only when Axis has not installed its own.
+
+### Ollama (optional)
 
 | Platform | Install |
 |----------|---------|
@@ -213,15 +236,9 @@ You can still use Ollama from a terminal; Axis sees models loaded either way:
 ollama run llama3.1:8b --keepalive -1m
 ```
 
-### Option 2: llama.cpp
+### llama.cpp details
 
-| Platform | Install |
-|----------|---------|
-| Windows | `winget install llama.cpp` |
-| macOS | `brew install llama.cpp` |
-| Linux | `brew install llama.cpp`, or a release from <https://github.com/ggml-org/llama.cpp/releases> |
-
-Axis finds `llama-server` on your PATH. If it is somewhere else, set its path on the **Models** page under **Engine settings** (or set `AXIS_LLAMA_SERVER`). Then install GGUF models from Hugging Face on the **Models** page. Axis runs one `llama-server` per model that is on, each on its own port starting at 8080.
+Axis runs one `llama-server` per model that is on, each on its own port starting at 8080.
 
 A `llama-server` you start yourself in a terminal still works too: Axis connects to it at `http://127.0.0.1:8080`.
 
@@ -256,6 +273,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | Command | Description |
 |---------|-------------|
 | `axis` | Start Axis and open it in your browser |
+| `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. |
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
@@ -275,6 +293,7 @@ pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads
 | `--port 9000` | Use a different port (default 8765; the next free port is used if it is taken) |
 | `--no-browser` | Do not open a browser; open the printed address yourself |
 | `--url http://127.0.0.1:9000` | Use a model server at a specific address |
+| `--no-engine-install` | Do not install llama.cpp and stable-diffusion.cpp on the first start |
 | `--version` | Print the version |
 
 Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API (for example LM Studio on port 1234) also works through `--url`.
@@ -297,6 +316,8 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `AXIS_START_TIMEOUT` | Longest time a model may take to load, in seconds | 900 |
 | `HF_TOKEN` | Hugging Face access token, for gated or private models | The token saved by `hf auth login`, if any |
 | `OLLAMA_HOST` | Where Ollama listens, as Ollama itself uses it | `127.0.0.1:11434` |
+| `AXIS_NO_ENGINE_INSTALL` | `1` stops Axis installing llama.cpp and stable-diffusion.cpp on its first start | not set |
+| `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |
 
 Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
 
@@ -408,11 +429,21 @@ Every conversation is saved automatically. Open **Past chats** in the sidebar to
 
 ### Images
 
-Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). You download the program once; Axis can install the models.
+Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](#model-engines)).
 
-1. Download a release from <https://github.com/leejet/stable-diffusion.cpp/releases> and extract it (for example to `C:\sd`). Release archives contain both `sd-cli` and `sd-server`.
-2. In Axis, open **Models**. Under **Image models**, set the **sd-cli path** (leave empty if `sd-cli` is on PATH) and click **Save**. Axis uses the `sd-server` in the same folder.
-3. Under **Install a model**, choose **Image model**, choose what the file is, type its Hugging Face name, and click **Install**. When a repository has several model files, Axis lists them and you choose one.
+**Install by name.** On the **Models** page, choose **Image model**, type a name, and click **Install**. Axis downloads every file the model needs from Hugging Face and sets it up with settings that suit it.
+
+| Name | Model | Download | Notes |
+|------|-------|----------|-------|
+| `sd1.5` | Stable Diffusion 1.5 | about 2.1 GB | 512 x 512. Small and quick; runs on almost any computer. |
+| `sdxl` | Stable Diffusion XL 1.0 (with the fp16-fixed VAE) | about 7.3 GB | 1024 x 1024. Needs about 8 GB of memory. |
+| `sdxl-turbo` | SDXL Turbo | about 7.3 GB | 512 x 512 in 1 to 4 steps. |
+| `z-image-turbo` | Z-Image Turbo (diffusion model, Qwen3-4B text encoder, VAE) | about 6.5 GB | High quality in 8 steps; can draw text. `:q3` is smaller, `:q8` larger and sharper. |
+| `flux1-schnell` | FLUX.1 schnell (diffusion model, CLIP-L, T5-XXL, VAE) | about 12 GB | 1024 x 1024 in 4 steps. `:q8` is larger. |
+
+Names are forgiving (`sd15`, `zimage`, `flux`). Installing a name again finds the model already installed; `z-image-turbo:q8` adds a second model that shares the text encoder and VAE with the first.
+
+**Install one file from Hugging Face.** For any other model, click **Install one file from Hugging Face instead**, choose what the file is, type its Hugging Face name, and click **Install**. When a repository has several model files, Axis lists them and you choose one.
 
 | What you install | What it is | Example |
 |------------------|------------|---------|
@@ -472,6 +503,7 @@ Axis/                       in your home folder (override with AXIS_HOME)
 │       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
 ├── engine-settings.json    llama-server path, context size, extra arguments
+├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them
 ├── image-models/           image model definitions, one .json file each
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
 ├── models/
@@ -492,8 +524,8 @@ Open **Models** to install, start, stop, and delete models.
 | Choice | Type | Examples |
 |--------|------|----------|
 | Chat model, Ollama | A name from [ollama.com/library](https://ollama.com/library), with the size after the colon. Hugging Face GGUF models work as `hf.co/owner/name:quant`. Pasted `ollama run` commands and ollama.com links work too. | `llama3.1:8b`, `qwen3:4b`, `hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M` |
-| Chat model, llama.cpp | A GGUF model on [Hugging Face](https://huggingface.co/models?library=gguf), optionally with a quantization after a colon (the same form as `llama-server -hf`), a file path, or a link copied from the site. Without a quantization Axis picks Q4_K_M, or lists the files so you can choose. Split GGUF files are downloaded in full. | `bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M` |
-| Image model | See [Images](#images). | `stable-diffusion-v1-5/stable-diffusion-v1-5` |
+| Chat model, llama.cpp | A short name (`llama3.2:1b`, `llama3.2:3b`, `llama3.1:8b`, `qwen3:4b`, `qwen3:8b`), or a GGUF model on [Hugging Face](https://huggingface.co/models?library=gguf), optionally with a quantization after a colon (the same form as `llama-server -hf`), a file path, or a link copied from the site. Without a quantization Axis picks Q4_K_M, or lists the files so you can choose. Split GGUF files are downloaded in full. | `bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M` |
+| Image model | A name such as `z-image-turbo`, or one file from Hugging Face. See [Images](#images). | `z-image-turbo`, `sd1.5` |
 
 Hugging Face downloads are checked against the size and SHA-256 checksum Hugging Face publishes before they are used. An interrupted download resumes where it stopped the next time you install the same model; a cancelled one is discarded. Axis checks free disk space first.
 
@@ -521,7 +553,10 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 | Install: "no GGUF files" | llama.cpp needs GGUF. Search Hugging Face for the model's GGUF version (often `...-GGUF`), or install it with Ollama. |
 | Install: "Not enough disk space" | Free space on the drive holding `Axis/models`, or set `AXIS_HOME` to another drive. |
 | Start (llama.cpp): "did not fit in memory" | Choose a smaller model or quantization, lower **Context size** under Engine settings, or close other programs. |
-| Start (llama.cpp): "llama-server was not found" | Install llama.cpp, or set its path under **Engine settings**. |
+| Start (llama.cpp): "llama-server was not found" | Click **Install llama.cpp** on the Models page, or set its path under **Engine settings**. |
+| Installing llama.cpp or stable-diffusion.cpp fails: "does not run on this computer" | Choose another build in the menu next to **Install** (CPU always works), or update your GPU driver. |
+| Installing an engine fails on Windows: "Visual C++ runtime" | Install <https://aka.ms/vs/17/release/vc_redist.x64.exe> and click **Install** again. |
+| Install by name: "no longer has ..." | The file was renamed on Hugging Face. Install the parts with **Install one file from Hugging Face instead**, or update Axis. |
 | Start (image): "sd-server was not found" | Update stable-diffusion.cpp (recent releases include `sd-server`), or set the sd-server path under Image models. |
 | Start (image): extra arguments not accepted | Edit the model and remove options only `sd-cli` understands. |
 | Model shows "Started by an earlier Axis session" | Axis was closed without stopping it. Click **Stop** if you do not need it. |
@@ -536,7 +571,7 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 | `Unknown tool '...'` in a step | The agent tried an action whose skill is not enabled. Tick it in **Edit agent**, or ignore it. |
 | Run Python reports a missing package | `pipx inject axis-agent-manager <package>` |
 | `axis update` fails | Check your connection, or reinstall with the `pipx install --force` command in [Commands](#commands). |
-| Images: **Set up Stable Diffusion** | Set the sd-cli path and install an image model on the Models page. |
+| Images: **Set up Stable Diffusion** | Install an image model by name on the Models page; Axis installs stable-diffusion.cpp with it. |
 | Image model shows **Files missing** | A path is wrong or relative paths start in an unexpected folder. Use full paths, or set the **Working folder**. |
 | Picture fails with `sd-cli failed` | Run the same command in a terminal. Out-of-memory errors usually need a smaller size, a smaller quantization, or `--offload-to-cpu` in Extra arguments. |
 | Chats disappeared | Use the same `AXIS_HOME`. Chats written by very old versions were stored per browser and port; use the same browser and default port once to migrate them. |
@@ -553,7 +588,7 @@ cd Axis
 pipx install --editable .
 ```
 
-Run the tests. They use fake Ollama, llama.cpp, stable-diffusion.cpp, and Hugging Face servers, so no real model or network is needed:
+Run the tests. They use fake Ollama, llama.cpp, stable-diffusion.cpp, Hugging Face, and GitHub servers, so no real model or network is needed:
 
 ```bash
 python3 -m unittest discover -s tests -v      # Windows: py -m unittest discover -s tests -v
@@ -569,6 +604,8 @@ axis/
   chats.py        saved conversations
   images.py       image models, sd-cli and sd-server runners, and gallery
   manager.py      installs, starts, stops, and deletes models (Ollama, llama.cpp, sd-server)
+  engines.py      installs and updates llama.cpp and stable-diffusion.cpp from their GitHub releases
+  catalog.py      model names (z-image-turbo, sd1.5, llama3.1:8b, ...) and the files each one needs
   hub.py          Hugging Face names, file choice, and verified, resumable downloads
   procs.py        the programs Axis starts: logs, readiness, stopping, crash recovery
   jobs.py         background installs, starts, stops, and deletes, with progress
@@ -581,6 +618,7 @@ axis/
 tests/
   test_axis.py    tests using fake model servers
   test_manage.py  tests for installing, starting, stopping, and deleting models
+  test_engines.py tests for installing engines (fake GitHub) and image models by name
 ```
 
 ## License

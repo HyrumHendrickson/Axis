@@ -9,11 +9,17 @@ Chat models
     its own port. GGUF files copied into that folder by hand are found too.
 
 Image models
-  * Downloaded from Hugging Face into ~/Axis/models/image and set up as image
-    models automatically.
+  * Installed by name (sd1.5, sdxl, z-image-turbo, ...; see catalog.py), which
+    downloads every file the model needs, or one file at a time by Hugging Face
+    name. Files go to ~/Axis/models/image and are set up as image models.
   * "Start" runs stable-diffusion.cpp's ``sd-server`` with the model, which keeps
     it in memory so each picture starts immediately. "Stop" ends it. When no
     image model is on, pictures are made with ``sd-cli`` as before.
+
+Engines
+  * llama.cpp and stable-diffusion.cpp are installed by Axis itself when they
+    are missing (see engines.py): on the first start, from the Models page, and
+    as the first step of installing or starting a model that needs them.
 """
 
 from __future__ import annotations
@@ -26,9 +32,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import backend, hub, images, jobs, procs
+from . import backend, catalog, engines, hub, images, jobs, procs
 from .paths import axis_home, image_root, inside, llm_root
 
 START_TIMEOUT = float(os.environ.get("AXIS_START_TIMEOUT", "900"))
@@ -102,8 +108,10 @@ def save_settings(body: Any) -> Dict[str, Any]:
     return current
 
 
-def _find_program(configured: str, env: str, names: List[str], extra: List[Path]) -> Optional[Path]:
-    """A program from the settings, an environment variable, the PATH, or a usual install location."""
+def _find_program(configured: str, env: str, names: List[str], extra: List[Path],
+                  axis_copy: Optional[Path] = None) -> Optional[Path]:
+    """A program from the settings, an environment variable, the copy Axis installed, the PATH,
+    or a usual install location."""
     for value in (configured, os.environ.get(env, "")):
         if value:
             p = Path(value).expanduser()
@@ -116,6 +124,8 @@ def _find_program(configured: str, env: str, names: List[str], extra: List[Path]
                 return p.resolve()
             found = shutil.which(value)
             return Path(found).resolve() if found else None
+    if axis_copy is not None:
+        return axis_copy
     for name in names:
         found = shutil.which(name)
         if found:
@@ -404,7 +414,8 @@ def llama_binary() -> Optional[Path]:
         local = os.environ.get("LOCALAPPDATA")
         if local:
             extra.append(Path(local) / "Microsoft" / "WinGet" / "Links" / "llama-server.exe")
-    return _find_program(load_settings()["llama_server"], "AXIS_LLAMA_SERVER", ["llama-server"], extra)
+    return _find_program(load_settings()["llama_server"], "AXIS_LLAMA_SERVER", ["llama-server"], extra,
+                         engines.program("llama-server"))
 
 
 def _display_name(file: Path) -> str:
@@ -485,10 +496,11 @@ def llama_start(model_id: str, job: jobs.Job) -> Dict[str, Any]:
         raise ManageError(f"Some parts of {model['name']} are missing. Delete it and install it again.")
     if llama_running(model_id):
         return {"model": model["name"]}
+    engines.ensure("llama", llama_binary, job)
     binary = llama_binary()
     if binary is None:
-        raise ManageError("llama-server was not found. Install llama.cpp (see the README), or set the path to "
-                          "llama-server under Engine settings on the Models page.")
+        raise ManageError("llama-server was not found. Install llama.cpp on the Models page, or set the path to "
+                          "llama-server under Engine settings.")
     settings = load_settings()
     taken = {m.extra.get("alias") for m in procs.running("llama")}
     alias, n = _alias(model["name"]), 2
@@ -506,7 +518,7 @@ def llama_start(model_id: str, job: jobs.Job) -> Dict[str, Any]:
         job.progress(phase=f"Loading {model['name']}")
         try:
             procs.start("llama:" + model_id, "llama", model_id, cmd, port, _llama_ready, cwd=binary.parent,
-                        timeout=START_TIMEOUT, cancelled=lambda: job.cancelled,
+                        timeout=START_TIMEOUT, cancelled=lambda: job.cancelled, env=engines.run_env(binary),
                         on_line=lambda line: _llama_phase(job, line),
                         extra={"alias": alias, "name": model["name"]})
             return {"model": alias, "url": f"http://127.0.0.1:{port}"}
@@ -578,6 +590,7 @@ def llama_delete(model_id: str, job: jobs.Job) -> Dict[str, Any]:
 
 
 def llama_install(ref: hub.Ref, files: List[Dict[str, Any]], job: jobs.Job) -> Dict[str, Any]:
+    engines.ensure("llama", llama_binary, job)
     root = llm_root()
     root.mkdir(parents=True, exist_ok=True)
     try:
@@ -603,6 +616,9 @@ def sd_server_binary() -> Optional[Path]:
             cand = cli.parent / name
             if cand.is_file():
                 return cand.resolve()
+    axis_copy = engines.program("sd-server")
+    if axis_copy is not None:
+        return axis_copy
     found_path = shutil.which("sd-server")
     return Path(found_path).resolve() if found_path else None
 
@@ -633,17 +649,24 @@ def _image_ready(url: str) -> bool:
         return False
 
 
-def image_start(model_id: str, check: Callable[[], None], phase: Callable[[str], None]) -> str:
+def _sd_found() -> Optional[Path]:
+    return images.find_cli() or sd_server_binary()
+
+
+def image_start(model_id: str, check: Callable[[], None], phase: Callable[[str], None],
+                job: Optional[jobs.Job] = None) -> str:
     """Start sd-server with an image model (stopping any other image model). Returns its URL."""
     model = images.get_model(model_id)
     if image_server_url(model_id):
         return image_server_url(model_id) or ""
     if model["missing"]:
         raise ManageError(f"Files for {model['name']} are missing: {', '.join(model['missing'])}.")
+    if job is not None:
+        engines.ensure("sd", sd_server_binary, job)
     binary = sd_server_binary()
     if binary is None:
-        raise ManageError("sd-server was not found. It comes with stable-diffusion.cpp in the same folder as sd-cli; "
-                          "update stable-diffusion.cpp, or set the sd-server path on the Models page.")
+        raise ManageError("sd-server was not found. Install stable-diffusion.cpp on the Models page (Image models), "
+                          "or set the sd-server path there.")
     for other in procs.running("image"):
         phase(f"Stopping {other.extra.get('name') or other.target}")
         procs.stop(other.key)
@@ -661,7 +684,7 @@ def image_start(model_id: str, check: Callable[[], None], phase: Callable[[str],
         phase(f"Loading {model['name']}")
         try:
             m = procs.start("image:" + model_id, "image", model_id, cmd, port, _image_ready, cwd=base,
-                            timeout=START_TIMEOUT, cancelled=lambda: _raises(check),
+                            timeout=START_TIMEOUT, cancelled=lambda: _raises(check), env=engines.run_env(binary),
                             on_line=lambda line: phase("Loading the model") if "loading" in line.lower() else None,
                             extra={"name": model["name"]})
             return m.url
@@ -709,6 +732,7 @@ def _unique_name(name: str) -> str:
 
 
 def image_install(ref: hub.Ref, f: Dict[str, Any], role: str, target: str, job: jobs.Job) -> Dict[str, Any]:
+    engines.ensure("sd", _sd_found, job)
     root = image_root()
     root.mkdir(parents=True, exist_ok=True)
     try:
@@ -728,6 +752,78 @@ def image_install(ref: hub.Ref, f: Dict[str, Any], role: str, target: str, job: 
     stem = stem.rsplit(".", 1)[0] if "." in stem else stem
     created = images.create_model(_new_image_fields(_unique_name(stem), role, path, ref.repo))
     return {"model": created["name"], "id": created["id"]}
+
+
+def catalog_plan(entry: Dict[str, Any], tag: str) -> List[Tuple[str, hub.Ref, Dict[str, Any]]]:
+    """[(role, repository, file)] for every file of a catalog image model. Reads the repositories now,
+    so a wrong name or a missing file is reported before anything is downloaded."""
+    quant = (entry.get("tags") or {}).get(tag, "")
+    listings: Dict[str, List[Dict[str, Any]]] = {}
+    plan = []
+    for part in entry["parts"]:
+        ref = hub.Ref(repo=part["repo"])
+        if part["repo"] not in listings:
+            listings[part["repo"]] = hub.list_files(ref)
+        try:
+            f = catalog.pick(listings[part["repo"]], part, quant)
+        except catalog.CatalogError as exc:
+            raise ManageError(str(exc)) from exc
+        plan.append((part["role"], ref, f))
+    return plan
+
+
+def catalog_title(entry: Dict[str, Any], tag: str) -> str:
+    tags = entry.get("tags") or {}
+    return entry["title"] + (f" ({tags[tag]})" if tag and tag != entry.get("default_tag") and tag in tags else "")
+
+
+def catalog_image_install(entry: Dict[str, Any], tag: str, plan: List[Tuple[str, hub.Ref, Dict[str, Any]]],
+                          job: jobs.Job) -> Dict[str, Any]:
+    """Download every file of a catalog image model and set it up as one image model."""
+    engines.ensure("sd", _sd_found, job)
+    root = image_root()
+    root.mkdir(parents=True, exist_ok=True)
+    sizes = [f.get("size") for _, _, f in plan]
+    total = sum(sizes) if all(isinstance(s, int) for s in sizes) else None
+    if total is not None:
+        need = sum(f["size"] - _have(hub.safe_dest(root, ref.repo, f["path"])) for _, ref, f in plan)
+        free = shutil.disk_usage(root).free
+        if free - need < hub.DISK_MARGIN:
+            raise ManageError(f"Not enough disk space for {entry['title']}: it needs {hub._gb(need)} more and "
+                              f"{hub._gb(free)} is free on that drive.")
+    fields: Dict[str, Any] = {}
+    done = 0
+    try:
+        for role, ref, f in plan:
+            dest = hub.safe_dest(root, ref.repo, f["path"])
+            base = done
+            path = hub.download(ref, f, dest, job.check,
+                                lambda d, t, base=base: job.progress(done=base + d, total=total),
+                                lambda p: job.progress(phase=p))
+            fields[ROLES[role]] = str(path)
+            done += f.get("size") or path.stat().st_size
+    except jobs.Cancelled:
+        for _, ref, f in plan:
+            hub.cleanup_partial(root, ref.repo, [f])
+        raise
+    job.progress(phase="Setting up the image model")
+    title = catalog_title(entry, tag)
+    for m in images.list_models():   # installed before: keep it, with its files restored
+        if all(m.get(k) == v for k, v in fields.items()):
+            return {"model": m["name"], "id": m["id"]}
+    created = images.create_model({"name": _unique_name(title), "description": entry["description"],
+                                   **entry["settings"], **fields})
+    return {"model": created["name"], "id": created["id"]}
+
+
+def _have(path: Path) -> int:
+    for p in (path, path.with_name(path.name + ".part")):
+        try:
+            if p.is_file():
+                return p.stat().st_size
+        except OSError:
+            pass
+    return 0
 
 
 # --------------------------------------------------------------- the API
@@ -760,11 +856,30 @@ def install(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
         model = ollama_name(name)
         url = ollama_url(server_url)
         if not ollama_version(url) and (not _is_local(url) or ollama_binary() is None):
+            same = catalog.chat_ref(name)
             raise ManageError("Ollama is not installed or not running. Download it from ollama.com/download, "
-                              "or choose llama.cpp to install from Hugging Face.")
+                              "or choose \"Chat model, llama.cpp\": Axis installs llama.cpp for you"
+                              + (f", and {model} works there too." if same else
+                                 " and installs GGUF models from Hugging Face."))
         job = jobs.submit("install", "ollama", model, f"Installing {model}", lambda j: ollama_pull(url, model, j))
         return {"job": job.public()}
 
+    if engine == "image" and not _text(body, "role", "Role") and catalog.is_image_name(name):
+        try:
+            found = catalog.image_entry(name)
+        except catalog.CatalogError as exc:
+            raise ManageError(str(exc)) from exc
+        if found is None:
+            raise ManageError(str(catalog.unknown_image(name)))
+        entry, tag = found
+        plan = catalog_plan(entry, tag)
+        title = catalog_title(entry, tag)
+        job = jobs.submit("install", "image", f"catalog:{entry['name']}:{tag}", f"Installing {title}",
+                          lambda j: catalog_image_install(entry, tag, plan, j))
+        return {"job": job.public()}
+
+    if engine == "llamacpp":
+        name = catalog.chat_ref(name) or name
     ref = hub.parse(name)
     files = hub.list_files(ref)
     if engine == "llamacpp":
@@ -814,7 +929,7 @@ def start(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
         info = images.get_model(model)
         procs.forget_exit("image:" + model)
         job = jobs.submit("start", "image", model, f"Starting {info['name']}",
-                          lambda j: {"url": image_start(model, j.check, lambda p: j.progress(phase=p))})
+                          lambda j: {"url": image_start(model, j.check, lambda p: j.progress(phase=p), j)})
     return {"job": job.public()}
 
 
@@ -915,9 +1030,38 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
                   "sd_server_setting": images.load_settings().get("sd_server", ""), "root": str(image_root()),
                   "running": {"model": img.target, "url": img.url, "ready": img.ready, "adopted": img.adopted}
                   if img else None, "crashed": crashed_images},
+        "engines": engines.status(ENGINE_FINDERS),
+        "catalog": catalog.public(),
         "hf_token": bool(hub.token()),
         "jobs": jobs.listing(),
     }
+
+
+ENGINE_FINDERS: Dict[str, Callable[[], Optional[Path]]] = {"llama": lambda: llama_binary(), "sd": lambda: _sd_found()}
+
+
+def install_engine(body: Any) -> Dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ManageError("Request body must be a JSON object.")
+    engine = _text(body, "engine", "Engine")
+    build = _text(body, "build", "Build") or "auto"
+    job = engines.submit(engine, build)
+    return {"job": job.public()}
+
+
+def remove_engine(body: Any) -> Dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ManageError("Request body must be a JSON object.")
+    engine = _text(body, "engine", "Engine")
+    kind = {"llama": "llama", "sd": "image"}.get(engine)
+    if kind and procs.running(kind):
+        raise ManageError("Stop every model that uses it first.")
+    return engines.remove(engine)
+
+
+def auto_install_engines() -> List[jobs.Job]:
+    """Called when Axis starts: install llama.cpp and stable-diffusion.cpp if they are missing."""
+    return engines.auto_install(ENGINE_FINDERS)
 
 
 def shutdown() -> None:

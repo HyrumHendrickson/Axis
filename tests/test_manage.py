@@ -270,7 +270,9 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
         self.env = mock.patch.dict(os.environ, {"AXIS_HOME": self.home, "HF_TOKEN": "", "OLLAMA_HOST": "",
-                                                "AXIS_LLAMA_SERVER": "", "AXIS_SD_SERVER": "", "AXIS_SD_CLI": ""})
+                                                "AXIS_LLAMA_SERVER": "", "AXIS_SD_SERVER": "", "AXIS_SD_CLI": "",
+                                                "AXIS_NO_ENGINE_INSTALL": "1", "AXIS_GITHUB": "http://127.0.0.1:9",
+                                                "AXIS_GITHUB_API": "http://127.0.0.1:9"})
         self.env.start()
         for key in ("AXIS_URL", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
             os.environ.pop(key, None)

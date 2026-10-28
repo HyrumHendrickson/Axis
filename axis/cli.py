@@ -1,6 +1,7 @@
 """The `axis` command.
 
     axis              start the web app and open it in the browser
+    axis setup        install llama.cpp and stable-diffusion.cpp (Axis also does this on its first start)
     axis update       download the latest Axis from GitHub and install it
     axis uninstall    remove the Axis program (optionally your data too)
 """
@@ -14,11 +15,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, manager, server, tools
+from . import __version__, engines, jobs, manager, server, tools
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
@@ -49,6 +51,11 @@ def cmd_serve(args) -> int:
 
     print(f"Axis {__version__} is running at {httpd.url}")
     print("Keep this window open while you use Axis. Press Ctrl+C to stop.")
+    if not args.no_engine_install:
+        started = manager.auto_install_engines()
+        if started:
+            print("First start: installing " + " and ".join(j.label.split(" ", 1)[1] for j in started)
+                  + " in the background. Progress is on the Models page.")
     _stop_on_terminate()
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, args=(httpd.url,)).start()
@@ -78,6 +85,47 @@ def _stop_on_terminate() -> None:
             signal.signal(sig, handler)
         except (ValueError, OSError):
             pass
+
+
+# ---------------------------------------------------------------------- setup
+
+
+def cmd_setup(args) -> int:
+    """Install the engines from the terminal, for example right after `pipx install`."""
+    wanted = [args.only] if args.only else list(engines.ENGINES)
+    failed = False
+    for engine in wanted:
+        label = engines.ENGINES[engine]["label"]
+        current = manager.ENGINE_FINDERS[engine]()
+        if current is not None and not args.force:
+            print(f"{label}: found at {current}. Use --force to install Axis's own copy anyway.")
+            continue
+        if not engines.builds_for(engine):
+            osname, arch = engines.this_platform()
+            print(f"{label}: there is no ready-built program for {osname} on {arch}; skipped.")
+            continue
+        job = engines.submit(engine, args.build)
+        last = ""
+        try:
+            while job.state == "running":
+                pct = f" {job.public()['percent']:.0f}%" if job.public()["percent"] is not None else ""
+                line = f"{label}: {job.phase}{pct}"
+                if line != last:
+                    print("\r" + line.ljust(78)[:78], end="", flush=True)
+                    last = line
+                time.sleep(0.3)
+        except KeyboardInterrupt:
+            jobs.cancel(job.id)
+            jobs.wait(job, 30)
+            print(f"\n{label}: cancelled.")
+            return 1
+        print("\r" + " " * 78 + "\r", end="")
+        if job.state == "done":
+            print(f"{label}: installed {job.result.get('tag')} ({job.result.get('build')} build).")
+        else:
+            failed = True
+            print(f"{label}: {job.error}", file=sys.stderr)
+    return 1 if failed else 0
 
 
 # --------------------------------------------------------------------- update
@@ -208,16 +256,26 @@ def cmd_uninstall(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="axis",
-        description="Run `axis` to open the Axis web app. Axis uses a model you have already "
-        "started with Ollama or llama.cpp.",
+        description="Run `axis` to open the Axis web app. Axis installs llama.cpp and stable-diffusion.cpp "
+        "itself, and chat and image models from its Models page.",
     )
     p.add_argument("--version", action="version", version=f"axis {__version__}")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port for the web app (default {DEFAULT_PORT})")
     p.add_argument("--no-browser", action="store_true", help="do not open a browser window")
     p.add_argument("--url", help="model server address (default: auto-detect; env: AXIS_URL)")
+    p.add_argument("--no-engine-install", action="store_true",
+                   help="do not install llama.cpp and stable-diffusion.cpp on the first start "
+                        "(env: AXIS_NO_ENGINE_INSTALL=1)")
     p.set_defaults(func=cmd_serve)
 
     sub = p.add_subparsers(dest="command", metavar="[command]")
+    s = sub.add_parser("setup", help="install llama.cpp and stable-diffusion.cpp for Axis")
+    s.add_argument("--build", choices=engines.BUILDS, default="auto",
+                   help="which build to install (default: the best one for this computer)")
+    s.add_argument("--only", choices=list(engines.ENGINES), help="install only llama.cpp (llama) or stable-diffusion.cpp (sd)")
+    s.add_argument("--force", action="store_true", help="install even when a copy is already found")
+    s.set_defaults(func=cmd_setup)
+
     u = sub.add_parser("update", help="install the latest Axis from GitHub")
     u.add_argument("--source", help="install from this URL, ZIP file or folder instead of GitHub")
     u.set_defaults(func=cmd_update)

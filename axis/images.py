@@ -129,7 +129,9 @@ def save_settings(data: Any) -> Dict[str, Any]:
 
 
 def find_cli() -> Optional[Path]:
-    """sd-cli from the settings, AXIS_SD_CLI, or the PATH."""
+    """sd-cli from the settings, AXIS_SD_CLI, the copy Axis installed, or the PATH."""
+    from . import engines
+
     configured = load_settings()["sd_cli"] or os.environ.get("AXIS_SD_CLI", "")
     if configured:
         p = Path(configured).expanduser()
@@ -137,6 +139,9 @@ def find_cli() -> Optional[Path]:
             return p.resolve()
         found = shutil.which(configured)
         return Path(found).resolve() if found else None
+    axis_copy = engines.program("sd-cli")
+    if axis_copy is not None:
+        return axis_copy
     for name in ("sd-cli", "sd"):
         found = shutil.which(name)
         if found:
@@ -153,8 +158,10 @@ def workdir(cli: Optional[Path] = None) -> Path:
     configured = load_settings()["workdir"]
     if configured:
         return Path(configured).expanduser()
+    from . import engines
+
     cli = cli or find_cli()
-    if cli is None:
+    if cli is None or inside(cli, engines.root()):  # Axis's own copy moves when it is updated
         return axis_home()
     return cli.parent.parent if cli.parent.name.lower() == "bin" else cli.parent
 
@@ -181,8 +188,8 @@ def status() -> Dict[str, Any]:
         "busy": _LOCK.locked(),
         "samplers": list(SAMPLERS),
         "message": None if (cli or server) else (
-            "stable-diffusion.cpp was not found. Set the full path to sd-cli below (for example "
-            "C:\\sd\\sd-cli.exe), or set AXIS_SD_CLI."),
+            "stable-diffusion.cpp is not installed yet. Axis installs it with your first image model, or install it "
+            "now under Image models on the Models page."),
         "models": models,
     }
 
@@ -499,7 +506,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     params = resolve_params(model, raw)
     cli = find_cli()
     if cli is None and not manager.image_server_url(model["id"]) and manager.sd_server_binary() is None:
-        raise ImageError("stable-diffusion.cpp was not found. Set the sd-cli path on the Models page under Image models.")
+        raise ImageError("stable-diffusion.cpp is not installed. Install it on the Models page under Image models.")
 
     while not _LOCK.acquire(timeout=1.0):
         emit({"queued": True})  # also notices a browser that has gone away
@@ -711,7 +718,9 @@ def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit)
 
 
 def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit) -> List[str]:
-    kwargs: Dict[str, Any] = {}
+    from . import engines
+
+    kwargs: Dict[str, Any] = {"env": {**os.environ, **engines.run_env(Path(cmd[0]))}}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:

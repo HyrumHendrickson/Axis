@@ -176,7 +176,8 @@ def free_port():
 class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
-        self.env = mock.patch.dict(os.environ, {"AXIS_HOME": self.home})
+        self.env = mock.patch.dict(os.environ, {"AXIS_HOME": self.home, "AXIS_NO_ENGINE_INSTALL": "1",
+                                                "AXIS_GITHUB": "http://127.0.0.1:9", "AXIS_GITHUB_API": "http://127.0.0.1:9"})
         self.env.start()
         os.environ.pop("AXIS_URL", None)
         self.servers = []
