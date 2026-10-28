@@ -4,6 +4,9 @@ Routes:
   GET    /                                  the app
   GET    /api/ping                          identifies a running Axis
   GET    /api/status                        model server and loaded models
+  GET    /api/update                        installed and newest version (the first call starts the check)
+  POST   /api/update                        download and install the newest Axis in the background
+  POST   /api/update/check                  check GitHub again now
   GET    /api/models                        details for each model (memory, context, size)
   GET    /api/agents                        list agents
   POST   /api/agents                        create an agent
@@ -68,7 +71,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, procs, runner, skills, tools
+from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, procs, runner, skills, tools, updates
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -76,6 +79,18 @@ MAX_BODY = 5 * 1024 * 1024
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
 HIDDEN = set(tools.HIDDEN_NAMES)
+_PAGE: Optional[bytes] = None
+
+
+def page() -> bytes:
+    """The page, read once. An update replaces the file on disk while this (old) server still runs,
+    so a reload must keep getting the page that matches this server until Axis is restarted."""
+    global _PAGE
+    if _PAGE is None:
+        _PAGE = (WEB_DIR / "index.html").read_bytes()
+    return _PAGE
+
+
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 
 
@@ -341,13 +356,21 @@ class Handler(BaseHTTPRequestHandler):
         n = len(parts)
         if n == 0:
             if method == "GET":
-                return self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+                return self._send(200, page(), "text/html; charset=utf-8")
         elif parts[0] != "api":
             pass
         elif parts[1:] == ["ping"] and method == "GET":
             return self._json(200, {"app": "axis", "version": __version__})
         elif parts[1:] == ["status"] and method == "GET":
             return self._status()
+        elif parts[1:] == ["update"]:
+            if method == "GET":
+                return self._json(200, updates.state())
+            if method == "POST":
+                return self._json(202, updates.start_update())
+        elif parts[1:] == ["update", "check"] and method == "POST":
+            updates.check(force=True)
+            return self._json(200, updates.state())
         elif parts[1:] == ["models"] and method == "GET":
             return self._json(200, backend.describe(self.server.model_url))
         elif parts[1:] == ["chat"] and method == "POST":

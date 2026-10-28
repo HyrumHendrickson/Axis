@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "axis-agent-manager"
-version = "3.7.0"
+dynamic = ["version"]
 description = "A local web app for chatting with agents, with chat and image models it installs, starts and stops through Ollama, llama.cpp and stable-diffusion.cpp, which it installs itself"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,4 +19,7 @@ axis = "axis.cli:main"
 packages = ["axis"]
 
 [tool.setuptools.package-data]
-axis = ["web/*.html"]
+axis = ["VERSION", "web/*.html"]
+
+[tool.setuptools.dynamic]
+version = { file = "axis/VERSION" }

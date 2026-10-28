@@ -20,12 +20,12 @@ import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, engines, jobs, manager, server, tools
+from . import __version__, engines, jobs, manager, server, tools, updates
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
 PACKAGE = "axis-agent-manager"
-REPO_ZIP = "https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip"
+REPO_ZIP = updates.REPO_ZIP
 
 
 # ---------------------------------------------------------------------- serve
@@ -134,9 +134,7 @@ def cmd_setup(args) -> int:
 def cmd_update(args) -> int:
     source = args.source or REPO_ZIP
     print(f"Updating Axis {__version__} from {source}")
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
-           "--no-cache-dir", "--disable-pip-version-check", source]
-    result = subprocess.run(cmd)
+    result = subprocess.run(updates.pip_command(source))
     if result.returncode != 0:
         print("\nUpdate failed. Check your internet connection and try again.", file=sys.stderr)
         print(f"You can also reinstall by hand:  pipx install --force {REPO_ZIP}", file=sys.stderr)

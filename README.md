@@ -278,6 +278,10 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
 
+When the page opens, Axis checks GitHub quietly for a newer version. The badge at the top of the sidebar shows **Up to date** (green) or **Out of date**; click **Out of date**, then **Update now**, to install the new version from the page. Restart Axis afterwards (Ctrl+C, then `axis`) and reload the page. The check needs no account, sends nothing about you, and shows nothing when you are offline. Set `AXIS_NO_UPDATE_CHECK=1` to turn it off.
+
+The version number is kept in one place, `axis/VERSION`. To release a new version, change that file and push to `main`.
+
 If `axis update` fails, reinstall manually:
 
 ```bash
@@ -310,6 +314,7 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `AXIS_SEARCH_URL` | A SearXNG server for web search (JSON format must be enabled) | DuckDuckGo |
 | `AXIS_SD_CLI` | Path to stable-diffusion.cpp's `sd-cli` | `sd-cli` on PATH |
 | `AXIS_IMAGE_TIMEOUT` | Longest time one image may take, in seconds | 1800 |
+| `AXIS_NO_UPDATE_CHECK` | Set to `1` to stop Axis checking GitHub for a newer version | Checks |
 | `AXIS_LLAMA_SERVER` | Path to llama.cpp's `llama-server` | `llama-server` on PATH |
 | `AXIS_SD_SERVER` | Path to stable-diffusion.cpp's `sd-server` | Next to `sd-cli`, then PATH |
 | `AXIS_OLLAMA` | Path to the `ollama` program, used to start Ollama | `ollama` on PATH, then the usual install folders |
@@ -600,6 +605,8 @@ Project layout:
 axis/
   cli.py          the `axis`, `axis update`, and `axis uninstall` commands
   server.py       local web server and JSON API
+  updates.py      checks GitHub for a newer version and installs it from the page
+  VERSION         the version number, and nothing else
   agents.py       agent storage, folders, and message assembly
   chats.py        saved conversations
   images.py       image models, sd-cli and sd-server runners, and gallery
