@@ -1,6 +1,6 @@
 """The `axis` command.
 
-    axis              start the web app and open it in the browser
+    axis              start the web app and open it in its own window (--tab for a browser tab)
     axis setup        install llama.cpp and stable-diffusion.cpp (Axis also does this on its first start)
     axis update       download the latest Axis from GitHub and install it
     axis uninstall    remove the Axis program (optionally your data too)
@@ -17,11 +17,10 @@ import sys
 import tempfile
 import threading
 import time
-import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, engines, jobs, manager, server, shortcut, tools, updates
+from . import __version__, appwindow, engines, jobs, manager, server, shortcut, tools, updates
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
@@ -64,7 +63,7 @@ def cmd_serve(args) -> int:
         url = f"http://127.0.0.1:{args.port}"
         print(f"Axis is already running at {url}")
         if not args.no_browser:
-            webbrowser.open(url)
+            appwindow.open_app(url, tab=args.tab)
         return 0
 
     try:
@@ -75,9 +74,9 @@ def cmd_serve(args) -> int:
 
     print(f"Axis {__version__} is running at {httpd.url}")
     if args.app:
-        print("Started from the Axis app. Use Quit Axis in the page to stop it.")
+        print("Started from the Axis app. Close the Axis window, or use Quit Axis in it, to stop.")
     else:
-        print("Keep this window open while you use Axis. Press Ctrl+C to stop.")
+        print("Keep this terminal open while you use Axis. Press Ctrl+C to stop.")
     if not args.app:
         _first_run_shortcut()
     if not args.no_engine_install:
@@ -87,16 +86,47 @@ def cmd_serve(args) -> int:
                   + " in the background. Progress is on the Models page.")
     _stop_on_terminate()
     if not args.no_browser:
-        threading.Timer(0.5, webbrowser.open, args=(httpd.url,)).start()
+        threading.Timer(0.5, _open_window, args=(httpd, args.tab)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping the models Axis started...")
         print("Axis stopped.")
     finally:
-        httpd.server_close()
         manager.shutdown()  # llama-server, sd-server and ollama serve, when Axis started them
+        httpd.server_close()
     return 0
+
+
+# How long Axis waits after the last page closes (a reload closes and reopens the page),
+# and how long a page may go without reporting before Axis treats it as gone.
+WINDOW_GRACE = 8.0
+WINDOW_STALE = 600.0
+
+
+def _open_window(httpd, tab: bool) -> None:
+    """Open Axis; when it got a window of its own, stop Axis once that window is closed."""
+    if appwindow.open_app(httpd.url, tab=tab) == "window":
+        httpd.close_with_window = True
+        print("Axis opened in its own window. Closing that window stops Axis.")
+        _watch_window(httpd)
+
+
+def _watch_window(httpd, grace: float = WINDOW_GRACE, stale: float = WINDOW_STALE, every: float = 1.0) -> threading.Thread:
+    """Once every Axis page has closed: stop the models Axis started, then stop Axis."""
+    def watch() -> None:
+        while True:
+            time.sleep(every)
+            if httpd.pages.all_closed(time.monotonic(), stale, grace):
+                break
+        print("The Axis window was closed. Stopping the models Axis started...")
+        manager.shutdown()
+        print("Axis stopped.")
+        httpd.shutdown()  # serve_forever returns and cmd_serve finishes
+
+    t = threading.Thread(target=watch, name="axis-window-watch", daemon=True)
+    t.start()
+    return t
 
 
 def _stop_on_terminate() -> None:
@@ -313,7 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"axis {__version__}")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port for the web app (default {DEFAULT_PORT})")
-    p.add_argument("--no-browser", action="store_true", help="do not open a browser window")
+    p.add_argument("--no-browser", action="store_true", help="do not open Axis; open the printed address yourself")
+    p.add_argument("--tab", action="store_true",
+                   help="open Axis in a normal browser tab instead of its own window (env: AXIS_BROWSER=tab)")
     p.add_argument("--url", help="model server address (default: auto-detect; env: AXIS_URL)")
     p.add_argument("--no-engine-install", action="store_true",
                    help="do not install llama.cpp and stable-diffusion.cpp on the first start "

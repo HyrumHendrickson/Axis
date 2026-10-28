@@ -4,6 +4,7 @@ Routes:
   GET    /                                  the app
   GET    /api/ping                          identifies a running Axis
   POST   /api/quit                          stops Axis (and the models it started)
+  POST   /api/page?id=x[&closing=1]         an open page says it is still there (or is closing)
   GET    /api/status                        model server and loaded models
   GET    /api/update                        installed and newest version (the first call starts the check)
   POST   /api/update                        download and install the newest Axis in the background
@@ -67,6 +68,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -129,6 +131,46 @@ class ClientGone(Exception):
     """The browser closed the connection (for example, the user pressed Stop)."""
 
 
+class Pages:
+    """The Axis pages that are open, so Axis can stop when its window is closed.
+
+    Each page reports itself every few seconds and says when it is closing. A reload closes
+    one page and opens another, so Axis waits `grace` seconds before treating "no pages" as
+    closed. A page that stops reporting without saying goodbye (the browser crashed) is
+    dropped after `stale` seconds; this is long, because browsers slow the timers of hidden
+    windows to about once a minute.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seen: Dict[str, float] = {}
+        self._ever = False
+        self._changed = time.monotonic()
+
+    def beat(self, page_id: str, now: Optional[float] = None) -> None:
+        with self._lock:
+            self._seen[page_id] = time.monotonic() if now is None else now
+            self._ever = True
+
+    def gone(self, page_id: str, now: Optional[float] = None) -> None:
+        with self._lock:
+            if self._seen.pop(page_id, None) is not None:
+                self._changed = time.monotonic() if now is None else now
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._seen)
+
+    def all_closed(self, now: float, stale: float, grace: float) -> bool:
+        """True once a page has been open and every page has since closed."""
+        with self._lock:
+            for page_id, last in list(self._seen.items()):
+                if now - last > stale:
+                    del self._seen[page_id]
+                    self._changed = min(self._changed, now - grace)
+            return self._ever and not self._seen and now - self._changed >= grace
+
+
 class AxisServer(ThreadingHTTPServer):
     daemon_threads = True
     # On Windows SO_REUSEADDR lets two programs share a port, which hides conflicts.
@@ -137,6 +179,8 @@ class AxisServer(ThreadingHTTPServer):
     def __init__(self, address, model_url: Optional[str] = None):
         super().__init__(address, Handler)
         self.model_url = model_url
+        self.pages = Pages()
+        self.close_with_window = False  # set when Axis opened its own window (cli.cmd_serve)
         port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -367,6 +411,15 @@ class Handler(BaseHTTPRequestHandler):
             # Stop serve_forever from another thread; cli.cmd_serve then stops the models Axis started.
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return self._json(200, {"stopping": True})
+        elif parts[1:] == ["page"] and method == "POST":
+            page_id = param("id")[:64]
+            if not page_id:
+                raise agents.AgentError("A page id is required.")
+            if param("closing"):
+                self.server.pages.gone(page_id)
+            else:
+                self.server.pages.beat(page_id)
+            return self._json(200, {"closeWithWindow": self.server.close_with_window})
         elif parts[1:] == ["status"] and method == "GET":
             return self._status()
         elif parts[1:] == ["update"]:

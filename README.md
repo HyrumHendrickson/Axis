@@ -13,7 +13,7 @@
 
 ## Overview
 
-Axis runs a small web app on your computer and opens it in your browser. It talks to a model served locally by **Ollama** or **llama.cpp**.
+Axis runs a small web app on your computer and opens it in a window of its own. It talks to a model served locally by **Ollama** or **llama.cpp**.
 
 - **Chat** directly with a model, or with agents you design.
 - **Agents** have their own system prompt, standing instructions, skills, and private folder.
@@ -268,7 +268,15 @@ In a separate terminal:
 axis
 ```
 
-Your browser opens at `http://127.0.0.1:8765`. The status panel shows **Ollama is ready** (or **llama.cpp / OpenAI-compatible is ready**) once a model is on. Closing the browser tab does not stop Axis. Press Ctrl+C in its terminal to stop it. Running `axis` while it is already running reopens the page.
+Axis opens at `http://127.0.0.1:8765` in its own window, with no tabs or address bar, and its own entry in the taskbar or Dock. The status panel shows **Ollama is ready** (or **llama.cpp / OpenAI-compatible is ready**) once a model is on. Running `axis` while it is already running opens another window on the same Axis.
+
+### The Axis window
+
+The window is an "app mode" window of a Chromium-based browser: Chrome, Edge, Brave, or Chromium, in that order. Edge comes with Windows 10 and 11, so every Windows computer has one. On a Mac with only Safari, or a Linux system with only Firefox, Axis opens in an ordinary browser tab instead, as it did before 4.0.
+
+**Closing the Axis window stops Axis.** It first stops every `llama-server`, `sd-server` and `ollama serve` it started, then exits. If a reply, a picture or an install is still running, the window asks before closing. Reloading the page does not stop Axis; it waits a few seconds for the page to come back. With several Axis windows open, Axis stops when the last one closes. If the browser crashes without closing the page, Axis stops after 10 minutes without hearing from it.
+
+In a browser tab (`axis --tab`, `AXIS_BROWSER=tab`, or when no Chromium-based browser is found), closing the tab does **not** stop Axis; press Ctrl+C in its terminal or use **Quit Axis**. To use a different Chromium-based browser for the window, such as Vivaldi or Opera, set `AXIS_BROWSER` to its program.
 
 ### The Axis app
 
@@ -280,7 +288,7 @@ The first time you run `axis` (or `axis setup`), Axis adds itself to your apps, 
 | macOS | `~/Applications/Axis.app`, so it shows in Launchpad and Spotlight; drag it to the Dock to keep it there |
 | Linux | Your desktop's app menu (`~/.local/share/applications/axis.desktop`) |
 
-Opening the app starts Axis in the background and opens the page; no terminal window is shown. Because there is no terminal to press Ctrl+C in, stop it with **Quit Axis** at the bottom of the sidebar. Its output goes to `axis.log` in your data folder. The `axis` command keeps working exactly as before, and both open the same Axis.
+Opening the app starts Axis in the background and opens the Axis window; no terminal window is shown. Close the window to stop Axis, or use **Quit Axis** at the bottom of the sidebar (needed when Axis fell back to a browser tab). Its output goes to `axis.log` in your data folder. The `axis` command still works, and both open the same Axis.
 
 Run `axis shortcut` to make the app again (for example after deleting it), `axis shortcut --remove` to remove it (Axis will not add it back), and `axis shortcut --no-desktop` on Windows to skip the desktop shortcut. `axis uninstall` removes it. Set `AXIS_NO_SHORTCUT=1` to stop Axis from adding it on the first run.
 
@@ -296,7 +304,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 
 | Command | Description |
 |---------|-------------|
-| `axis` | Start Axis and open it in your browser |
+| `axis` | Start Axis and open it in its own window |
 | `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. |
@@ -320,7 +328,8 @@ pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads
 | Option | Effect |
 |--------|--------|
 | `--port 9000` | Use a different port (default 8765; the next free port is used if it is taken) |
-| `--no-browser` | Do not open a browser; open the printed address yourself |
+| `--no-browser` | Do not open Axis; open the printed address yourself |
+| `--tab` | Open Axis in a normal browser tab instead of its own window. Closing the tab does not stop Axis. |
 | `--url http://127.0.0.1:9000` | Use a model server at a specific address |
 | `--no-engine-install` | Do not install llama.cpp and stable-diffusion.cpp on the first start |
 | `--version` | Print the version |
@@ -347,6 +356,7 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `HF_TOKEN` | Hugging Face access token, for gated or private models | The token saved by `hf auth login`, if any |
 | `OLLAMA_HOST` | Where Ollama listens, as Ollama itself uses it | `127.0.0.1:11434` |
 | `AXIS_NO_ENGINE_INSTALL` | `1` stops Axis installing llama.cpp and stable-diffusion.cpp on its first start | not set |
+| `AXIS_BROWSER` | Chromium-based browser for the Axis window (a path or program name), or `tab` for a normal browser tab | Chrome, then Edge, Brave, Chromium |
 | `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |
 
 Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
@@ -592,6 +602,8 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 | Model shows "Started by an earlier Axis session" | Axis was closed without stopping it. Click **Stop** if you do not need it. |
 | Page says **Axis has stopped** | The terminal running `axis` was closed. Run `axis` again and reload the page. |
 | Browser did not open | Open the address printed in the terminal (normally `http://127.0.0.1:8765`). |
+| Axis opens in a tab, not its own window | No Chrome, Edge, Brave or Chromium was found. Install one, or set `AXIS_BROWSER` to a Chromium-based browser. |
+| Axis stopped when I closed its window | That is intended in 4.0. To keep Axis running without a window, start it with `axis --tab` and close the tab instead. |
 | "This agent prefers X, which is not on" | Turn that model on, or clear the agent's preferred model in **Edit agent**. |
 | Reply stops with an error | Your message is restored in the box. Check the status panel and send again. |
 | Replies are very slow | Use a smaller model or close other programs to free memory. |

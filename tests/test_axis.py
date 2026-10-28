@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -23,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, backend, cli, images, runner, server, shortcut, skills, tools
+from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, tools
 
 LAST_REQUEST: dict = {}
 REQUESTS: list = []
@@ -1327,10 +1328,13 @@ class TestCli(Base):
         port = int(url.rsplit(":", 1)[1])
         self.assertTrue(server.find_running(port))
         self.assertFalse(server.find_running(free_port()))
-        with redirect_stdout(io.StringIO()) as out, mock.patch("webbrowser.open") as wb:
+        with redirect_stdout(io.StringIO()) as out, mock.patch.object(appwindow, "open_app") as opened:
             self.assertEqual(cli.main(["--port", str(port)]), 0)
         self.assertIn("already running", out.getvalue())
-        wb.assert_called_once()
+        opened.assert_called_once_with(f"http://127.0.0.1:{port}", tab=False)
+        with redirect_stdout(io.StringIO()), mock.patch.object(appwindow, "open_app") as opened:
+            self.assertEqual(cli.main(["--port", str(port), "--tab"]), 0)
+        opened.assert_called_once_with(f"http://127.0.0.1:{port}", tab=True)
 
     def test_starts_and_stops(self):
         port = free_port()
@@ -1454,6 +1458,128 @@ class TestShortcut(Base):
         text = (Path(self.home) / "axis.log").read_text()
         self.assertIn("Quit Axis", text)
         self.assertIn("Axis stopped", text)
+
+
+class TestAppWindow(Base):
+    def setUp(self):
+        super().setUp()
+        self._env = mock.patch.dict(os.environ, {"AXIS_BROWSER": ""})
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+        super().tearDown()
+
+    def fake_browser(self) -> str:
+        path = Path(self.home) / "fake-chrome"
+        path.write_text("")
+        return str(path)
+
+    def test_browser_override_and_tab(self):
+        browser = self.fake_browser()
+        with mock.patch.dict(os.environ, {"AXIS_BROWSER": browser}):
+            self.assertEqual(appwindow.find_browser(), browser)
+        with mock.patch.dict(os.environ, {"AXIS_BROWSER": "tab"}):
+            self.assertIsNone(appwindow.find_browser())
+
+    def test_finds_installed_browser(self):
+        browser = self.fake_browser()
+        with mock.patch.object(appwindow, "_candidates", return_value=["/nowhere/chrome", browser]):
+            self.assertEqual(appwindow.find_browser(), browser)
+        with mock.patch.object(appwindow, "_candidates", return_value=["/nowhere/chrome"]):
+            self.assertIsNone(appwindow.find_browser())
+
+    def test_opens_app_window(self):
+        with mock.patch.object(appwindow, "find_browser", return_value="/x/chrome"), \
+                mock.patch("subprocess.Popen") as popen, mock.patch("webbrowser.open") as wb:
+            self.assertEqual(appwindow.open_app("http://127.0.0.1:8765"), "window")
+        self.assertEqual(popen.call_args[0][0], ["/x/chrome", "--app=http://127.0.0.1:8765"])
+        wb.assert_not_called()
+
+    def test_falls_back_to_tab(self):
+        with mock.patch.object(appwindow, "find_browser", return_value=None), mock.patch("webbrowser.open") as wb:
+            self.assertEqual(appwindow.open_app("http://127.0.0.1:8765"), "tab")
+        wb.assert_called_once_with("http://127.0.0.1:8765")
+        with mock.patch.object(appwindow, "find_browser", return_value="/x/chrome"), \
+                mock.patch("subprocess.Popen", side_effect=OSError("gone")), \
+                mock.patch("webbrowser.open") as wb, redirect_stdout(io.StringIO()):
+            self.assertEqual(appwindow.open_app("http://127.0.0.1:8765"), "tab")
+        wb.assert_called_once()
+        with mock.patch.object(appwindow, "find_browser") as find, mock.patch("webbrowser.open"):
+            self.assertEqual(appwindow.open_app("http://127.0.0.1:8765", tab=True), "tab")
+        find.assert_not_called()
+
+
+class TestCloseWithWindow(Base):
+    def test_pages(self):
+        pages = server.Pages()
+        self.assertFalse(pages.all_closed(100.0, stale=60, grace=5))   # no page has opened yet
+        pages.beat("a", now=100.0)
+        pages.beat("b", now=100.0)
+        pages.gone("a", now=101.0)
+        self.assertFalse(pages.all_closed(110.0, stale=60, grace=5))   # b is still open
+        pages.gone("b", now=111.0)
+        self.assertFalse(pages.all_closed(113.0, stale=60, grace=5))   # maybe a reload
+        pages.beat("c", now=114.0)                                     # it was
+        self.assertFalse(pages.all_closed(120.0, stale=60, grace=5))
+        self.assertTrue(pages.all_closed(200.0, stale=60, grace=5))    # c stopped reporting
+
+    def test_page_endpoint(self):
+        srv = server.make_server(0, None)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            status, body = request(srv.url + "/api/page?id=p1", "POST", {})
+            self.assertEqual((status, json.loads(body)["closeWithWindow"]), (200, False))
+            self.assertEqual(srv.pages.count(), 1)
+            srv.close_with_window = True
+            status, body = request(srv.url + "/api/page?id=p1&closing=1", "POST", {})
+            self.assertTrue(json.loads(body)["closeWithWindow"])
+            self.assertEqual(srv.pages.count(), 0)
+            status, _ = request(srv.url + "/api/page", "POST", {})
+            self.assertEqual(status, 400)
+            status, _ = request(srv.url + "/api/page?id=p2", "POST", {}, {"Origin": "http://evil.example"})
+            self.assertEqual(status, 403)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_closing_window_stops_models_then_axis(self):
+        srv = server.make_server(0, None)
+        serving = threading.Thread(target=srv.serve_forever, daemon=True)
+        serving.start()
+        order = []
+        real_shutdown = srv.shutdown
+        try:
+            with mock.patch.object(cli.manager, "shutdown", side_effect=lambda: order.append("models")), \
+                    mock.patch.object(srv, "shutdown", side_effect=lambda: (order.append("axis"), real_shutdown())), \
+                    redirect_stdout(io.StringIO()) as out:
+                request(srv.url + "/api/page?id=w", "POST", {})
+                watcher = cli._watch_window(srv, grace=0.2, stale=60, every=0.05)
+                time.sleep(0.4)
+                self.assertTrue(watcher.is_alive())        # the window is still open
+                request(srv.url + "/api/page?id=w&closing=1", "POST", {})
+                watcher.join(5)
+            self.assertFalse(watcher.is_alive())
+            serving.join(5)
+            self.assertFalse(serving.is_alive())
+            self.assertEqual(order, ["models", "axis"])
+            self.assertIn("window was closed", out.getvalue())
+        finally:
+            srv.server_close()
+
+    def test_window_mode_turns_on_watching(self):
+        srv = mock.Mock(url="http://127.0.0.1:1")
+        with mock.patch.object(appwindow, "open_app", return_value="window"), \
+                mock.patch.object(cli, "_watch_window") as watch, redirect_stdout(io.StringIO()):
+            cli._open_window(srv, False)
+        self.assertTrue(srv.close_with_window)
+        watch.assert_called_once_with(srv)
+        srv = mock.Mock(url="http://127.0.0.1:1", close_with_window=False)
+        with mock.patch.object(appwindow, "open_app", return_value="tab"), \
+                mock.patch.object(cli, "_watch_window") as watch:
+            cli._open_window(srv, True)
+        self.assertFalse(srv.close_with_window)
+        watch.assert_not_called()
 
 
 if __name__ == "__main__":

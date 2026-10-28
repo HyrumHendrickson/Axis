@@ -2550,8 +2550,31 @@ function renderUpdate() {
 document.addEventListener("click", () => { if (updOpen) { updOpen = false; renderUpdate(); } });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && updOpen) { updOpen = false; renderUpdate(); } });
 
+/* ------------------------------------------------------------- window */
+// Axis stops when its own window is closed. The page reports itself every few seconds and says
+// goodbye when it closes, so the server knows when the last Axis page is gone.
+const PAGE_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let closesWithWindow = false;
+async function reportPage() {
+  try { closesWithWindow = !!(await api(`/api/page?id=${PAGE_ID}`, { method: "POST" })).closeWithWindow; } catch { /* Axis stopped */ }
+}
+window.addEventListener("pagehide", () => {
+  try { navigator.sendBeacon(`/api/page?id=${PAGE_ID}&closing=1`); } catch { /* nothing to tell */ }
+});
+window.addEventListener("pageshow", (e) => { if (e.persisted) reportPage(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) reportPage(); });
+window.addEventListener("beforeunload", (e) => {
+  // Closing the window stops Axis, so warn before cutting off a reply, a picture or an install.
+  if (!closesWithWindow || (S.status && S.status.axisDown)) return;
+  if (Object.keys(S.streams).length > 0 || !!S.imageJob || runningJobs(S.manage).length > 0) {
+    e.preventDefault(); e.returnValue = "";
+  }
+});
+
 /* ------------------------------------------------------------------ start */
 (async function start() {
+  reportPage();
+  setInterval(reportPage, 5000);
   const drafts = recall("axis.drafts", {});
   if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) S.drafts = drafts;
   const current = recall("axis.current", {});
