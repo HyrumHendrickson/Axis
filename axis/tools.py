@@ -338,6 +338,16 @@ except BaseException as _e:
 
 def python_executable() -> str:
     """The user's own Python, so installed packages are available to agent code."""
+    exe = _find_python()
+    # The Axis app runs under pythonw.exe, which has no output; agent code needs python.exe.
+    if os.name == "nt" and Path(exe).name.lower() == "pythonw.exe":
+        console = Path(exe).with_name("python.exe")
+        if console.is_file():
+            return str(console)
+    return exe
+
+
+def _find_python() -> str:
     override = os.environ.get("AXIS_PYTHON")
     if override:
         return override

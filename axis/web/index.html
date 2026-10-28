@@ -402,7 +402,7 @@ async function api(path, options = {}) {
   if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
   let res;
   try { res = await fetch(path, opts); }
-  catch { throw new Error("Axis is not responding. Check that the axis window is still open."); }
+  catch { throw new Error("Axis is not responding. Open the Axis app or run axis again."); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
   return data;
@@ -627,7 +627,18 @@ function renderNav() {
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
           (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name }), !!S.streams[a.name]))
       : h("p", { class: "nav-empty" }, "No agents yet."),
+    h("h2", {}, "Axis"),
+    item("Quit Axis", "Stop Axis and the models it started", false, quitAxis),
   );
+}
+
+async function quitAxis() {
+  const busy = Object.keys(S.streams).length > 0 || !!S.imageJob;
+  if (!confirm(busy ? "A reply or picture is still being made. Quit Axis anyway?"
+                    : "Quit Axis? Models that Axis started will be stopped.")) return;
+  try { await api("/api/quit", { method: "POST" }); } catch (e) { toast(e.message); return; }
+  S.status = { ready: false, axisDown: true, message: "You quit Axis.", models: [] };
+  renderStatus(); go({ kind: "chat", agent: DIRECT });
 }
 
 /* ------------------------------------------------------------------ chat */
@@ -747,7 +758,8 @@ function gateView() {
   const st = S.status || {};
   if (st.axisDown) return h("div", { class: "gate" },
     h("h3", {}, "Axis has stopped"),
-    h("p", {}, "The axis window was closed or stopped. Run axis again in a terminal, then reload this page."));
+    h("p", {}, "Axis was quit or its window was closed. Open the Axis app, or run axis in a terminal, "
+      + "then reload this page."));
   return h("div", { class: "gate" },
     h("h3", {}, st.server_running ? "Turn on a model to start" : "Start a model to use Axis"),
     h("p", {}, st.message || "Axis is looking for Ollama or llama.cpp on this computer."),

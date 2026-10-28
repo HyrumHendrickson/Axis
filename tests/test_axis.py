@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, backend, cli, images, runner, server, skills, tools
+from axis import agents, backend, cli, images, runner, server, shortcut, skills, tools
 
 LAST_REQUEST: dict = {}
 REQUESTS: list = []
@@ -177,7 +177,8 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
         self.env = mock.patch.dict(os.environ, {"AXIS_HOME": self.home, "AXIS_NO_ENGINE_INSTALL": "1",
-                                                "AXIS_GITHUB": "http://127.0.0.1:9", "AXIS_GITHUB_API": "http://127.0.0.1:9"})
+                                                "AXIS_GITHUB": "http://127.0.0.1:9", "AXIS_GITHUB_API": "http://127.0.0.1:9",
+                                                "AXIS_NO_SHORTCUT": "1", "XDG_DATA_HOME": os.path.join(self.home, "xdg")})
         self.env.start()
         os.environ.pop("AXIS_URL", None)
         self.servers = []
@@ -1389,6 +1390,70 @@ class TestCli(Base):
         self.assertTrue(cmd[1].endswith("axis_uninstall_helper.py"))
         self.assertEqual(cmd[2], str(os.getpid()))
         self.assertIn("finish uninstalling", out.getvalue())
+
+
+class TestShortcut(Base):
+    def test_quit_endpoint_stops_server(self):
+        srv = server.make_server(0, None)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        status, _ = request(srv.url + "/api/quit", "POST", {})
+        self.assertEqual(status, 200)
+        t.join(10)
+        self.assertFalse(t.is_alive())
+        srv.server_close()
+
+    def test_quit_refuses_other_sites(self):
+        url = self.axis_server(None)
+        status, _ = request(url + "/api/quit", "POST", {}, {"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_icons_are_packaged(self):
+        for name in ("axis.ico", "axis.icns", "axis.png"):
+            self.assertTrue((shortcut.ICONS / name).is_file(), name)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux desktop entry")
+    def test_linux_entry_create_and_remove(self):
+        made = shortcut.create()
+        entry = Path(made[0])
+        text = entry.read_text()
+        self.assertIn(f'Exec="{sys.executable}" -m axis --app', text)
+        self.assertIn("Terminal=false", text)
+        self.assertIn(str(shortcut.ICONS / "axis.png"), text)
+        self.assertEqual(shortcut.remove(), [str(entry)])
+        self.assertFalse(entry.exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux desktop entry")
+    def test_first_run_only(self):
+        with mock.patch.dict(os.environ, {"AXIS_NO_SHORTCUT": "0"}):
+            self.assertEqual(len(shortcut.ensure_once()), 1)
+            shortcut.remove()                          # the user removed it on purpose
+            self.assertEqual(shortcut.ensure_once(), [])  # so it is not put back
+            shortcut.remove(forget=True)               # uninstall forgets it
+            self.assertEqual(len(shortcut.ensure_once()), 1)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux desktop entry")
+    def test_shortcut_command(self):
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["shortcut"]), 0)
+            self.assertEqual(cli.main(["shortcut", "--remove"]), 0)
+        self.assertIn("axis command still works", out.getvalue())
+        self.assertIn("Removed", out.getvalue())
+
+    def test_app_mode_logs_to_file(self):
+        port = free_port()
+        stdout, stderr = sys.stdout, sys.stderr
+        try:
+            with mock.patch.object(server.AxisServer, "serve_forever", side_effect=KeyboardInterrupt), \
+                    mock.patch("threading.Timer"):
+                self.assertEqual(cli.main(["--app", "--port", str(port)]), 0)
+            sys.stdout.flush()
+        finally:
+            log, sys.stdout, sys.stderr = sys.stdout, stdout, stderr
+            log.close()
+        text = (Path(self.home) / "axis.log").read_text()
+        self.assertIn("Quit Axis", text)
+        self.assertIn("Axis stopped", text)
 
 
 if __name__ == "__main__":

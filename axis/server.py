@@ -3,6 +3,7 @@
 Routes:
   GET    /                                  the app
   GET    /api/ping                          identifies a running Axis
+  POST   /api/quit                          stops Axis (and the models it started)
   GET    /api/status                        model server and loaded models
   GET    /api/update                        installed and newest version (the first call starts the check)
   POST   /api/update                        download and install the newest Axis in the background
@@ -65,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -361,6 +363,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
         elif parts[1:] == ["ping"] and method == "GET":
             return self._json(200, {"app": "axis", "version": __version__})
+        elif parts[1:] == ["quit"] and method == "POST":
+            # Stop serve_forever from another thread; cli.cmd_serve then stops the models Axis started.
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return self._json(200, {"stopping": True})
         elif parts[1:] == ["status"] and method == "GET":
             return self._status()
         elif parts[1:] == ["update"]:

@@ -19,7 +19,7 @@ axis = "axis.cli:main"
 packages = ["axis"]
 
 [tool.setuptools.package-data]
-axis = ["VERSION", "web/*.html"]
+axis = ["VERSION", "web/*.html", "icons/*"]
 
 [tool.setuptools.dynamic]
 version = { file = "axis/VERSION" }

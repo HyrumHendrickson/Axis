@@ -4,6 +4,7 @@
     axis setup        install llama.cpp and stable-diffusion.cpp (Axis also does this on its first start)
     axis update       download the latest Axis from GitHub and install it
     axis uninstall    remove the Axis program (optionally your data too)
+    axis shortcut     add Axis to the Start menu / Applications / app menu (or --remove it)
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, engines, jobs, manager, server, tools, updates
+from . import __version__, engines, jobs, manager, server, shortcut, tools, updates
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
@@ -31,7 +32,30 @@ REPO_ZIP = updates.REPO_ZIP
 # ---------------------------------------------------------------------- serve
 
 
+def _log_to_file() -> None:
+    """The app launcher has no terminal (pythonw on Windows has no stdout at all), so write to a log."""
+    home = axis_home()
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        log = open(home / "axis.log", "w", encoding="utf-8", buffering=1)
+    except OSError:
+        log = open(os.devnull, "w", encoding="utf-8")
+    sys.stdout = sys.stderr = log
+
+
+def _first_run_shortcut() -> None:
+    try:
+        made = shortcut.ensure_once()
+    except shortcut.ShortcutError as exc:
+        print(f"Could not add Axis to your apps: {exc}. Run `axis shortcut` to try again.")
+        return
+    if made:
+        print("Added Axis to your apps (" + ", ".join(made) + "). Remove it with `axis shortcut --remove`.")
+
+
 def cmd_serve(args) -> int:
+    if args.app or sys.stdout is None:
+        _log_to_file()
     if not 0 <= args.port <= 65535:
         print("Error: --port must be between 0 and 65535.", file=sys.stderr)
         return 2
@@ -50,7 +74,12 @@ def cmd_serve(args) -> int:
         return 1
 
     print(f"Axis {__version__} is running at {httpd.url}")
-    print("Keep this window open while you use Axis. Press Ctrl+C to stop.")
+    if args.app:
+        print("Started from the Axis app. Use Quit Axis in the page to stop it.")
+    else:
+        print("Keep this window open while you use Axis. Press Ctrl+C to stop.")
+    if not args.app:
+        _first_run_shortcut()
     if not args.no_engine_install:
         started = manager.auto_install_engines()
         if started:
@@ -125,7 +154,26 @@ def cmd_setup(args) -> int:
         else:
             failed = True
             print(f"{label}: {job.error}", file=sys.stderr)
+    _first_run_shortcut()
     return 1 if failed else 0
+
+
+# ------------------------------------------------------------------ shortcut
+
+
+def cmd_shortcut(args) -> int:
+    try:
+        if args.remove:
+            gone = shortcut.remove()
+            print("Removed " + ", ".join(gone) if gone else "There was no Axis shortcut to remove.")
+        else:
+            made = shortcut.create(desktop=not args.no_desktop)
+            print("Axis is now in your apps:\n  " + "\n  ".join(made))
+            print("The axis command still works as before.")
+    except shortcut.ShortcutError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 # --------------------------------------------------------------------- update
@@ -220,6 +268,12 @@ def cmd_uninstall(args) -> int:
         print(f"  pipx uninstall {PACKAGE}", file=sys.stderr)
         return 1
 
+    try:
+        for path in shortcut.remove(forget=True):
+            print(f"Removed {path}")
+    except shortcut.ShortcutError as exc:
+        print(f"Could not remove the Axis shortcut: {exc}", file=sys.stderr)
+
     if delete_data and data.exists():
         shutil.rmtree(data, ignore_errors=True)
         print(f"Deleted {data}")
@@ -264,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-engine-install", action="store_true",
                    help="do not install llama.cpp and stable-diffusion.cpp on the first start "
                         "(env: AXIS_NO_ENGINE_INSTALL=1)")
+    p.add_argument("--app", action="store_true", help=argparse.SUPPRESS)  # used by the app shortcut
     p.set_defaults(func=cmd_serve)
 
     sub = p.add_subparsers(dest="command", metavar="[command]")
@@ -277,6 +332,11 @@ def build_parser() -> argparse.ArgumentParser:
     u = sub.add_parser("update", help="install the latest Axis from GitHub")
     u.add_argument("--source", help="install from this URL, ZIP file or folder instead of GitHub")
     u.set_defaults(func=cmd_update)
+
+    sc = sub.add_parser("shortcut", help="add Axis to the Start menu, Applications or app menu")
+    sc.add_argument("--remove", action="store_true", help="remove the shortcut instead")
+    sc.add_argument("--no-desktop", action="store_true", help="Windows: do not also put a shortcut on the desktop")
+    sc.set_defaults(func=cmd_shortcut)
 
     x = sub.add_parser("uninstall", help="remove Axis from this computer")
     x.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation (keeps your data)")

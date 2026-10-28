@@ -266,6 +266,26 @@ axis
 
 Your browser opens at `http://127.0.0.1:8765`. The status panel shows **Ollama is ready** (or **llama.cpp / OpenAI-compatible is ready**) once a model is on. Closing the browser tab does not stop Axis. Press Ctrl+C in its terminal to stop it. Running `axis` while it is already running reopens the page.
 
+### The Axis app
+
+The first time you run `axis` (or `axis setup`), Axis adds itself to your apps, so you can open it without a terminal:
+
+| System | Where it appears |
+|--------|------------------|
+| Windows | Start menu (search "Axis") and a desktop shortcut |
+| macOS | `~/Applications/Axis.app`, so it shows in Launchpad and Spotlight; drag it to the Dock to keep it there |
+| Linux | Your desktop's app menu (`~/.local/share/applications/axis.desktop`) |
+
+Opening the app starts Axis in the background and opens the page; no terminal window is shown. Because there is no terminal to press Ctrl+C in, stop it with **Quit Axis** at the bottom of the sidebar. Its output goes to `axis.log` in your data folder. The `axis` command keeps working exactly as before, and both open the same Axis.
+
+Run `axis shortcut` to make the app again (for example after deleting it), `axis shortcut --remove` to remove it (Axis will not add it back), and `axis shortcut --no-desktop` on Windows to skip the desktop shortcut. `axis uninstall` removes it. Set `AXIS_NO_SHORTCUT=1` to stop Axis from adding it on the first run.
+
+To get the app straight after installing, without starting Axis first:
+
+```bash
+pipx install git+https://github.com/HyrumHendrickson/Axis.git && axis shortcut
+```
+
 When Axis stops, it also stops every `llama-server` and `sd-server` it started, and `ollama serve` if Axis started it. Models loaded into an Ollama that was already running stay loaded until you stop them (Ollama's own behavior). If Axis is killed without a chance to clean up, Windows ends those programs with it; on macOS and Linux the next Axis takes them back and shows them as on, so you can stop them.
 
 ### Commands
@@ -274,6 +294,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 |---------|-------------|
 | `axis` | Start Axis and open it in your browser |
 | `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
+| `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. |
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
@@ -603,7 +624,9 @@ Project layout:
 
 ```
 axis/
-  cli.py          the `axis`, `axis update`, and `axis uninstall` commands
+  cli.py          the `axis`, `axis update`, `axis shortcut`, and `axis uninstall` commands
+  shortcut.py     the Start menu / Applications / app menu launcher
+  icons/          the app icon for Windows (.ico), macOS (.icns), and Linux (.png)
   server.py       local web server and JSON API
   updates.py      checks GitHub for a newer version and installs it from the page
   VERSION         the version number, and nothing else
