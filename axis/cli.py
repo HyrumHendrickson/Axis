@@ -18,7 +18,7 @@ import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, server, tools
+from . import __version__, manager, server, tools
 from .paths import axis_home
 
 DEFAULT_PORT = 8765
@@ -49,15 +49,35 @@ def cmd_serve(args) -> int:
 
     print(f"Axis {__version__} is running at {httpd.url}")
     print("Keep this window open while you use Axis. Press Ctrl+C to stop.")
+    _stop_on_terminate()
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, args=(httpd.url,)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nAxis stopped.")
+        print("\nStopping the models Axis started...")
+        print("Axis stopped.")
     finally:
         httpd.server_close()
+        manager.shutdown()  # llama-server, sd-server and ollama serve, when Axis started them
     return 0
+
+
+def _stop_on_terminate() -> None:
+    """Treat a request to terminate (closing the terminal, `kill`) like Ctrl+C, so models are stopped."""
+    import signal
+
+    def handler(signum, frame):
+        raise KeyboardInterrupt
+
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
 
 
 # --------------------------------------------------------------------- update

@@ -239,6 +239,36 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .model-actions .cmd { flex: 1; min-width: 240px; margin: 0; }
 .summary-line { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
 .fb-list.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.install { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 16px 16px 14px; margin-bottom: 28px; }
+.install .section-head { margin-bottom: 10px; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
+.seg button { border: 0; border-left: 1px solid var(--line); background: none; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.install-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.form .install-row input[type=text] { flex: 1; width: auto; min-width: 200px; font: 14px/1.6 var(--mono); padding: 8px 10px 9px; height: auto; overflow: visible; }
+.install select, .model-card select { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--surface); max-width: 100%; }
+.model-card input[type=number] { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--surface); width: 12em; }
+.choose-list { list-style: none; padding: 0; margin: 8px 0 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.choose-list li { display: flex; gap: 12px; align-items: center; padding: 6px 8px 6px 12px; border-top: 1px solid var(--line); }
+.choose-list li:first-child { border-top: 0; }
+.choose-name { flex: 1; font: 13px/1.4 var(--mono); overflow-wrap: anywhere; }
+.choose-size { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.job { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 8px; background: var(--surface); }
+.job-head { display: flex; gap: 10px; align-items: center; }
+.job-head strong, .job-head .job-meta { flex: 1; overflow-wrap: anywhere; }
+.job .ig-progress, .job-inline .ig-progress { margin: 8px 0 6px; }
+.job-inline { flex: 1; min-width: 240px; }
+.job-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.job.failed { border-color: var(--bad); }
+.job.failed .job-meta { color: var(--bad); white-space: pre-wrap; }
+.engine-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 14px; margin: 6px 0; }
+.engine-line .dot { background: var(--line); }
+.engine-line > span:not(.dot) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.engine-line .dot.ok { background: var(--ok); } .engine-line .dot.warn { background: var(--warn); }
+.confirm { flex: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--bad); border-radius: 6px; }
+.confirm p { flex-basis: 100%; margin: 0 0 4px; font-size: 14px; }
+.model-card pre.log { background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; margin: 6px 0 0; }
 
 /* ---------- images ---------- */
 .ig { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; flex: 1; min-height: 0; }
@@ -324,6 +354,9 @@ const S = {
   imageSelected: null,          // the picture shown large in the Images tab
   imageError: null,
   galleryPlace: "_shared",      // whose images/ folder the gallery shows
+  manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
+  manageError: "",              // the last error from a Models page action
+  install: { engine: "", name: "", role: "checkpoint", target: "", choose: null, message: "", error: "", sending: false },
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -520,7 +553,7 @@ function loadModels() {
   modelsLoading = api("/api/models")
     .then((d) => { S.models = d; })
     .catch((e) => { S.models = { ready: false, message: e.message, models: [] }; })
-    .finally(() => { modelsLoading = null; if (S.view.kind === "models") renderModels(); else updateHint(); });
+    .finally(() => { modelsLoading = null; autoRenderModels(); });
   return modelsLoading;
 }
 const modelInfo = (name) => (S.models && Array.isArray(S.models.models) && S.models.models.find((m) => m.name === name)) || null;
@@ -569,7 +602,7 @@ function renderNav() {
     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
-    item("Models", "Memory, context and details", v.kind === "models", () => go({ kind: "models" })),
+    item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
     h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
     S.agents.length
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
@@ -660,8 +693,8 @@ function renderChat() {
 
   const notes = [];
   if (agent && agent.model && ready() && !matchModel(agent.model, models))
-    notes.push(h("div", { class: "note" }, `This agent prefers ${agent.model}, which is not on. Using ${model}. To use it, run: `,
-      h("code", {}, `ollama run ${agent.model} --keepalive -1m`)));
+    notes.push(h("div", { class: "note" }, `This agent prefers ${agent.model}, which is not on. Using ${model}. `,
+      h("button", { class: "link", onclick: () => go({ kind: "models" }) }, "Start it on the Models page")));
 
   const parts = [bar, ...notes];
   if (!ready()) {
@@ -697,18 +730,19 @@ function gateView() {
     h("h3", {}, "Axis has stopped"),
     h("p", {}, "The axis window was closed or stopped. Run axis again in a terminal, then reload this page."));
   return h("div", { class: "gate" },
-    h("h3", {}, st.server_running ? "Turn on a model to start" : "Start a model server to use Axis"),
+    h("h3", {}, st.server_running ? "Turn on a model to start" : "Start a model to use Axis"),
     h("p", {}, st.message || "Axis is looking for Ollama or llama.cpp on this computer."),
-    h("h4", {}, "With Ollama"),
+    h("p", {}, h("button", { class: "btn primary", onclick: () => go({ kind: "models" }) }, "Open Models"),
+      " to install a model and start it with one click."),
+    h("h4", {}, "Or from a terminal, with Ollama"),
     h("ol", {},
       h("li", {}, "Open the Ollama app (or run ollama serve in a terminal)."),
       h("li", {}, "In a terminal, turn on a model:", cmd("ollama run llama3.2:3b --keepalive -1m")),
       h("li", {}, "Type /bye to leave Ollama's prompt. The model stays on.")),
-    h("h4", {}, "With llama.cpp"),
+    h("h4", {}, "Or with llama.cpp"),
     h("ol", {},
       h("li", {}, "In a terminal, start the server with a model and leave it open:",
         cmd("llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192"))),
-    st.server_running ? h("p", { style: "margin-top:18px" }, h("button", { class: "btn small", onclick: () => go({ kind: "models" }) }, "See installed models")) : null,
     h("p", { style: "margin-top:18px" }, "This page checks every few seconds and unlocks as soon as a model is on."));
 }
 
@@ -1528,6 +1562,8 @@ async function deleteChat(c) {
 }
 
 /* ---------------------------------------------------------------- models */
+// The Models page installs, starts, stops and deletes models. Long operations run as jobs in Axis;
+// this page polls /api/manage to show their progress, so they survive switching pages or reloading.
 const CAP_TEXT = { completion: "Chat", tools: "Tools", vision: "Vision", thinking: "Thinking", embedding: "Embeddings", insert: "Fill-in", audio: "Audio" };
 function gpuText(m) {
   if (typeof m.gpu_percent !== "number") return "";
@@ -1541,7 +1577,150 @@ function expiresText(iso) {
   if (d.getFullYear() > 2100) return "until you stop it";
   return "until " + when(iso);
 }
-function modelCard(m, d) {
+function durationText(sec) {
+  if (!isFinite(sec) || sec <= 0) return "";
+  if (sec < 90) return Math.round(sec) + " s";
+  if (sec < 5400) return Math.round(sec / 60) + " min";
+  return (sec / 3600).toFixed(1) + " h";
+}
+const extLink = (href, text) => h("a", { href, target: "_blank", rel: "noopener" }, text);
+
+/* --- manage state and polling */
+let manageTimer = null, manageLoading = null;
+function loadManage() {
+  if (manageLoading) return manageLoading;
+  manageLoading = api("/api/manage")
+    .then((d) => { const before = S.manage; S.manage = d; onManage(before, d); })
+    .catch((e) => { if (!S.manage || !S.manage.llamacpp) S.manage = { error: e.message, jobs: [] }; })
+    .finally(() => { manageLoading = null; scheduleManage(); });
+  return manageLoading;
+}
+const runningJobs = (d) => ((d && d.jobs) || []).filter((j) => j.state === "running");
+function scheduleManage() {
+  clearTimeout(manageTimer);
+  const busy = runningJobs(S.manage).length > 0;
+  if (busy || S.view.kind === "models") manageTimer = setTimeout(loadManage, busy ? 1000 : 4000);
+}
+const jobSig = (d) => JSON.stringify(((d && d.jobs) || []).map((j) => [j.id, j.state, j.cancel_requested, j.cancellable]));
+function runSig(d) {
+  if (!d || !d.llamacpp) return "";
+  return JSON.stringify([d.ollama, d.llamacpp.binary, d.llamacpp.models.map((m) => [m.id, m.running, m.ready, !!m.crashed]),
+    d.image.running, Object.keys(d.image.crashed || {}), d.image.sd_server]);
+}
+function doneText(j) {
+  const named = j.label.replace(/^(Installing|Starting|Stopping|Deleting) /, "");
+  const what = j.kind === "install" ? ((j.result && j.result.model) || named) : named;
+  if (j.kind === "start") return (j.target ? what : "Ollama") + " is on";
+  return { install: `Installed ${what}`, stop: `Stopped ${what}`, delete: `Deleted ${what}` }[j.kind] || "Done";
+}
+const jobsSeen = new Set();   // finished jobs already acted on (a fast job can finish between two polls)
+function onManage(before, d) {
+  const first = !before || !before.llamacpp;
+  let finished = false, imageDone = false;
+  for (const j of d.jobs || []) {
+    if (j.state === "running" || jobsSeen.has(j.id)) continue;
+    jobsSeen.add(j.id);
+    if (first) continue;   // finished before this page opened: nothing to announce
+    finished = true;
+    if (j.engine === "image") imageDone = true;
+    if (j.state === "done") toast(doneText(j));
+    else if (j.state === "failed") toast(j.label + " failed. Details are on the Models page.");
+  }
+  if (finished) {
+    loadModels();
+    if (imageDone) loadImages().then(() => { autoRenderModels(); if (S.view.kind === "images") renderImages(); });
+    refreshStatus();
+  }
+  if (jobSig(before) !== jobSig(d)) renderNav();
+  if (S.view.kind !== "models") return;
+  if (finished || jobSig(before) !== jobSig(d) || runSig(before) !== runSig(d)) autoRenderModels();
+  else updateJobProgress(d);
+}
+const busyJob = (engine, target) => runningJobs(S.manage).find((j) => j.engine === engine && j.target === target) || null;
+
+/* The page redraws itself as jobs progress. It never does so while the user is filling in a form,
+   so nothing typed is lost; progress bars still update in place. */
+function editingModels() {
+  const main = $("main");
+  if (!main || main.querySelector("[data-dirty], form.img-form")) return true;
+  const a = document.activeElement;
+  return !!(a && main.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.id !== "install-name" && !a.dataset.free);
+}
+function autoRenderModels() {
+  if (S.view.kind !== "models") return updateHint();
+  if (editingModels()) { updateJobProgress(S.manage); return; }
+  renderModels();
+}
+function updateJobProgress(d) {
+  for (const j of runningJobs(d)) {
+    for (const el of document.querySelectorAll(`[data-job="${j.id}"]`)) {
+      const ph = el.querySelector(".job-phase");
+      if (ph) ph.textContent = jobMeta(j);
+      const bar = el.querySelector(".ig-progress");
+      if (bar) {
+        bar.classList.toggle("indef", typeof j.percent !== "number");
+        bar.firstChild.style.width = typeof j.percent === "number" ? j.percent.toFixed(1) + "%" : "";
+      }
+    }
+  }
+}
+function jobMeta(j) {
+  if (j.state === "failed") return j.error || "Failed.";
+  if (j.state === "cancelled") return "Cancelled.";
+  if (j.state === "done") return "Done.";
+  const parts = [j.cancel_requested ? "Cancelling\u2026" : (j.phase || "Working\u2026")];
+  if (j.total) parts.push(`${size(j.done || 0)} of ${size(j.total)}`);
+  if (j.rate && j.total) {
+    parts.push(size(j.rate) + "/s");
+    const left = durationText((j.total - (j.done || 0)) / j.rate);
+    if (left) parts.push(left + " left");
+  }
+  return parts.join(", ");
+}
+function progressBar(j) {
+  const pct = typeof j.percent === "number" ? j.percent : null;
+  return h("div", { class: "ig-progress" + (pct === null ? " indef" : "") }, h("i", { style: pct === null ? null : `width:${pct.toFixed(1)}%` }));
+}
+async function cancelJob(j) {
+  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
+  loadManage();
+}
+async function dismissJob(j) {
+  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}`, { method: "DELETE" }); } catch (e) { toast(e.message); }
+  if (S.manage) S.manage.jobs = (S.manage.jobs || []).filter((x) => x.id !== j.id);
+  renderModels();
+}
+function jobView(j) {
+  return h("div", { class: "job " + j.state, "data-job": j.id },
+    h("div", { class: "job-head" }, h("strong", {}, j.label),
+      j.state === "running" && j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => cancelJob(j) }, "Cancel") : null,
+      j.state !== "running" ? h("button", { class: "btn small", onclick: () => dismissJob(j) }, "Dismiss") : null),
+    j.state === "running" ? progressBar(j) : null,
+    h("div", { class: "job-meta job-phase" }, jobMeta(j)));
+}
+function busyView(j) {
+  return h("div", { class: "job-inline", "data-job": j.id }, progressBar(j),
+    h("div", { class: "job-head" }, h("span", { class: "job-meta job-phase" }, jobMeta(j)),
+      j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => cancelJob(j) }, "Cancel") : null));
+}
+async function manageAction(action, body) {
+  S.manageError = "";
+  try { await api("/api/manage/" + action, { method: "POST", body }); }
+  catch (e) { S.manageError = e.message; }
+  await loadManage();
+  renderModels();
+}
+/* Delete asks for confirmation inside the card, so the reader sees exactly what goes. */
+function confirmRow(row, text, yes, extra) {
+  fill(row, h("div", { class: "confirm", role: "alertdialog", "data-dirty": "1" },
+    h("p", {}, text), extra || null,
+    h("button", { class: "btn small danger", onclick: yes }, "Delete"),
+    h("button", { class: "btn small", onclick: () => renderModels() }, "Cancel")));
+  const b = row.querySelector(".btn.danger"); if (b) b.focus();
+}
+
+/* --- chat model cards */
+function modelCard(m, actions) {
   const rows = [];
   const add = (label, value, note) => {
     if (value === null || value === undefined || value === "") return;
@@ -1558,7 +1737,7 @@ function modelCard(m, d) {
   }
   add("Parameters", m.parameter_size || bigNum(m.parameter_count));
   add("Quantization", m.quantization);
-  add("Size on disk", m.disk_size ? size(m.disk_size) : null);
+  add("Size on disk", m.disk_size ? size(m.disk_size) : null, m.parts > 1 ? `in ${m.parts} parts` : null);
   add("Architecture", m.architecture || m.family);
   add("Layers", fmt(m.layers));
   add("Embedding size", fmt(m.embedding_length));
@@ -1566,61 +1745,233 @@ function modelCard(m, d) {
   if (m.expert_count) add("Experts", fmt(m.expert_count));
   if (m.running && m.expires) add("Stays loaded", expiresText(m.expires));
   if (!m.running && m.modified) add("Installed", when(m.modified));
+  add("From", m.source);
   add("Model file", m.model_path);
   add("Server build", m.build);
   add("License", m.license);
 
   const caps = Array.isArray(m.capabilities) ? m.capabilities : [];
   const notes = [];
-  if (d.kind === "ollama" && m.running && m.context && m.axis_context && m.context !== m.axis_context)
+  if (m.server_kind === "ollama" && m.running && m.context && m.axis_context && m.context !== m.axis_context)
     notes.push(`Axis asks Ollama for a context of ${fmt(m.axis_context)} tokens, so Ollama will reload this model at that size with the next Axis message. Memory use changes when it does.`);
   if (caps.length && caps.includes("completion") && !caps.includes("tools"))
     notes.push("No built-in tool support. Agents with actions still work through Axis\u2019s text format, but less reliably.");
   if (caps.includes("embedding") && !caps.includes("completion")) notes.push("This is an embedding model; it cannot chat.");
-
-  const actions = [];
-  if (m.running && (S.status && S.status.models || []).includes(m.name) && !caps.includes("embedding")) {
-    actions.push(h("button", { class: "btn small primary", onclick: () => { S.modelChoice[DIRECT] = m.name; go({ kind: "chat", agent: DIRECT }); } }, "Chat with this model"));
-  }
-  if (d.kind === "ollama") actions.push(cmd(m.running ? `ollama stop ${m.name}` : `ollama run ${m.name} --keepalive -1m`));
+  if (m.external) notes.push("This model was started outside Axis. Stop it where it was started.");
+  if (m.missing_parts) notes.push("Some parts of this model are missing. Delete it and install it again.");
+  if (m.adopted) notes.push("Started by an earlier Axis session. Stop it here when you no longer need it.");
 
   return h("div", { class: "model-card" },
-    h("h4", {}, m.name, m.running ? h("span", { class: "chip on" }, "On") : h("span", { class: "chip" }, "Installed")),
+    h("h4", {}, m.name, m.engine ? h("span", { class: "chip" }, m.engine) : null,
+      m.running ? h("span", { class: "chip on" }, "On") : h("span", { class: "chip" }, "Off")),
     caps.length ? h("div", { class: "chips", style: "margin-top:8px" }, caps.map((c) => h("span", { class: "chip" }, CAP_TEXT[c] || c))) : null,
     rows.length ? h("dl", { class: "kv-grid" }, rows) : h("p", { class: "hint", style: "margin-top:8px" }, "The server did not report any details for this model."),
     notes.map((n) => h("p", { class: "model-note" }, n)),
+    m.crash_log ? h("div", {}, h("p", { class: "model-note", style: "color:var(--bad)" }, "It stopped unexpectedly. Its last messages:"), h("pre", { class: "log" }, m.crash_log)) : null,
     m.parameters ? h("details", {}, h("summary", {}, "Default settings"), h("pre", {}, m.parameters)) : null,
-    actions.length ? h("div", { class: "model-actions" }, actions) : null);
+    actions);
+}
+function chatButton(name, caps) {
+  if (!(S.status && S.status.models || []).includes(name) || (caps || []).includes("embedding")) return null;
+  return h("button", { class: "btn small", onclick: () => { S.modelChoice[DIRECT] = name; go({ kind: "chat", agent: DIRECT }); } }, "Chat with this model");
+}
+function modelActions(engine, target, isOn, chatName, caps, deleteText, cannotStart) {
+  const row = h("div", { class: "model-actions" });
+  const job = busyJob(engine, target);
+  if (job) { fill(row, busyView(job)); return row; }
+  fill(row,
+    isOn ? chatButton(chatName, caps) : null,
+    isOn ? h("button", { class: "btn small", onclick: () => manageAction("stop", { engine, model: target }) }, "Stop")
+      : h("button", { class: "btn small" + (cannotStart ? "" : " primary"), disabled: !!cannotStart, title: cannotStart || null,
+          onclick: () => manageAction("start", { engine, model: target }) }, "Start"),
+    deleteText ? h("button", { class: "btn small danger", onclick: () => confirmRow(row, deleteText, () => manageAction("delete", { engine, model: target })) }, "Delete") : null);
+  return row;
+}
+function chatCards(d, m) {
+  const details = (d && d.models) || [];
+  const cards = [];
+  for (const x of details.filter((x) => x.server_kind === "ollama")) {
+    cards.push({ on: x.running, name: x.name, el: modelCard({ ...x, engine: "Ollama" },
+      modelActions("ollama", x.name, x.running, x.name, x.capabilities,
+        `Delete ${x.name}? Its files${x.disk_size ? " (" + size(x.disk_size) + ")" : ""} are removed from disk. You can install it again later.`)) });
+  }
+  const aliases = new Set();
+  for (const lm of m.llamacpp.models) {
+    if (lm.alias) aliases.add(lm.alias);
+    const info = lm.alias ? details.find((x) => x.server_kind === "openai" && x.name === lm.alias) : null;
+    const on = lm.running && lm.ready;
+    const card = { ...(info || {}), name: lm.name, engine: "llama.cpp", running: on, disk_size: lm.size, parts: lm.parts,
+      model_path: lm.file, source: lm.repo ? "huggingface.co/" + lm.repo : null, adopted: lm.adopted,
+      missing_parts: lm.missing_parts, crash_log: lm.crashed };
+    cards.push({ on, name: lm.name, el: modelCard(card, modelActions("llamacpp", lm.id, on, lm.alias, card.capabilities,
+      `Delete ${lm.name}? Its file${lm.parts > 1 ? "s" : ""} (${size(lm.size)}) ${lm.parts > 1 ? "are" : "is"} removed from disk. You can install it again later.`,
+      m.llamacpp.binary ? null : "llama-server was not found. Set its path under Engine settings.")) });
+  }
+  for (const x of details.filter((x) => x.server_kind === "openai" && !aliases.has(x.name))) {
+    const row = h("div", { class: "model-actions" }, chatButton(x.name, x.capabilities));
+    cards.push({ on: true, name: x.name, el: modelCard({ ...x, engine: "llama.cpp", external: true }, row) });
+  }
+  cards.sort((a, b) => (b.on - a.on) || a.name.localeCompare(b.name));
+  return cards;
+}
+function engineLines(m) {
+  const o = m.ollama, l = m.llamacpp;
+  const ollama = h("div", { class: "engine-line" }, h("span", { class: "dot " + (o.running ? "ok" : o.binary ? "warn" : "") }),
+    o.running ? [h("span", {}, `Ollama ${o.version || ""} is running at ${o.url}.`),
+        o.managed ? h("button", { class: "btn small", onclick: async () => {
+          try { await api("/api/manage/ollama/stop", { method: "POST" }); } catch (e) { S.manageError = e.message; }
+          await loadManage(); loadModels(); refreshStatus(); renderModels(); } }, "Stop Ollama") : null]
+      : o.binary ? [h("span", {}, "Ollama is installed but not running."),
+        o.local ? h("button", { class: "btn small primary", onclick: () => manageAction("ollama/start", {}) }, "Start Ollama") : null]
+      : h("span", {}, "Ollama is not installed. ", extLink("https://ollama.com/download", "Download Ollama"), " to install models with it."));
+  const job = busyJob("ollama", "");
+  const llama = h("div", { class: "engine-line" }, h("span", { class: "dot " + (l.binary ? "ok" : "") }),
+    l.binary ? h("span", {}, ["llama.cpp: ", h("code", {}, l.binary)])
+      : h("span", {}, "llama-server was not found. ", extLink("https://github.com/ggml-org/llama.cpp/releases", "Install llama.cpp"),
+        ", then set its path under Engine settings below if Axis still cannot find it."));
+  return [ollama, job ? busyView(job) : null, llama];
+}
+
+/* --- install */
+const IMAGE_ROLES = [
+  ["checkpoint", "A complete model (SD 1.5, SD 2, SDXL checkpoint)"],
+  ["diffusion_model", "A diffusion model (Flux, Z-Image, SD3, Qwen-Image)"],
+  ["vae", "A VAE, added to one of my image models"],
+  ["llm", "A text encoder (LLM), added to one of my image models"],
+  ["clip_l", "A CLIP-L text encoder, added to one of my image models"],
+  ["t5xxl", "A T5-XXL text encoder, added to one of my image models"],
+];
+function installPanel(m) {
+  const I = S.install;
+  if (!I.engine) I.engine = (m.ollama.running || m.ollama.binary) ? "ollama" : "llamacpp";
+  const imgModels = (S.images && S.images.models) || [];
+  const component = !["checkpoint", "diffusion_model"].includes(I.role);
+  const info = {
+    ollama: { ph: "llama3.1:8b",
+      hint: ["A name from ", extLink("https://ollama.com/library", "ollama.com/library"), ", including the size after the colon, like llama3.1:8b or qwen3:4b. GGUF models on Hugging Face work too: hf.co/owner/name:Q4_K_M."],
+      warn: !m.ollama.running && !m.ollama.binary ? "Ollama is not installed. Download it from ollama.com/download, or install with llama.cpp instead."
+        : !m.ollama.running ? "Ollama is not running. Axis will start it." : null },
+    llamacpp: { ph: "bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M",
+      hint: ["A GGUF model on ", extLink("https://huggingface.co/models?library=gguf", "Hugging Face"), ", written owner/name. Add a quantization after a colon to pick one; otherwise Q4_K_M is chosen, or you choose from a list. A link copied from the site works too."],
+      warn: m.llamacpp.binary ? null : "llama-server was not found. You can install models now and start them once llama.cpp is set up." },
+    image: { ph: component ? "Comfy-Org/z_image_turbo/split_files/vae/ae.safetensors" : "stable-diffusion-v1-5/stable-diffusion-v1-5",
+      hint: ["A model on ", extLink("https://huggingface.co/models?pipeline_tag=text-to-image", "Hugging Face"), ", written owner/name, optionally followed by the path of one file. When the repository has several model files you choose one. Models with separate parts (Flux, Z-Image) are installed one file at a time: first the diffusion model, then its VAE and text encoder."],
+      warn: (S.images && !S.images.sd_cli && !S.images.sd_server) ? "stable-diffusion.cpp was not found. You can install models now; set the sd-cli path under Image models to use them." : null },
+  }[I.engine];
+  const seg = h("div", { class: "seg", role: "group", "aria-label": "What to install" },
+    [["ollama", "Chat model, Ollama"], ["llamacpp", "Chat model, llama.cpp"], ["image", "Image model"]].map(([k, label]) =>
+      h("button", { type: "button", "aria-pressed": I.engine === k ? "true" : "false",
+        onclick: () => { I.engine = k; I.choose = null; I.error = ""; renderModels(); } }, label)));
+  const input = h("input", { type: "text", id: "install-name", value: I.name, placeholder: info.ph, "aria-label": "Model name",
+    autocomplete: "off", spellcheck: "false",
+    oninput: (e) => { I.name = e.target.value; if (I.choose) { I.choose = null; renderModels(); } },
+    onkeydown: (e) => { if (e.key === "Enter") submitInstall(); } });
+  const role = h("select", { "aria-label": "What the file is", "data-free": "1", onchange: (e) => { I.role = e.target.value; I.choose = null; if (!["checkpoint", "diffusion_model"].includes(I.role) && !I.target && imgModels[0]) I.target = imgModels[0].id; renderModels(); } },
+    IMAGE_ROLES.map(([k, label]) => { const o = h("option", { value: k }, label); o.selected = k === I.role; return o; }));
+  const target = h("select", { "aria-label": "Image model", "data-free": "1", onchange: (e) => { I.target = e.target.value; } },
+    component ? null : h("option", { value: "" }, "As a new image model"),
+    imgModels.map((x) => { const o = h("option", { value: x.id }, (component ? "Add to " : "Replace in ") + x.name); o.selected = x.id === I.target; return o; }));
+  if (!component && !imgModels.some((x) => x.id === I.target)) I.target = "";
+  return h("div", { class: "install" },
+    h("div", { class: "section-head" }, h("h3", {}, "Install a model")),
+    seg,
+    I.engine === "image" ? h("div", { class: "install-row", style: "margin-bottom:8px" }, role,
+      component && !imgModels.length ? h("span", { class: "hint", style: "margin:0" }, "Install a diffusion model first; then add its parts to it.") : target) : null,
+    h("div", { class: "install-row" }, input,
+      h("button", { class: "btn primary", disabled: I.sending || (I.engine === "image" && component && !imgModels.length), onclick: () => submitInstall() }, I.sending ? "Looking it up\u2026" : "Install")),
+    h("p", { class: "hint", style: "margin:8px 0 0" }, info.hint),
+    info.warn ? h("p", { class: "model-note" }, info.warn) : null,
+    I.error ? h("p", { class: "form-error", role: "alert", style: "margin:10px 0 0;white-space:pre-wrap" }, I.error) : null,
+    I.choose ? h("div", {}, h("p", { class: "hint", style: "margin:12px 0 0" }, I.message),
+      h("ul", { class: "choose-list" }, I.choose.map((o) => h("li", {},
+        h("span", { class: "choose-name" }, o.file, o.parts > 1 ? h("small", {}, ` (${o.parts} parts)`) : null),
+        h("span", { class: "choose-size" }, o.size ? size(o.size) : ""),
+        h("button", { class: "btn small", onclick: () => submitInstall(o.file) }, "Install"))))) : null);
+}
+async function submitInstall(choice) {
+  const I = S.install;
+  I.error = "";
+  if (!I.name.trim()) { I.error = "Type the name of the model to install."; return renderModels(); }
+  I.sending = true; renderModels();
+  try {
+    const body = { engine: I.engine, name: I.name, choice: choice || "" };
+    if (I.engine === "image") Object.assign(body, { role: I.role, target: I.target || "" });
+    const r = await api("/api/manage/install", { method: "POST", body });
+    if (r.choose) { I.choose = r.choose; I.message = r.message; }
+    else { I.choose = null; I.message = ""; I.name = ""; }
+  } catch (e) { I.error = e.message; }
+  I.sending = false;
+  await loadManage();
+  renderModels();
+}
+
+/* --- engine settings */
+function engineSettings(m) {
+  const l = m.llamacpp;
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h("form", { class: "model-card", oninput: () => { form.dataset.dirty = "1"; }, onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    try {
+      S.manage = await api("/api/manage/settings", { method: "PUT", body: { llama_server: bin.value, llama_ctx: Number(ctx.value), llama_args: args.value } });
+      toast("Saved"); renderModels();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  } });
+  const bin = h("input", { type: "text", value: l.binary_setting || "", placeholder: l.binary || "llama-server", "aria-label": "llama-server path" });
+  const ctx = h("input", { type: "number", min: 512, max: 1048576, step: 1024, value: l.ctx, "aria-label": "Context size" });
+  const args = h("input", { type: "text", value: l.args || "", placeholder: "for example: -ngl 99 --flash-attn on", "aria-label": "Extra arguments" });
+  fill(form, h("h4", {}, "llama.cpp"), err,
+    h("div", { class: "field" }, h("label", {}, "llama-server path"), h("p", { class: "hint" }, "Leave empty to find llama-server on your PATH (or set AXIS_LLAMA_SERVER)."), bin),
+    h("div", { class: "field" }, h("label", {}, "Context size"), h("p", { class: "hint" }, "Tokens each llama.cpp model can hold. Larger uses more memory."), ctx),
+    h("div", { class: "field" }, h("label", {}, "Extra arguments"), h("p", { class: "hint" }, "Added to every llama-server Axis starts. Changes apply the next time a model starts."), args),
+    h("p", { class: "hint" }, ["Chat models downloaded for llama.cpp are kept in ", h("code", {}, l.root), ". GGUF files you copy there appear here too. Image models are kept in ",
+      h("code", {}, m.image.root), "."]),
+    h("p", { class: "hint" }, m.hf_token ? "A Hugging Face access token is set, so gated models you have accepted can be installed."
+      : ["Gated Hugging Face models need an access token: create one at ", extLink("https://huggingface.co/settings/tokens", "huggingface.co/settings/tokens"), ", set HF_TOKEN to it, and restart Axis."]),
+    h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
+  return h("div", { class: "skill-group" }, h("h3", {}, "Engine settings"), form);
+}
+
+function keepPlace(draw) {
+  const sc = $("models-scroll"), top = sc ? sc.scrollTop : null;
+  const a = document.activeElement, id = a && a.id;
+  const sel = a && typeof a.selectionStart === "number" ? [a.selectionStart, a.selectionEnd] : null;
+  draw();
+  const sc2 = $("models-scroll");
+  if (sc2 && top !== null) sc2.scrollTop = top;
+  if (id) { const el = $(id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) try { el.setSelectionRange(sel[0], sel[1]); } catch { /* not a text field */ } } }
 }
 
 function renderModels() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Models"),
-    h("button", { class: "btn small", onclick: () => { S.models = null; S.images = null; renderModels(); } }, "Refresh"));
-  const d = S.models;
-  if (!d) {
-    loadModels();
-    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "hint" }, "Reading model details\u2026"), imageModelsSection())));
+    h("button", { class: "btn small", onclick: () => { loadModels(); loadManage(); loadImages().then(() => renderModels()); } }, "Refresh"));
+  const d = S.models, m = S.manage;
+  if (!m || !m.llamacpp) loadManage();
+  if (!d) loadModels();
+  if (!m || !m.llamacpp || !d) {
+    const msg = m && m.error ? m.error : "Reading model details\u2026";
+    return fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, h("p", { class: "hint" }, msg))));
   }
-  const running = d.models.filter((m) => m.running), installed = d.models.filter((m) => !m.running);
   const body = [];
-  if (!d.models.length) {
-    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models"),
-      h("p", { class: "hint" }, d.message || "No chat models found. Start Ollama or llama.cpp with a model, then click Refresh.")));
-  } else {
-    const total = running.reduce((a, m) => a + (m.memory || 0), 0);
-    body.push(h("p", { class: "summary-line" }, [d.server, d.url].filter(Boolean).join(" at "),
-      total ? ` \u00b7 ${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}` : ""));
-    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models on now"),
-      running.length ? running.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "No model is loaded. Turn one on with the command under an installed model.")));
-    if (d.kind === "ollama") {
-      body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models installed"),
-        h("p", { class: "hint" }, `Downloaded but not loaded. Memory estimates assume the context of ${fmt(d.axis_context || 4096)} tokens that Axis asks for, and are approximate.`),
-        installed.length ? installed.map((m) => modelCard(m, d)) : h("p", { class: "hint" }, "Every installed model is on.")));
-    }
-  }
+  if (S.manageError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.manageError, " ",
+    h("button", { class: "link", onclick: () => { S.manageError = ""; renderModels(); } }, "Dismiss")));
+  body.push(installPanel(m));
+  const jobs = m.jobs || [];
+  if (jobs.length) body.push(h("div", { class: "skill-group" }, h("h3", {}, "Activity"), jobs.map(jobView)));
+
+  const cards = chatCards(d, m);
+  const running = cards.filter((c) => c.on);
+  const total = (d.models || []).filter((x) => x.running).reduce((a, x) => a + (x.memory || 0), 0);
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models"),
+    engineLines(m),
+    running.length && total ? h("p", { class: "summary-line" }, `${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}.`) : null,
+    (d.errors || []).map((e) => h("p", { class: "model-note" }, e)),
+    cards.length ? cards.map((c) => c.el)
+      : h("p", { class: "hint" }, "No chat models are installed yet. Install one above, for example llama3.1:8b with Ollama.")));
   body.push(imageModelsSection());
-  fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, body)));
+  body.push(engineSettings(m));
+  keepPlace(() => fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body))));
   if (S.view.focus === "images" && S.images) { const el = $("image-models"); if (el) el.scrollIntoView(); S.view.focus = null; }
+  scheduleManage();
 }
 
 /* ---------------------------------------------------------------- images */
@@ -1666,12 +2017,12 @@ function renderImages() {
     bar.append(h("button", { class: "btn small", onclick: () => { S.images = null; renderImages(); } }, "Check again"));
     return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "gate" },
       h("h3", {}, "Set up Stable Diffusion"),
-      h("p", {}, "Axis makes pictures with stable-diffusion.cpp\u2019s sd-cli program, using model files you have downloaded. It does not download anything itself."),
+      h("p", {}, "Axis makes pictures with stable-diffusion.cpp. Install image models on the Models page, or point Axis at model files you already have."),
       h("ol", {},
-        h("li", {}, st.sd_cli ? ["sd-cli found: ", h("code", {}, st.sd_cli)]
+        h("li", {}, st.sd_cli || st.sd_server ? ["stable-diffusion.cpp found: ", h("code", {}, st.sd_cli || st.sd_server)]
           : ["Download a release of stable-diffusion.cpp for your computer from ", h("a", { href: "https://github.com/leejet/stable-diffusion.cpp/releases", target: "_blank", rel: "noopener" }, "its GitHub page"), ", extract it, and give Axis the path to sd-cli on the Models page."]),
         h("li", {}, st.models.length ? `${st.models.length} image model${st.models.length === 1 ? "" : "s"} set up.`
-          : "On the Models page, under Image models, click Add image model and list the files it uses (diffusion model, text encoder, VAE).")),
+          : "On the Models page, choose Image model under Install a model and type a Hugging Face name, or add files you already have.")),
       h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "images" }) }, "Open Image models")))));
   }
 
@@ -1868,23 +2219,27 @@ async function generateImage() {
 /* Image models on the Models page */
 function imageSettingsCard(st) {
   const err = h("p", { class: "form-error", role: "alert", hidden: true });
-  const cli = h("input", { type: "text", value: st.sd_cli_setting || "", placeholder: st.sd_cli || "C:\\sd\\bin\\sd-cli.exe", "aria-label": "sd-cli path" });
+  const cli = h("input", { type: "text", value: st.sd_cli_setting || "", placeholder: st.sd_cli || "C:\\sd\\sd-cli.exe", "aria-label": "sd-cli path" });
+  const srv = h("input", { type: "text", value: st.sd_server_setting || "", placeholder: st.sd_server || "found next to sd-cli", "aria-label": "sd-server path" });
   const wd = h("input", { type: "text", value: st.workdir_setting || "", placeholder: st.workdir || "", "aria-label": "Working folder" });
   const def = h("select", { "aria-label": "Default image model" }, st.models.map((m) => { const o = h("option", { value: m.id }, m.name); o.selected = m.id === st.default_model; return o; }));
-  const save = async () => {
-    err.hidden = true;
-    try { S.images = await api("/api/images/settings", { method: "PUT", body: { sd_cli: cli.value, workdir: wd.value, default_model: def.value || "" } }); toast("Saved"); renderModels(); }
-    catch (e) { err.textContent = e.message; err.hidden = false; }
-  };
-  return h("div", { class: "model-card" },
-    h("h4", {}, "sd-cli", st.sd_cli ? h("span", { class: "chip on" }, "Found") : h("span", { class: "chip" }, "Not found")),
+  const form = h("form", { class: "model-card", oninput: () => { form.dataset.dirty = "1"; }, onchange: () => { form.dataset.dirty = "1"; }, onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    try { S.images = await api("/api/images/settings", { method: "PUT", body: { sd_cli: cli.value, sd_server: srv.value, workdir: wd.value, default_model: def.value || "" } }); toast("Saved"); loadManage(); renderModels(); }
+    catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  } },
+    h("h4", {}, "stable-diffusion.cpp", st.sd_cli || st.sd_server ? h("span", { class: "chip on" }, "Found") : h("span", { class: "chip" }, "Not found")),
     err,
-    h("p", { class: "hint", style: "margin-top:8px" }, st.sd_cli ? ["Using ", h("code", {}, st.sd_cli), "."] : st.message),
+    h("p", { class: "hint", style: "margin-top:8px" }, st.sd_cli || st.sd_server
+      ? [st.sd_cli ? ["sd-cli: ", h("code", {}, st.sd_cli), ". "] : "No sd-cli. ", st.sd_server ? ["sd-server: ", h("code", {}, st.sd_server), "."] : "No sd-server, so image models cannot be kept on."]
+      : [st.message, " ", extLink("https://github.com/leejet/stable-diffusion.cpp/releases", "Download stable-diffusion.cpp"), "."]),
     h("div", { class: "field" }, h("label", {}, "sd-cli path"), h("p", { class: "hint" }, "Leave empty to find sd-cli on your PATH (or set AXIS_SD_CLI)."), cli),
+    h("div", { class: "field" }, h("label", {}, "sd-server path"), h("p", { class: "hint" }, "Keeps a model on so pictures start at once. Leave empty to use the sd-server next to sd-cli (or set AXIS_SD_SERVER)."), srv),
     h("div", { class: "field" }, h("label", {}, "Working folder"),
-      h("p", { class: "hint" }, ["sd-cli runs here, and relative model paths (like models\\ae.safetensors) start here. Empty means: ", h("code", {}, st.workdir), "."]), wd),
+      h("p", { class: "hint" }, ["stable-diffusion.cpp runs here, and relative model paths (like models\\ae.safetensors) start here. Empty means: ", h("code", {}, st.workdir), "."]), wd),
     st.models.length ? h("div", { class: "field" }, h("label", {}, "Default image model"), h("p", { class: "hint" }, "Used by agents and selected first in the Images tab."), def) : null,
-    h("div", { class: "model-actions" }, h("button", { class: "btn small primary", onclick: save }, "Save")));
+    h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
+  return form;
 }
 
 function imageModelEditor(m, onDone) {
@@ -1929,7 +2284,7 @@ function imageModelCard(m, st) {
   const rows = [];
   const add = (label, value, note, bad) => rows.push(h("div", { class: "kv" }, h("dt", {}, label),
     h("dd", { style: bad ? "color:var(--bad)" : null }, String(value), note ? h("small", {}, note) : null)));
-  for (const file of m.files) add(file.label, file.path, file.exists ? size(file.size) : "file not found", !file.exists);
+  for (const file of m.files) add(file.label, file.path, file.exists ? size(file.size) + (file.managed ? ", downloaded by Axis" : "") : "file not found", !file.exists);
   if (m.disk_size) add("Size on disk", size(m.disk_size));
   add("Default size", `${m.width} \u00d7 ${m.height}`);
   add("Default steps", m.steps);
@@ -1938,37 +2293,64 @@ function imageModelCard(m, st) {
   if (m.scheduler) add("Scheduler", m.scheduler);
   if (m.extra_args) add("Extra arguments", m.extra_args);
   const isDefault = m.id === st.default_model;
+  const im = (S.manage && S.manage.image) || {};
+  const run = im.running && im.running.model === m.id ? im.running : null;
+  const isOn = !!(run && run.ready);
+  const crashed = (im.crashed || {})[m.id];
+  const job = busyJob("image", m.id);
+  const row = h("div", { class: "model-actions" });
+  const missing = m.missing.length > 0;
+  const startable = !!st.sd_server && !missing;
+  if (job) fill(row, busyView(job));
+  else fill(row,
+    isOn ? h("button", { class: "btn small", onclick: () => manageAction("stop", { engine: "image", model: m.id }) }, "Stop")
+      : st.sd_server ? h("button", { class: "btn small" + (startable ? " primary" : ""), disabled: !startable,
+          title: "Load this model into memory so pictures start at once. Stops any other image model that is on.",
+          onclick: () => manageAction("start", { engine: "image", model: m.id }) }, "Start") : null,
+    h("button", { class: "btn small", disabled: !(st.sd_cli || st.sd_server) || missing,
+      onclick: () => { S.imageForm.model = m.id; applyModelDefaults(S.imageForm); saveImageForm(); go({ kind: "images" }); } }, "Generate with this model"),
+    h("button", { class: "btn small", onclick: () => card.replaceWith(imageModelEditor(m, renderModels)) }, "Edit"),
+    isDefault ? null : h("button", { class: "btn small", onclick: async () => {
+      try { S.images = await api("/api/images/settings", { method: "PUT", body: { default_model: m.id } }); renderModels(); } catch (e) { toast(e.message); } } }, "Make default"),
+    h("button", { class: "btn small danger", onclick: () => confirmImageDelete(row, m) }, "Delete"));
   const card = h("div", { class: "model-card" },
-    h("h4", {}, m.name, h("span", { class: "chip" }, "Image"), isDefault ? h("span", { class: "chip on" }, "Default") : null,
-      m.missing.length ? h("span", { class: "chip", style: "color:var(--bad)" }, "Files missing") : null),
+    h("h4", {}, m.name, h("span", { class: "chip" }, "Image"), isOn ? h("span", { class: "chip on" }, "On") : null,
+      isDefault ? h("span", { class: "chip" }, "Default") : null,
+      missing ? h("span", { class: "chip", style: "color:var(--bad)" }, "Files missing") : null),
     m.description ? h("p", { class: "hint", style: "margin:6px 0 0" }, m.description) : null,
     h("dl", { class: "kv-grid" }, rows),
-    m.missing.length ? h("p", { class: "model-note" }, "Some files were not found. Check the paths and the working folder.") : null,
-    h("div", { class: "model-actions" },
-      h("button", { class: "btn small primary", disabled: !st.sd_cli || m.missing.length > 0,
-        onclick: () => { S.imageForm.model = m.id; applyModelDefaults(S.imageForm); saveImageForm(); go({ kind: "images" }); } }, "Generate with this model"),
-      h("button", { class: "btn small", onclick: () => card.replaceWith(imageModelEditor(m, renderModels)) }, "Edit"),
-      isDefault ? null : h("button", { class: "btn small", onclick: async () => {
-        try { S.images = await api("/api/images/settings", { method: "PUT", body: { default_model: m.id } }); renderModels(); } catch (e) { toast(e.message); } } }, "Make default"),
-      h("button", { class: "btn small danger", onclick: async () => {
-        if (!confirm(`Remove ${m.name} from Axis? Its files are not deleted.`)) return;
-        try { await api("/api/images/models/" + encodeURIComponent(m.id), { method: "DELETE" }); await loadImages(); renderModels(); } catch (e) { toast(e.message); } } }, "Remove")));
+    missing ? h("p", { class: "model-note" }, "Some files were not found. Check the paths and the working folder.") : null,
+    isOn ? h("p", { class: "hint", style: "margin:10px 0 0" }, "This model is in memory in sd-server, so pictures start at once. Stop it to free the memory.") : null,
+    run && run.adopted ? h("p", { class: "model-note" }, "Started by an earlier Axis session.") : null,
+    crashed ? h("div", {}, h("p", { class: "model-note", style: "color:var(--bad)" }, "sd-server stopped unexpectedly. Its last messages:"), h("pre", { class: "log" }, crashed)) : null,
+    row);
   return card;
+}
+function confirmImageDelete(row, m) {
+  const mine = m.files.filter((f) => f.exists && f.managed), theirs = m.files.filter((f) => f.exists && !f.managed);
+  const sum = (fs) => size(fs.reduce((a, f) => a + (f.size || 0), 0));
+  const text = (mine.length
+    ? `Delete ${m.name} and the ${mine.length} file${mine.length === 1 ? "" : "s"} Axis downloaded for it (${sum(mine)})?`
+    : `Remove ${m.name} from Axis?`) + " A file that another image model also uses is kept.";
+  const box = theirs.length ? h("input", { type: "checkbox", id: "del-theirs" }) : null;
+  confirmRow(row, text, () => manageAction("delete", { engine: "image", model: m.id, files: box && box.checked ? "all" : "axis" }),
+    box ? h("label", { for: "del-theirs", class: "hint", style: "flex-basis:100%;margin:0" }, box,
+      ` Also delete the ${theirs.length} file${theirs.length === 1 ? "" : "s"} you added yourself (${sum(theirs)})`) : null);
 }
 
 function imageModelsSection() {
   const st = S.images;
   if (!st) {
-    loadImages().then(() => { if (S.view.kind === "models") renderModels(); });
+    loadImages().then(() => { if (S.view.kind === "models") autoRenderModels(); });
     return h("div", { class: "skill-group", id: "image-models" }, h("h3", {}, "Image models"), h("p", { class: "hint" }, "Loading\u2026"));
   }
   const slot = h("div", {});
   return h("div", { class: "skill-group", id: "image-models" },
     h("div", { class: "section-head" }, h("h3", {}, "Image models"),
-      h("button", { class: "btn small primary", onclick: () => fill(slot, imageModelEditor(null, renderModels)) }, "Add image model")),
-    h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp\u2019s sd-cli. Each picture starts sd-cli, which loads the model, makes the picture and exits, so no memory is used between pictures."),
+      h("button", { class: "btn small", onclick: () => fill(slot, imageModelEditor(null, renderModels)) }, "Add files I already have")),
+    h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp. Install one above, or add files you already have. When a model is on, it stays in memory in sd-server and pictures start at once; otherwise each picture runs sd-cli, which loads the model and exits, using no memory between pictures."),
     slot,
-    st.models.length ? st.models.map((m) => imageModelCard(m, st)) : h("p", { class: "hint" }, "No image models yet. Click Add image model."),
+    st.models.length ? st.models.map((m) => imageModelCard(m, st)) : h("p", { class: "hint" }, "No image models yet."),
     imageSettingsCard(st));
 }
 
@@ -2051,6 +2433,7 @@ function renderSkills() {
   renderMain();
   loadModels();
   loadImages();
+  loadManage();
   setInterval(refreshStatus, 4000);
   setInterval(tick, 1000);
 })();

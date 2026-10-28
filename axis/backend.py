@@ -1,10 +1,14 @@
-"""Connection to a model server that the user has already started.
+"""Connection to the model servers.
 
-Axis never starts, downloads, or stops models. It supports two kinds of server:
+Two kinds of server are supported:
 
 * Ollama (default http://127.0.0.1:11434). Running models come from /api/ps.
 * llama.cpp ``llama-server`` or any other OpenAI-compatible server
   (default http://127.0.0.1:8080). Loaded models come from /v1/models.
+
+Axis looks at every server it knows about at once: the default addresses (or the
+one given with --url / AXIS_URL), plus each llama-server that Axis started itself
+on the Models page. A chat goes to whichever server has the chosen model loaded.
 """
 
 from __future__ import annotations
@@ -28,15 +32,25 @@ NUM_CTX = int(os.environ.get("AXIS_NUM_CTX", "8192"))
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 START_HELP = (
-    "Start a model first, then try again:\n"
+    "Start a model on the Models page, or from a terminal:\n"
     "  Ollama:     ollama run llama3.2:3b --keepalive -1m\n"
     "  llama.cpp:  llama-server -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M -c 8192\n"
     "See the README for full setup instructions."
 )
 
+# Functions that return extra server addresses to look at (the llama-servers Axis started).
+_URL_SOURCES: List[Callable[[], List[str]]] = []
+
+
+def add_url_source(source: Callable[[], List[str]]) -> None:
+    if source not in _URL_SOURCES:
+        _URL_SOURCES.append(source)
+
 
 class BackendError(Exception):
     """A problem talking to the model server that the user must fix."""
+
+    user_facing = True
 
 
 class ServerUnavailable(BackendError):
@@ -134,36 +148,105 @@ def resolve_url(url: Optional[str]) -> Optional[str]:
     return url
 
 
-def connect(url: Optional[str] = None) -> Backend:
-    """Find a running server with at least one loaded model, or raise BackendError."""
+def candidates(url: Optional[str] = None) -> List[str]:
+    """Server addresses to look at, in order of preference."""
     explicit = resolve_url(url)
-    candidates = [explicit] if explicit else list(DEFAULT_URLS)
-
-    found_empty: Optional[Backend] = None
-    for base in candidates:
-        backend = _probe_ollama(base) or _probe_openai(base)
-        if backend is None:
+    out = [explicit] if explicit else list(DEFAULT_URLS)
+    for source in _URL_SOURCES:
+        try:
+            extra = source()
+        except Exception:
             continue
-        if backend.models:
-            return backend
-        found_empty = found_empty or backend
+        for u in extra:
+            u = u.rstrip("/")
+            if u not in out:
+                out.append(u)
+    return out
 
-    if found_empty is not None:
-        raise BackendError(f"{found_empty.label} is running at {found_empty.url}, but no model is loaded.\n" + START_HELP)
+
+def _probe(base: str) -> Optional[Backend]:
+    return _probe_ollama(base) or _probe_openai(base)
+
+
+def _probe_all(urls: List[str]) -> List[Any]:
+    """Probe every address at once; each result is a Backend, None, or the BackendError raised."""
+    def one(base: str):
+        try:
+            return _probe(base)
+        except BackendError as exc:
+            return exc
+    if len(urls) == 1:
+        return [one(urls[0])]
+    with ThreadPoolExecutor(max_workers=min(8, len(urls))) as pool:
+        return list(pool.map(one, urls))
+
+
+def connect_all(url: Optional[str] = None) -> List[Backend]:
+    """Every reachable server that has at least one model loaded. Raises BackendError when there is none."""
+    urls = candidates(url)
+    results = _probe_all(urls)
+    found = [r for r in results if isinstance(r, Backend) and r.models]
+    if found:
+        return found
+    errors = [r for r in results if isinstance(r, BackendError)]
+    if errors:
+        raise errors[0]
+    empty = next((r for r in results if isinstance(r, Backend)), None)
+    if empty is not None:
+        raise BackendError(f"{empty.label} is running at {empty.url}, but no model is loaded.\n" + START_HELP)
+    explicit = resolve_url(url)
     where = explicit if explicit else " or ".join(DEFAULT_URLS)
     raise ServerUnavailable(f"No model server is running at {where}.\n" + START_HELP)
+
+
+def _match(models: List[str], requested: str) -> Optional[str]:
+    for name in models:
+        if requested == name or f"{requested}:latest" == name:
+            return name
+    return None
+
+
+def connect(url: Optional[str] = None, model: Optional[str] = None) -> Backend:
+    """Find a running server with at least one loaded model (the one that has `model`, when given)."""
+    backends = connect_all(url)
+    if model:
+        for b in backends:
+            if _match(b.models, model):
+                return b
+    return backends[0]
+
+
+def loaded_models(backends: List[Backend]) -> List[str]:
+    out: List[str] = []
+    for b in backends:
+        for m in b.models:
+            if m not in out:
+                out.append(m)
+    return out
+
+
+def pick(url: Optional[str], requested: Optional[str]) -> "tuple[Backend, str]":
+    """The server and model a chat should use."""
+    backends = connect_all(url)
+    if not requested:
+        return backends[0], backends[0].models[0]
+    for b in backends:
+        name = _match(b.models, requested)
+        if name:
+            return b, name
+    raise BackendError(f"Model '{requested}' is not loaded. Loaded: {', '.join(loaded_models(backends))}\n"
+                       "To use it, start it on the Models page.")
 
 
 def resolve_model(backend: Backend, requested: Optional[str]) -> str:
     """Pick a loaded model. A requested model must be one that is currently loaded."""
     if not requested:
         return backend.models[0]
-    for name in backend.models:
-        if requested == name or f"{requested}:latest" == name:
-            return name
+    name = _match(backend.models, requested)
+    if name:
+        return name
     running = ", ".join(backend.models)
-    hint = f"ollama run {requested} --keepalive -1m" if backend.kind == "ollama" else "restart llama-server with that model"
-    raise BackendError(f"Model '{requested}' is not loaded. Loaded: {running}\nTo use it: {hint}")
+    raise BackendError(f"Model '{requested}' is not loaded. Loaded: {running}\nTo use it, start it on the Models page.")
 
 
 # --------------------------------------------------------------------------- chat
@@ -519,25 +602,38 @@ def _openai_models(base: str) -> Dict[str, Any]:
 
 
 def describe(url: Optional[str] = None) -> Dict[str, Any]:
-    """Everything the server reports about its models, for the Models page."""
-    conn = None
-    try:
-        conn = connect(url)
-    except BackendError as exc:
-        explicit = resolve_url(url)
-        # A server with no model loaded can still list installed Ollama models.
-        for base in ([explicit] if explicit else list(DEFAULT_URLS)):
-            try:
-                if _probe_ollama(base):
-                    conn = Backend("ollama", base, [])
-                    break
-            except BackendError:
-                continue
-        if conn is None:
-            return {"ready": False, "message": str(exc).split("\n")[0], "models": []}
-    try:
-        data = _ollama_models(conn.url) if conn.kind == "ollama" else _openai_models(conn.url)
-    except Exception as exc:
-        return {"ready": False, "message": f"Could not read model details: {exc}", "models": []}
-    return {"ready": bool(conn.models), "server": conn.label, "kind": conn.kind, "url": conn.url,
-            "axis_context": NUM_CTX if conn.kind == "ollama" else None, **data}
+    """Everything the servers report about their models, for the Models page."""
+    urls = candidates(url)
+    results = _probe_all(urls)
+    servers: List[Backend] = []
+    message = ""
+    for base, r in zip(urls, results):
+        if isinstance(r, Backend):
+            if r.kind == "ollama" or r.models:   # an Ollama server with nothing loaded still lists installed models
+                servers.append(r)
+        elif isinstance(r, BackendError) and not message:
+            message = str(r).split("\n")[0]
+    if not servers:
+        if not message:
+            explicit = resolve_url(url)
+            message = f"No model server is running at {explicit if explicit else ' or '.join(DEFAULT_URLS)}."
+        return {"ready": False, "message": message, "models": [], "servers": []}
+    models: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for conn in servers:
+        try:
+            data = _ollama_models(conn.url) if conn.kind == "ollama" else _openai_models(conn.url)
+        except Exception as exc:
+            errors.append(f"Could not read model details from {conn.url}: {exc}")
+            continue
+        for m in data["models"]:
+            m.setdefault("server_url", conn.url)
+            m.setdefault("server_kind", conn.kind)
+            models.append(m)
+    if not models and errors:
+        return {"ready": False, "message": errors[0], "models": [], "servers": []}
+    first = servers[0]
+    has_ollama = any(s.kind == "ollama" for s in servers)
+    return {"ready": any(s.models for s in servers), "server": first.label, "kind": first.kind, "url": first.url,
+            "servers": [{"label": s.label, "kind": s.kind, "url": s.url, "models": s.models} for s in servers],
+            "axis_context": NUM_CTX if has_ollama else None, "errors": errors, "models": models}

@@ -38,6 +38,17 @@ Routes:
   DELETE /api/images/models/<id>            remove an image model (its files are not touched)
   GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
+  GET    /api/manage                        engines, installed models, what is running, and jobs
+  POST   /api/manage/install                install a model {engine, name, choice?, role?, target?}
+                                            (answers {choose: [...]} when the user must pick a file)
+  POST   /api/manage/start                  start a model {engine, model}
+  POST   /api/manage/stop                   stop a model {engine, model}
+  POST   /api/manage/delete                 delete a model and its files {engine, model, files?}
+  POST   /api/manage/ollama/start           start the Ollama server
+  POST   /api/manage/ollama/stop            stop the Ollama server (only if Axis started it)
+  PUT    /api/manage/settings               llama-server path, context size, extra arguments
+  POST   /api/manage/jobs/<id>/cancel       cancel an install or start
+  DELETE /api/manage/jobs/<id>              remove a finished job from the list
 """
 
 from __future__ import annotations
@@ -54,7 +65,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, chats, images, runner, skills, tools
+from . import __version__, agents, backend, chats, hub, images, jobs, manager, procs, runner, skills, tools
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -314,7 +325,8 @@ class Handler(BaseHTTPRequestHandler):
         parts: List[str] = [urllib.parse.unquote(p) for p in url.path.split("/") if p]
         try:
             return self._dispatch(method, parts, param)
-        except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError) as exc:
+        except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
+                hub.HubError, jobs.JobError, procs.ProcessError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -419,7 +431,29 @@ class Handler(BaseHTTPRequestHandler):
                 if n == 4 and method == "PUT":
                     return self._json(200, images.update_model(parts[3], self._body()))
                 if n == 4 and method == "DELETE":
-                    images.delete_model(parts[3])
+                    files = param("files") or "none"
+                    if manager.image_server_url(parts[3]):
+                        manager.image_stop(parts[3])
+                    return self._json(200, images.delete_model(parts[3], files=files))
+
+        elif n >= 2 and parts[1] == "manage":
+            url = self.server.model_url
+            if n == 2 and method == "GET":
+                return self._json(200, manager.state(url))
+            if n == 3 and method == "POST" and parts[2] in ("install", "start", "stop", "delete"):
+                result = getattr(manager, parts[2])(self._body(), url)
+                return self._json(202 if "job" in result else 200, result)
+            if n == 4 and parts[2] == "ollama" and parts[3] in ("start", "stop") and method == "POST":
+                result = manager.ollama_server(parts[3], url)
+                return self._json(202 if "job" in result else 200, result)
+            if parts[2:] == ["settings"] and method == "PUT":
+                manager.save_settings(self._body())
+                return self._json(200, manager.state(url))
+            if n >= 4 and parts[2] == "jobs":
+                if n == 5 and parts[4] == "cancel" and method == "POST":
+                    return self._json(200, jobs.cancel(parts[3]).public())
+                if n == 4 and method == "DELETE":
+                    jobs.dismiss(parts[3])
                     return self._json(200, {"deleted": parts[3]})
 
         elif n >= 2 and parts[1] == "skills":
@@ -514,15 +548,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _status(self) -> None:
         try:
-            conn = backend.connect(self.server.model_url)
+            conns = backend.connect_all(self.server.model_url)
         except backend.BackendError as exc:
             message = str(exc).split("\n")[0]
             running = not isinstance(exc, backend.ServerUnavailable)
             return self._json(200, {"ready": False, "server_running": running, "message": message, "models": []})
-        return self._json(
-            200,
-            {"ready": True, "server_running": True, "server": conn.label, "url": conn.url, "models": conn.models},
-        )
+        labels = []
+        for c in conns:
+            if c.label not in labels:
+                labels.append(c.label)
+        return self._json(200, {"ready": True, "server_running": True, "server": " and ".join(labels),
+                                "url": conns[0].url if len(conns) == 1 else ", ".join(c.url for c in conns),
+                                "models": backend.loaded_models(conns)})
 
     def _generate(self) -> None:
         body = self._body()
@@ -578,9 +615,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ClientGone() from exc
 
         try:
-            conn = backend.connect(self.server.model_url)
             requested = body.get("model") or (agent.model if agent else "") or None
-            model = backend.resolve_model(conn, requested)
+            conn, model = backend.pick(self.server.model_url, requested)
             emit({"model": model})
             runner.reply(conn, model, messages, emit,
                          tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None,

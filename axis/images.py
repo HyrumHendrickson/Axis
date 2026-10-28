@@ -1,8 +1,15 @@
-"""Image generation with stable-diffusion.cpp (``sd-cli``).
+"""Image generation with stable-diffusion.cpp (``sd-cli`` and ``sd-server``).
 
-Axis does not download or install image models. The user points Axis at their
-``sd-cli`` program and describes each image model once (which files it uses and
-its default settings). Axis then runs ``sd-cli`` for each picture.
+Each image model lists the files it uses and its default settings. Models are
+either installed from Hugging Face on the Models page (see manager.py) or
+described by hand, pointing at files the user already has.
+
+A picture is made in one of two ways:
+
+* When the model is on (started on the Models page), Axis sends the request to
+  the ``sd-server`` that holds it in memory, so the picture starts at once.
+* Otherwise Axis runs ``sd-cli``, which loads the model, makes the picture and
+  exits. If sd-cli is missing but sd-server is present, Axis starts the model.
 
 Stored in ~/Axis:
 
@@ -17,6 +24,7 @@ settings of every picture, for the gallery.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import random
@@ -25,11 +33,13 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .paths import axis_home, shared_root
+from .paths import axis_home, image_root, inside, shared_root
 
 INDEX_NAME = ".axis-images.json"
 IMAGES_DIR = "images"
@@ -54,6 +64,8 @@ SAMPLERS = ("euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2m
 
 class ImageError(Exception):
     """A problem the user must fix (missing sd-cli, bad settings, failed run)."""
+
+    user_facing = True
 
 
 class Cancelled(ImageError):
@@ -99,14 +111,15 @@ def _text(value: Any, label: str, limit: int = 1000) -> str:
 def load_settings() -> Dict[str, str]:
     data = _read_json(_settings_path(), {})
     data = data if isinstance(data, dict) else {}
-    return {k: str(data.get(k) or "") for k in ("sd_cli", "workdir", "default_model")}
+    return {k: str(data.get(k) or "") for k in ("sd_cli", "sd_server", "workdir", "default_model")}
 
 
 def save_settings(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ImageError("Settings must be a JSON object.")
     current = load_settings()
-    for key, label in (("sd_cli", "sd-cli path"), ("workdir", "Working folder"), ("default_model", "Default model")):
+    for key, label in (("sd_cli", "sd-cli path"), ("sd_server", "sd-server path"), ("workdir", "Working folder"),
+                       ("default_model", "Default model")):
         if key in data:
             current[key] = _text(data[key], label)
     if current["default_model"] and not ID_RE.fullmatch(current["default_model"]):
@@ -147,22 +160,29 @@ def workdir(cli: Optional[Path] = None) -> Path:
 
 
 def status() -> Dict[str, Any]:
+    from . import manager  # imported here: manager imports this module
+
     settings = load_settings()
     cli = find_cli()
+    server = manager.sd_server_binary()
     models = list_models()
     default = default_model_id(models)
+    running = manager.image_running()
     return {
-        "ready": bool(cli and models),
+        "ready": bool((cli or server) and models),
         "sd_cli": str(cli) if cli else None,
         "sd_cli_setting": settings["sd_cli"],
+        "sd_server": str(server) if server else None,
+        "sd_server_setting": settings["sd_server"],
+        "running_model": running.target if running and running.ready else None,
         "workdir": str(workdir(cli)),
         "workdir_setting": settings["workdir"],
         "default_model": default,
         "busy": _LOCK.locked(),
         "samplers": list(SAMPLERS),
-        "message": None if cli else (
-            "sd-cli was not found. Set its full path below (for example C:\\sd\\bin\\sd-cli.exe), "
-            "or set AXIS_SD_CLI."),
+        "message": None if (cli or server) else (
+            "stable-diffusion.cpp was not found. Set the full path to sd-cli below (for example "
+            "C:\\sd\\sd-cli.exe), or set AXIS_SD_CLI."),
         "models": models,
     }
 
@@ -194,7 +214,7 @@ def _public(data: Dict[str, Any], base: Optional[Path] = None) -> Dict[str, Any]
         except OSError:
             size = None
         files.append({"role": key, "label": FILE_LABELS[key], "path": rel, "full_path": str(full),
-                      "exists": size is not None, "size": size})
+                      "exists": size is not None, "size": size, "managed": inside(full, image_root())})
     out = {k: data.get(k) for k in ("id", "name", "description", "width", "height", "steps", "cfg_scale",
                                      "sampler", "scheduler", "extra_args", "created")}
     out.update({k: data.get(k) or "" for k in FILE_FIELDS})
@@ -335,14 +355,55 @@ def update_model(model_id: str, data: Any) -> Dict[str, Any]:
         raise ImageError(f"An image model named '{fields['name']}' already exists.")
     record = {"id": model_id, **fields, "created": current.get("created", "")}
     _write_json(path, record)
+    from . import manager
+
+    if manager.image_server_url(model_id):  # it holds the old files: stop it so the next start uses the new ones
+        manager.image_stop(model_id)
     return _public(record)
 
 
-def delete_model(model_id: str) -> None:
+def delete_model(model_id: str, files: str = "none") -> Dict[str, Any]:
+    """Remove an image model. files: "none" keeps every file, "axis" deletes the files Axis downloaded,
+    "all" also deletes files the user added. A file another image model uses is always kept."""
+    if files not in ("none", "axis", "all"):
+        raise ImageError("files must be none, axis or all.")
     path = _model_path(model_id)
-    if not path.is_file():
+    data = _read_json(path, None)
+    if not path.is_file() or not isinstance(data, dict):
         raise ImageError(f"Image model '{model_id}' does not exist.")
+    model = _public(data)
+    others = [m for m in list_models() if m["id"] != model_id]
+    used = set()
+    for m in others:
+        for f in m["files"]:
+            try:
+                used.add(str(Path(f["full_path"]).resolve()))
+            except OSError:
+                pass
     path.unlink()
+    removed, kept = [], []
+    for f in model["files"]:
+        full = Path(f["full_path"])
+        try:
+            key = str(full.resolve())
+        except OSError:
+            key = str(full)
+        wanted = files == "all" or (files == "axis" and f["managed"])
+        if not wanted or key in used or not full.is_file():
+            if f["exists"]:
+                kept.append(f["path"])
+            continue
+        try:
+            full.unlink()
+            removed.append(f["path"])
+        except OSError as exc:
+            kept.append(f"{f['path']} (could not delete: {exc.strerror or exc})")
+            continue
+        if f["managed"]:
+            from .hub import prune_empty
+
+            prune_empty(full.parent, image_root())
+    return {"deleted": model_id, "removed_files": removed, "kept_files": kept}
 
 
 # ------------------------------------------------------------------- running
@@ -428,16 +489,17 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     on_event receives {"queued": True}, {"phase": text}, {"progress": {"step", "steps"}}
     and {"log": line}. If it raises, the run is stopped and the exception passes on.
     """
+    from . import manager  # imported here: manager imports this module
+
     emit = on_event or (lambda e: None)
-    cli = find_cli()
-    if cli is None:
-        raise ImageError("sd-cli was not found. Set its path on the Models page under Image models.")
     model = find_model(raw.get("model"))
     if model["missing"]:
         raise ImageError(f"Files for {model['name']} are missing: {', '.join(model['missing'])}. "
                          "Check the paths on the Models page.")
     params = resolve_params(model, raw)
-    base = workdir(cli)
+    cli = find_cli()
+    if cli is None and not manager.image_server_url(model["id"]) and manager.sd_server_binary() is None:
+        raise ImageError("stable-diffusion.cpp was not found. Set the sd-cli path on the Models page under Image models.")
 
     while not _LOCK.acquire(timeout=1.0):
         emit({"queued": True})  # also notices a browser that has gone away
@@ -448,19 +510,38 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
         out_file, n = out_dir / f"{name}.png", 2
         while out_file.exists():
             out_file, n = out_dir / f"{name}-{n}.png", n + 1
-        cmd = build_command(cli, model, params, out_file, base)
-        emit({"phase": "Starting sd-cli"})
         started = time.time()
+        url = manager.image_server_url(model["id"])
+        if url is None and cli is None:
+            # No sd-cli, but sd-server is there: turn the model on, then use it.
+            beat = [0.0]
+
+            def check() -> None:
+                if time.time() - beat[0] >= 1.0:  # raises when the browser has gone away
+                    beat[0] = time.time()
+                    emit({"log": "Loading the model"})
+            try:
+                url = manager.image_start(model["id"], check, lambda p: emit({"phase": p}))
+            except (manager.ManageError, manager.procs.ProcessError) as exc:
+                raise ImageError(str(exc)) from exc
+            started = time.time()
         try:
-            lines = _run(cmd, base if base.is_dir() else None, params["steps"], emit)
+            if url:
+                _generate_with_server(url, params, out_file, emit)
+            else:
+                assert cli is not None
+                base = workdir(cli)
+                cmd = build_command(cli, model, params, out_file, base)
+                emit({"phase": "Starting sd-cli"})
+                lines = _run(cmd, base if base.is_dir() else None, params["steps"], emit)
+                if not out_file.is_file():
+                    tail = "\n".join(l for l in lines[-8:] if l.strip())
+                    raise ImageError("sd-cli finished without making a picture." + (f"\n{tail}" if tail else ""))
         except BaseException:
             if out_file.exists():  # never leave half a picture behind
                 out_file.unlink()
             raise
         seconds = round(time.time() - started, 1)
-        if not out_file.is_file():
-            tail = "\n".join(l for l in lines[-8:] if l.strip())
-            raise ImageError("sd-cli finished without making a picture." + (f"\n{tail}" if tail else ""))
     finally:
         _LOCK.release()
 
@@ -469,6 +550,164 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
               "created": datetime.now().isoformat(timespec="seconds")}
     _add_to_index(out_dir, record)
     return record
+
+
+# ------------------------------------------------------- through sd-server
+
+_SERVER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+POLL = 0.5
+
+
+def _server_json(url: str, body: Optional[Dict[str, Any]] = None, timeout: float = 30.0) -> Any:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method="POST" if body is not None else "GET",
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    with _SERVER.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+
+
+def _server_error(exc: urllib.error.HTTPError) -> str:
+    try:
+        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict):
+            err = err.get("message")
+        return str(err or exc.reason)
+    except Exception:
+        return str(exc.reason)
+
+
+def _save_png(b64: Any, out_file: Path) -> None:
+    if not isinstance(b64, str) or not b64:
+        raise ImageError("sd-server finished without returning a picture.")
+    if b64.startswith("data:"):
+        b64 = b64.split(",", 1)[-1]
+    try:
+        data = base64.b64decode(b64, validate=False)
+    except (ValueError, TypeError) as exc:
+        raise ImageError("sd-server returned a picture Axis could not read.") from exc
+    if not data.startswith(b"\x89PNG"):
+        raise ImageError("sd-server returned something that is not a PNG picture.")
+    tmp = out_file.with_name(out_file.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, out_file)
+
+
+def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit) -> None:
+    """Make a picture with sd-server's job API (/sdcpp/v1), or its WebUI API on older builds."""
+    sample: Dict[str, Any] = {"sample_steps": params["steps"], "guidance": {"txt_cfg": params["cfg_scale"]}}
+    if params.get("sampler"):
+        sample["sample_method"] = params["sampler"]
+    if params.get("scheduler"):
+        sample["scheduler"] = params["scheduler"]
+    body = {"prompt": params["prompt"], "negative_prompt": params.get("negative_prompt") or "",
+            "width": params["width"], "height": params["height"], "seed": params["seed"], "batch_count": 1,
+            "sample_params": sample, "preview": "proj", "preview_interval": 1, "output_format": "png"}
+    emit({"phase": "Sending the request to sd-server"})
+    deadline = time.time() + TIMEOUT
+    job = None
+    while job is None:
+        try:
+            job = _server_json(url + "/sdcpp/v1/img_gen", body)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return _generate_with_sdapi(url, params, out_file, emit)
+            if exc.code in (429, 503) and time.time() < deadline:  # busy, or still loading
+                emit({"phase": "Waiting for sd-server"})
+                time.sleep(1.0)
+                continue
+            raise ImageError(f"sd-server refused the request: {_server_error(exc)}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ImageError(f"sd-server stopped answering ({getattr(exc, 'reason', exc)}). "
+                             "Start the model again on the Models page.") from exc
+    job_id = job.get("id") if isinstance(job, dict) else None
+    if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", job_id):
+        raise ImageError("sd-server did not return a job id.")
+    poll = url + "/sdcpp/v1/jobs/" + job_id
+    phase = ""
+    last_step = None
+    try:
+        while True:
+            if time.time() > deadline:
+                raise ImageError(f"Stopped: the picture took longer than {int(TIMEOUT)} seconds.")
+            try:
+                st = _server_json(poll, timeout=30)
+            except urllib.error.HTTPError as exc:
+                raise ImageError(f"sd-server lost the job ({exc.code}).") from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise ImageError(f"sd-server stopped answering ({getattr(exc, 'reason', exc)}).") from exc
+            status = st.get("status") if isinstance(st, dict) else None
+            if status == "completed":
+                images_ = ((st.get("result") or {}).get("images") or []) if isinstance(st.get("result"), dict) else []
+                _save_png(images_[0].get("b64_json") if images_ and isinstance(images_[0], dict) else None, out_file)
+                return
+            if status in ("failed", "cancelled"):
+                err = st.get("error") if isinstance(st.get("error"), dict) else {}
+                raise ImageError(f"sd-server could not make the picture: {err.get('message') or status}.")
+            if status == "queued":
+                emit({"queued": True})
+            elif status == "generating":
+                prev = st.get("preview") if isinstance(st.get("preview"), dict) else None
+                if prev and isinstance(prev.get("step"), int) and isinstance(prev.get("total_steps"), int):
+                    if prev["step"] != last_step:
+                        last_step = prev["step"]
+                        emit({"progress": {"step": prev["step"], "steps": prev["total_steps"]}})
+                        if phase != "Sampling":
+                            phase = "Sampling"
+                            emit({"phase": phase})
+                    if prev["step"] >= prev["total_steps"] and phase != "Decoding the image":
+                        phase = "Decoding the image"
+                        emit({"phase": phase})
+                elif phase != "Generating":
+                    phase = "Generating"
+                    emit({"phase": phase})
+                else:
+                    emit({"log": "working"})  # keeps noticing a browser that has gone away
+            time.sleep(POLL)
+    except BaseException:
+        try:
+            _server_json(poll + "/cancel", {}, timeout=5)  # stop the work, not just the waiting
+        except Exception:
+            pass
+        raise
+
+
+def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit) -> None:
+    body = {"prompt": params["prompt"], "negative_prompt": params.get("negative_prompt") or "",
+            "width": params["width"], "height": params["height"], "steps": params["steps"],
+            "cfg_scale": params["cfg_scale"], "seed": params["seed"], "batch_size": 1}
+    if params.get("sampler"):
+        body["sampler_name"] = params["sampler"]
+    if params.get("scheduler"):
+        body["scheduler"] = params["scheduler"]
+    result: Dict[str, Any] = {}
+
+    def call() -> None:
+        try:
+            result["data"] = _server_json(url + "/sdapi/v1/txt2img", body, timeout=TIMEOUT)
+        except urllib.error.HTTPError as exc:
+            result["error"] = f"sd-server could not make the picture: {_server_error(exc)}"
+        except Exception as exc:
+            result["error"] = f"sd-server stopped answering ({getattr(exc, 'reason', exc)})."
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    emit({"phase": "Generating"})
+    while worker.is_alive():
+        worker.join(POLL)
+        try:
+            prog = _server_json(url + "/sdapi/v1/progress?skip_current_image=true", timeout=5)
+            state = prog.get("state") if isinstance(prog, dict) else None
+            if isinstance(state, dict) and state.get("sampling_steps"):
+                emit({"progress": {"step": int(state.get("sampling_step") or 0), "steps": int(state["sampling_steps"])}})
+            else:
+                emit({"log": "working"})
+        except (urllib.error.URLError, OSError, ValueError, TypeError):
+            emit({"log": "working"})
+    if "error" in result:
+        raise ImageError(result["error"])
+    imgs = (result.get("data") or {}).get("images") if isinstance(result.get("data"), dict) else None
+    _save_png(imgs[0] if imgs else None, out_file)
 
 
 def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit) -> List[str]:

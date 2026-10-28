@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "axis-agent-manager"
-version = "3.5.0"
-description = "A local web app for chatting with agents on a model served by Ollama or llama.cpp"
+version = "3.6.0"
+description = "A local web app for chatting with agents, with chat and image models it installs, starts and stops through Ollama, llama.cpp and stable-diffusion.cpp"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
