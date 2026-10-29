@@ -196,27 +196,41 @@ def _vcvars_env() -> Dict[str, str]:
         if install in seen:
             continue
         seen.add(install)
-        vcvars = install / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
-        if not vcvars.is_file():
-            continue
-        try:
-            # vcvarsall.bat is a batch file. CALL is required for cmd.exe to
-            # return to this command and execute `set` afterward.
-            r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
-                                f'call "{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if r.returncode != 0:
-            continue
-        env = {}
-        for line in r.stdout.splitlines():
-            if "=" in line:
-                key, value = line.split("=", 1)
-                if key and "\x00" not in key:
-                    env[key] = value
-        if env.get("PATH") and env.get("VCToolsInstallDir"):
-            return env
+        build = install / "VC" / "Auxiliary" / "Build"
+        arch = engines.this_platform()[1]
+        if arch == "arm64":
+            scripts = [("vcvarsamd64_arm64.bat", ()), ("vcvarsall.bat", ("amd64_arm64",)),
+                       ("vcvarsall.bat", ("arm64",))]
+        elif arch == "x86":
+            scripts = [("vcvars32.bat", ()), ("vcvarsall.bat", ("x86",))]
+        else:
+            # vcvarsall uses `amd64` for native x64. `x64` is not a valid
+            # vcvarsall architecture argument; vcvars64.bat is its shortcut.
+            scripts = [("vcvars64.bat", ()), ("vcvarsall.bat", ("amd64",)),
+                       ("vcvarsall.bat", ("x86_amd64",))]
+        for script, args in scripts:
+            vcvars = build / script
+            if not vcvars.is_file():
+                continue
+            try:
+                # A batch file must be called so cmd.exe returns and executes
+                # `set` afterward.
+                command = f'call "{vcvars}"' + (" " + " ".join(args) if args else "") + " && set"
+                r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if r.returncode != 0:
+                continue
+            env = {}
+            for line in r.stdout.splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    if key and "\x00" not in key:
+                        env[key] = value
+            if env.get("PATH") and (env.get("VCToolsInstallDir") or shutil.which("link.exe", path=env["PATH"])):
+                return env
     if shutil.which("cl") and shutil.which("link"):
         return dict(os.environ)
     return {}

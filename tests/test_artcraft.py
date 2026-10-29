@@ -486,6 +486,7 @@ class TestRust(ArtBase):
         command = run.call_args.args[0]
         self.assertIn("call ", command[4])
         self.assertIn("vcvarsall.bat", command[4])
+        self.assertIn("amd64", command[4])
 
     @POSIX_ONLY
     def test_install_rust_into_its_own_folder_without_touching_the_path(self):
