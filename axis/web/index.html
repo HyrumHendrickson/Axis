@@ -264,6 +264,16 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .files small { color: var(--muted); font-family: var(--sans); }
 .path { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
 
+.skill-card h4 .skill-name { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.skill-tools { display: flex; gap: 14px; flex: none; }
+.tag.edited { color: var(--warn); }
+.sends { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.sends > summary, .sends-sub > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--link); }
+.sends-sub { margin-top: 8px; }
+.sends pre { margin: 6px 0 10px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+.sends .step-label { margin-top: 10px; }
+.sends .hint { margin: 4px 0 0; }
+
 /* ---------- files ---------- */
 .fb { display: grid; grid-template-columns: minmax(240px, 360px) 1fr; flex: 1; min-height: 0; }
 .fb-list { overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); }
@@ -302,19 +312,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .fb-line.drop-into, .crumbs button.drop-into { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); border-radius: 4px; }
 .fb-term { flex: none; border: 0; border-left: 1px solid var(--line); background: none; color: var(--muted); padding: 0 12px; cursor: pointer; display: flex; align-items: center; }
 .fb-term:hover, .fb-term:focus-visible { color: var(--ink); background: var(--accent-soft); }
-.fb-ico.term { color: inherit; }
+.fb-ico.term, .fb-ico.pencil, .fb-ico.chev { color: inherit; }
 .fb-edit { display: block; width: 100%; min-height: 60vh; resize: vertical; border: 1px solid var(--line); border-radius: 6px; padding: 12px; background: var(--code); font: 13px/1.5 var(--mono); tab-size: 4; white-space: pre; overflow: auto; }
 .fb-edit:focus { border-color: var(--accent); outline: none; }
 .fb-edit-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
-.fb.with-out { grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(260px, 420px); }
-.fb-out { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.fb-out-head { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.fb-out-head strong { font: 400 18px/1.2 var(--serif); }
-.fb-out-head .nm { flex: 1; min-width: 0; color: var(--muted); font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fb-out-body { flex: 1; overflow: auto; padding: 10px 14px 14px; }
-.fb-out-body pre { margin: 4px 0 10px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.fb-out-body pre.err { color: var(--bad); }
-.fb-out-note { padding: 0 14px 10px; margin: 0; font-size: 12px; }
 
 /* ---------- agents ---------- */
 .agent-tools { display: flex; gap: 14px; padding-right: 14px; flex: none; flex-wrap: wrap; }
@@ -332,10 +333,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .term-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--code); }
 .term-out { flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 13px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .term-out:focus { outline: none; }
-.term-line { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 8px 16px; background: var(--surface); }
-.term-prompt { font: 600 15px var(--mono); color: var(--tan); }
-.term-in { flex: 1; border: 0; background: none; font: 13px/1.6 var(--mono); padding: 4px 0; }
-.term-in:focus { outline: none; }
 .term-empty { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
 .term-side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .term-side-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); }
@@ -352,11 +349,72 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .term-ask .hint { margin: 6px 0 0; font-size: 12px; }
 .term-side > .hint { padding: 14px; margin: 0; }
 @media (max-width: 760px) {
-  .fb.with-out { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 30%) 1fr auto; }
-  .fb-out { border-left: 0; border-top: 1px solid var(--line); max-height: 45vh; }
   .term.with-side { grid-template-columns: 1fr; grid-template-rows: 1fr minmax(240px, 45%); }
   .term-side { border-left: 0; border-top: 1px solid var(--line); }
   .term-tabs { padding-left: 14px; padding-right: 14px; }
+}
+
+/* ---------- terminal text area: the output and the line being typed are one piece of text ---------- */
+.term-surface { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term-surface:focus-within { box-shadow: inset 0 0 0 1px var(--tan); }
+.term-surface .term-out { cursor: text; }
+.term-cap { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; pointer-events: none; }
+.term-typed { white-space: pre-wrap; }
+.term-caret { background: var(--ink); color: var(--code); animation: caret 1.1s steps(1) infinite; }
+.term-surface:not(:focus-within) .term-caret { background: transparent; color: inherit; outline: 1px solid var(--muted); outline-offset: -1px; animation: none; }
+@keyframes caret { 50% { background: transparent; color: inherit; } }
+
+/* ---------- workspace as a light editor: files, a terminal underneath, an agent beside ---------- */
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.ide-toggles { display: flex; gap: 6px; }
+.crumbbar { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); background: var(--surface); padding-right: 24px; }
+.crumbbar .crumbs { flex: 1; min-width: 0; border-bottom: 0; }
+.crumb-tools { display: flex; gap: 6px; flex: none; align-items: center; }
+.ide { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
+.ide.with-side { grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); }
+.ide-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; --dock-h: 260px; }
+.ide-main > .fb { flex: 1; }
+.menu-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 190px; display: flex; flex-direction: column;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.menu-pop[hidden] { display: none; }
+.menu-item { border: 0; background: none; text-align: left; padding: 7px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--accent-soft); }
+.menu-item.danger { color: var(--bad); }
+/* rename: a pencil that appears over the end of a row, and the name box that replaces the row's text */
+.fb-act { flex: none; width: 34px; margin-left: -34px; position: relative; z-index: 1; border: 0; background: var(--accent-soft); color: var(--muted);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; pointer-events: none; }
+.fb-line:hover .fb-act, .fb-line:focus-within .fb-act { opacity: 1; pointer-events: auto; }
+.fb-act:hover, .fb-act:focus-visible { color: var(--ink); }
+.fb-act svg { width: 16px; height: 16px; }
+@media (hover: none) { .fb-act { opacity: 1; pointer-events: auto; } }
+.fb-row.editing { cursor: default; background: var(--accent-soft); }
+.name-edit-in { min-width: 0; width: 100%; border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; background: var(--surface); font: inherit; }
+/* the bottom panel: terminals, and the output of a Python file that was run */
+.dock { flex: none; position: relative; border-top: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.dock.open { height: var(--dock-h); }
+.dock-grip { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; z-index: 5; touch-action: none; }
+.dock-grip:hover, .dock-grip:focus-visible, .dock-grip.dragging { background: var(--tan); opacity: .7; outline: none; }
+.dock-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; padding: 4px 8px 0 12px; border-bottom: 1px solid var(--line); min-height: 38px; }
+.dock.collapsed .dock-head { border-bottom: 0; }
+.dock-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+.dock-title { font-weight: 600; font-size: 13px; padding: 7px 2px; }
+.dock-tools { display: flex; gap: 6px; align-items: center; flex: none; padding-bottom: 4px; }
+.dock-toggle { border: 0; background: none; cursor: pointer; color: var(--muted); width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.dock-toggle:hover { background: var(--accent-soft); color: var(--ink); }
+.dock-toggle svg { width: 16px; height: 16px; transition: transform .15s; }
+.dock.collapsed .dock-toggle svg { transform: rotate(180deg); }
+.dock-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--code); }
+.dock-empty { align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 16px; }
+.dock-empty p { margin: 0; }
+.dock-out { flex: 1; overflow: auto; padding: 10px 14px 14px; }
+.dock-out pre { margin: 4px 0 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dock-out pre.err { color: var(--bad); }
+.dock-out .hint { margin: 6px 0 0; font-size: 12px; }
+@media (max-width: 760px) {
+  .ide.with-side { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(220px, 42%); }
+  .ide-side { border-left: 0; border-top: 1px solid var(--line); }
+  .crumbbar { flex-wrap: wrap; padding-right: 14px; }
+  .crumb-tools { padding: 0 0 8px 14px; flex-wrap: wrap; }
 }
 
 /* ---------- past chats ---------- */
@@ -513,7 +571,9 @@ const S = {
   msgEdit: null,                // { target, chatId, index, text } while one of your earlier messages is being edited
   wsDrag: null,                 // { agent, path, isDir } while a Workspace file or folder is being dragged
   runOut: null,                 // the Python file run from Workspace: { place, path, running, result | error }
-  term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", history: [], hpos: -1 },   // Terminal tab
+  term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", history: [], hpos: -1, draft: "" },   // terminals (Terminal tab and the Workspace's bottom panel)
+  ide: { side: false, agent: "", dock: false, tab: "terminal", dockH: 260 },   // Workspace: agent panel, bottom panel (terminals and run output)
+  nameEdit: null,               // { mode: "new" | "rename", ... } while a file or folder name is being typed in the Workspace list
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
   streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
@@ -1406,6 +1466,7 @@ document.addEventListener("keydown", (e) => {
 function redrawChat(target) {
   if (viewing(target)) { renderChat(); return true; }
   if (termChatShown(target)) { renderTermChat(); return true; }
+  if (ideChatShown(target)) { renderIdeChat(); return true; }
   return false;
 }
 
@@ -1435,8 +1496,9 @@ function exportChat(target) {
   download(`${target || "direct-chat"}-${stamp}.md`, lines.join("\n"), "text/markdown;charset=utf-8");
 }
 
-async function send(target, { resend = false, terminal } = {}) {
-  if (terminal === undefined) terminal = termContextFor(target);   // asked from the Terminal tab: the agent sees it
+async function send(target, { resend = false, terminal, workspace } = {}) {
+  if (terminal === undefined) terminal = termContextFor(target);          // asked from a side panel: the agent sees the open terminal
+  if (workspace === undefined) workspace = workspaceContextFor(target);   // asked from the Workspace panel: and the folder you are in
   if (S.streams[target] || !ready()) return;
   const msgs = getHistory(target);
   let text, pictures = [];
@@ -1513,7 +1575,7 @@ async function send(target, { resend = false, terminal } = {}) {
     const history = msgs.map(forModel);
     const res = await fetch("/api/chat", { method: "POST", signal: stream.controller.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview, terminal: terminal || null }) });
+      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview, terminal: terminal || null, workspace: workspace || null }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -1714,6 +1776,8 @@ const ICONS = {
   file: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 2.75h6.5L15.25 6.5v10.75H5z"/><path d="M11.5 2.75V6.5h3.75"/></svg>',
   up: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg>',
   term: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="1.5"/><path d="m6 8 2.5 2L6 12M10.5 12.5H14"/></svg>',
+  pencil: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13.5 3.5l3 3L7 16H4v-3z"/><path d="M12 5l3 3"/></svg>',
+  chev: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 8l5 5 5-5"/></svg>',
 };
 function icon(kind) { const sp = h("span", { class: "fb-ico " + kind }); sp.innerHTML = ICONS[kind]; return sp; }
 function size(n) {
@@ -1853,6 +1917,7 @@ function renderWorkspace() {
   if (!names.includes(S.workspace.agent)) S.workspace = { agent: names[0] || "", dir: "", file: "" };
   const label = (n) => n === SHARED ? "Shared folder" : n;
   const f = S.workspace;
+  S.nameEdit = null;
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
   if (!f.agent) {
     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
@@ -1861,25 +1926,32 @@ function renderWorkspace() {
       h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
     return;
   }
-  const pick = h("select", { "aria-label": "Agent", onchange: (e) => {
+  const pick = h("select", { "aria-label": "Folder", onchange: (e) => {
       if (!leaveEdit()) { e.target.value = f.agent; return; }
       S.workspace = { agent: e.target.value, dir: "", file: "" }; renderWorkspace(); } },
     names.map((n) => { const o = h("option", { value: n }, label(n)); o.selected = n === f.agent; return o; }));
-  const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   bar.append(
-    h("label", {}, "Agent", pick),
-    h("button", { class: "btn small", title: "Copy files from your computer into this folder", onclick: () => picker.click() }, "Upload"), picker,
-    h("button", { class: "btn small", onclick: newFolder }, "New folder"),
-    f.dir ? h("button", { class: "btn small danger", onclick: () => deletePath(f.dir, true) }, "Delete folder") : null,
-    h("button", { class: "btn small", title: "Open a terminal in this folder", onclick: () => openTerminal(f.agent, f.dir) }, "Open in Terminal"),
-    h("button", { class: "btn small", onclick: () => api(filesUrl(f.agent, "reveal", f.dir), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
-    h("button", { class: "btn small", onclick: () => loadListing(true) }, "Refresh"));
+    h("label", {}, "Folder", pick),
+    h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
+      h("button", { class: "btn small", id: "ide-dock-btn", title: "Show or hide a terminal under the files", onclick: () => setDock(!S.ide.dock) }, "Terminal"),
+      h("button", { class: "btn small", id: "ide-side-btn", title: "Show or hide a chat with an agent that can see this folder", onclick: toggleSide }, "Agent")));
 
   const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
   const segs = f.dir ? f.dir.split("/") : [];
   const crumb = (label, dir) => dropTarget(h("button", { onclick: () => openDir(dir), title: dir ? dir : "Top of this folder" }, label), dir);
   crumbs.append(crumb(f.agent === SHARED ? "shared" : f.agent, ""));
   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), crumb(seg, segs.slice(0, i + 1).join("/"))));
+  const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
+  const tools = h("div", { class: "crumb-tools" },
+    h("button", { class: "btn small", title: "Make a new, empty file in this folder", onclick: () => newEntry("file") }, "New file"),
+    h("button", { class: "btn small", title: "Make a new folder in this folder", onclick: () => newEntry("dir") }, "New folder"),
+    h("button", { class: "btn small", title: "Copy files from your computer into this folder", onclick: () => picker.click() }, "Upload"), picker,
+    popMenu("More", [
+      { label: "Refresh", onclick: () => loadListing(true) },
+      { label: "Show in folder", onclick: () => api(filesUrl(S.workspace.agent, "reveal", S.workspace.dir), { method: "POST" }).catch((e) => toast(e.message)) },
+      { label: "Open a terminal here", onclick: () => openTerminal(S.workspace.agent, S.workspace.dir) },
+      f.dir ? { label: "Delete this folder", danger: true, onclick: () => deletePath(S.workspace.dir, true) } : null,
+    ], "More things to do with this folder"));
 
   const list = h("div", { class: "fb-list", id: "fb-list", role: "list",
     ondragover: (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); list.classList.add("drop"); } },
@@ -1887,13 +1959,139 @@ function renderWorkspace() {
     ondrop: (e) => { e.preventDefault(); list.classList.remove("drop"); uploadFiles(e.dataTransfer.files); } },
     h("div", { class: "fb-empty" }, "Loading\u2026"));
   const view = h("div", { class: "fb-view", id: "fb-view" });
-  fill($("main"), bar, crumbs, h("div", { class: "fb", id: "fb" }, list, view));
-  drawRunPanel();
+  const main = h("div", { class: "ide-main", id: "ide-main" },
+    h("div", { class: "fb", id: "fb" }, list, view),
+    h("section", { class: "dock", id: "dock", "aria-label": "Terminal and run output" }));
+  fill($("main"), bar, h("div", { class: "crumbbar" }, crumbs, tools),
+    h("div", { class: "ide" + (S.ide.side ? " with-side" : ""), id: "ide" }, main, S.ide.side ? sidePanel() : null));
+  syncIdeButtons();
+  drawDock();
+  renderIdeChat();
   loadListing(true);
   showFile();
   clearInterval(workspaceTimer);
   workspaceTimer = setInterval(() => { if (S.view.kind === "workspace") loadListing(false); else clearInterval(workspaceTimer); }, 5000);
 }
+
+/* A small list of actions that opens under a button. items: [{ label, onclick, danger }] (null entries are skipped). */
+function popMenu(label, items, title) {
+  const pop = h("div", { class: "menu-pop", role: "menu", hidden: true });
+  const btn = h("button", { class: "btn small", "aria-haspopup": "menu", "aria-expanded": "false", title, onclick: () => (pop.hidden ? open() : close()) }, label);
+  const onOutside = (e) => { if (!wrap.contains(e.target)) close(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); close(); btn.focus(); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const all = [...pop.querySelectorAll("button")], at = all.indexOf(document.activeElement);
+    if (!all.length) return;
+    e.preventDefault();
+    all[(at + (e.key === "ArrowDown" ? 1 : -1) + all.length) % all.length].focus();
+  };
+  function open() {
+    fill(pop, items.filter(Boolean).map((i) => h("button", { class: "menu-item" + (i.danger ? " danger" : ""), role: "menuitem",
+      onclick: () => { close(); i.onclick(); } }, i.label)));
+    pop.hidden = false; btn.setAttribute("aria-expanded", "true");
+    document.addEventListener("mousedown", onOutside, true);
+    document.addEventListener("keydown", onKey, true);
+    const first = pop.querySelector("button"); if (first) first.focus();
+  }
+  function close() {
+    pop.hidden = true; btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", onOutside, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  const wrap = h("div", { style: "position:relative" }, btn, pop);
+  return wrap;
+}
+
+/* ---- the panels around the files: a terminal and run output underneath, an agent chat beside ---- */
+const DOCK_MIN = 120;
+const saveIde = () => store("axis.ide", { side: S.ide.side, agent: S.ide.agent, dock: S.ide.dock, dockH: S.ide.dockH });
+function syncIdeButtons() {
+  const set = (id, on) => { const b = $(id); if (b) b.setAttribute("aria-pressed", on ? "true" : "false"); };
+  set("ide-dock-btn", S.ide.dock); set("ide-side-btn", S.ide.side);
+}
+const folderLabel = () => S.workspace.dir || placeLabel(S.workspace.agent);
+
+async function setDock(open) {
+  S.ide.dock = open; saveIde();
+  if (open && S.ide.tab !== "output" && !activeTerm()) { await openTerminal(S.workspace.agent, S.workspace.dir); return; }   // opens one in this folder
+  syncIdeButtons(); drawDock(); updateIdeHint();
+  if (open) focusTerm();
+}
+
+function dockGrip() {
+  const grip = h("div", { class: "dock-grip", role: "separator", "aria-orientation": "horizontal", "aria-label": "Resize the bottom panel (drag, or use the up and down arrow keys)",
+    "aria-valuemin": String(DOCK_MIN), "aria-valuenow": String(S.ide.dockH), tabindex: "0" });
+  const set = (px) => {
+    const room = ($("ide") ? $("ide").clientHeight : 600) - 150;
+    S.ide.dockH = Math.round(Math.min(Math.max(DOCK_MIN, room), Math.max(DOCK_MIN, px)));
+    const main = $("ide-main"); if (main) main.style.setProperty("--dock-h", S.ide.dockH + "px");
+    grip.setAttribute("aria-valuenow", String(S.ide.dockH));
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add("dragging");
+    const startY = e.clientY, startH = S.ide.dockH;
+    const move = (ev) => set(startH - (ev.clientY - startY));
+    const up = () => { grip.classList.remove("dragging"); grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); saveIde(); };
+    grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
+  });
+  grip.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault(); set(S.ide.dockH + (e.key === "ArrowUp" ? 24 : -24)); saveIde();
+  });
+  return grip;
+}
+
+// The bottom panel: a tab for each terminal, and one for the output of a Python file that was run.
+function drawDock() {
+  const dock = $("dock");
+  if (!dock) return;
+  const D = S.ide, T = S.term, out = S.runOut;
+  if (D.tab === "output" && !out) D.tab = "terminal";
+  const open = D.dock, onOutput = D.tab === "output", t = activeTerm();
+  dock.className = "dock " + (open ? "open" : "collapsed");
+  const main = $("ide-main"); if (main) main.style.setProperty("--dock-h", D.dockH + "px");
+  const choose = (tab, id) => () => { D.tab = tab; if (id) T.active = id; D.dock = true; saveIde(); syncIdeButtons(); drawDock(); updateIdeHint(); focusTerm(); };
+  const tabs = T.sessions.map((x) => {
+    const on = !onOutput && x.id === T.active;
+    return h("span", { class: "term-tab" + (x.alive ? "" : " closed"), role: "presentation", "aria-selected": on ? "true" : "false" },
+      h("button", { class: "label", role: "tab", "aria-selected": on ? "true" : "false", title: x.cwd, onclick: choose("terminal", x.id) }, x.title),
+      h("button", { class: "x", title: "Close this terminal", "aria-label": "Close " + x.title, onclick: () => closeTerminal(x.id) }, "\u00d7"));
+  });
+  if (out) tabs.push(h("span", { class: "term-tab", role: "presentation", "aria-selected": onOutput ? "true" : "false" },
+    h("button", { class: "label", role: "tab", "aria-selected": onOutput ? "true" : "false", title: out.path, onclick: choose("output") }, "Output"),
+    h("button", { class: "x", title: "Close the output", "aria-label": "Close the output", onclick: () => { S.runOut = null; if (D.tab === "output") D.tab = "terminal"; drawDock(); } }, "\u00d7")));
+  const tools = !open ? null : onOutput ? [
+    h("button", { class: "btn small", disabled: !out || out.running, onclick: () => runPython(out.place, out.path) }, "Run again"),
+  ] : [
+    h("button", { class: "btn small", title: "Open another terminal in this folder", onclick: () => openTerminal(S.workspace.agent, S.workspace.dir) }, "New terminal"),
+    t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
+    t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
+  ];
+  const head = h("div", { class: "dock-head" },
+    h("div", { class: "dock-tabs", role: "tablist", "aria-label": "Bottom panel" }, tabs.length ? tabs : h("span", { class: "dock-title" }, "Terminal")),
+    h("div", { class: "dock-tools" }, tools,
+      h("button", { class: "dock-toggle", "aria-expanded": open ? "true" : "false", "aria-controls": "dock-body", title: open ? "Hide the bottom panel" : "Show the bottom panel",
+        onclick: () => setDock(!open) }, icon("chev"))));
+  let body = null;
+  if (open && onOutput) body = h("div", { class: "dock-body", id: "dock-body" }, outputBody());
+  else if (open && t) body = h("div", { class: "dock-body", id: "dock-body" }, terminalSurface(t));
+  else if (open) body = h("div", { class: "dock-body dock-empty", id: "dock-body" },
+    h("p", { class: "hint" }, "No terminal is open."),
+    h("button", { class: "btn small primary", onclick: () => openTerminal(S.workspace.agent, S.workspace.dir) }, `Open a terminal in ${folderLabel()}`));
+  fill(dock, open ? dockGrip() : null, head, body);
+  if (open && !onOutput && t) { drawTermOut(true); termFetch(t.id); termPoll(); }
+}
+
+function toggleSide() {
+  S.ide.side = !S.ide.side; saveIde();
+  const ide = $("ide"); if (!ide) return;
+  ide.classList.toggle("with-side", S.ide.side);
+  const old = $("ide-side"); if (old) old.remove();
+  if (S.ide.side) { ide.append(sidePanel()); renderIdeChat(); const ask = $("ide-ask"); if (ask) ask.focus({ preventScroll: true }); }
+  syncIdeButtons();
+}
+const sidePanel = () => h("aside", { class: "term-side ide-side", id: "ide-side", "aria-label": "Chat with an agent about this folder" });
 
 // Asks before throwing away unsaved changes in the Workspace editor. False keeps the user where they are.
 function leaveEdit() {
@@ -1928,13 +2126,85 @@ async function uploadFiles(fileList, dir = S.workspace.dir) {
   if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${dir ? dir : agent === SHARED ? "the shared folder" : agent}`);
   if (S.view.kind === "workspace" && S.workspace.agent === agent) loadListing(true);
 }
-async function newFolder() {
-  const name = (prompt("Name of the new folder:") || "").trim();
-  if (!name) return;
-  if (/[\\/:*?"<>|]/.test(name) || name === "." || name === "..") return toast("Folder names cannot contain \\ / : * ? \" < > |");
-  const path = S.workspace.dir ? S.workspace.dir + "/" + name : name;
-  try { await api(filesUrl(S.workspace.agent, "mkdir", path), { method: "POST" }); openDir(path); }
+/* ---- naming: a new file or folder, or a new name for one, is typed in the list itself.
+   Enter saves, Esc cancels. Nothing is ever replaced: Axis refuses a name that is taken. ---- */
+function badName(name) {
+  if (!name || name === "." || name === "..") return "Give it a name.";
+  if (/[\\/:*?"<>|]/.test(name)) return "Names cannot contain \\ / : * ? \" < > |";
+  return "";
+}
+function newEntry(kind) {
+  S.nameEdit = { mode: "new", kind, value: "", fresh: true };
+  loadListing(true);
+}
+function startRename(entry) {
+  const kind = entry.type === "dir" ? "dir" : "file";
+  S.nameEdit = { mode: "rename", kind, path: entry.path, name: entry.name, value: entry.name, fresh: true };
+  loadListing(true);
+}
+function cancelName() { S.nameEdit = null; loadListing(true); }
+function focusNameEdit() {
+  const ne = S.nameEdit, input = document.querySelector(".name-edit-in");
+  if (!ne || !input) return;
+  input.focus();
+  input.scrollIntoView({ block: "nearest" });
+  if (ne.fresh) {   // a new name starts selected; for a file, everything before the extension
+    ne.fresh = false;
+    const dot = ne.mode === "rename" && ne.kind === "file" ? input.value.lastIndexOf(".") : -1;
+    input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+  } else input.setSelectionRange(input.value.length, input.value.length);
+}
+function nameRow(ne) {
+  const input = h("input", { type: "text", class: "name-edit-in", value: ne.value, maxlength: 200, spellcheck: "false", autocomplete: "off", autocapitalize: "off",
+    "aria-label": ne.mode === "new" ? (ne.kind === "dir" ? "Name of the new folder" : "Name of the new file") : `New name for ${ne.name}`,
+    oninput: () => { ne.value = input.value; },
+    onkeydown: (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelName(); }
+      else if (e.key === "Enter") { e.preventDefault(); commitName(); }
+    },
+    // Clicking elsewhere keeps a name that was typed and drops an empty or unchanged one. Switching to another window changes nothing.
+    onblur: () => setTimeout(() => {
+      if (S.nameEdit !== ne || ne.busy || !document.hasFocus()) return;
+      if (document.activeElement && document.activeElement.classList.contains("name-edit-in")) return;   // the list was drawn again
+      if (ne.value.trim() && ne.value.trim() !== (ne.name || "")) commitName(); else cancelName();
+    }, 150) });
+  return h("div", { class: "fb-line", role: "listitem" },
+    h("div", { class: "fb-row editing" }, icon(ne.kind === "dir" ? "dir" : "file"), input, h("small", {}, "")));
+}
+async function commitName() {
+  const ne = S.nameEdit;
+  if (!ne || ne.busy) return;
+  const name = ne.value.trim();
+  if (ne.mode === "rename" && name === ne.name) return cancelName();
+  const bad = badName(name);
+  if (bad) { toast(bad); return focusNameEdit(); }
+  ne.busy = true;
+  try { await (ne.mode === "new" ? createEntry(ne.kind, name) : renameEntry(ne, name)); }
   catch (e) { toast(e.message); }
+  ne.busy = false;
+  if (S.nameEdit === ne) focusNameEdit();       // not saved: stay on the name so it can be changed
+}
+async function createEntry(kind, name) {
+  const { agent, dir } = S.workspace, path = dir ? dir + "/" + name : name;
+  await api(filesUrl(agent, kind === "dir" ? "mkdir" : "create", path), { method: "POST" });
+  S.nameEdit = null;
+  if (S.view.kind !== "workspace" || S.workspace.agent !== agent || S.workspace.dir !== dir) return;
+  if (kind === "dir") return openDir(path);
+  if (!leaveEdit()) return loadListing(true);
+  S.workspace.file = path; S.workspace.autoEdit = path;     // a new file opens ready to type in
+  loadListing(true); showFile();
+}
+async function renameEntry(ne, name) {
+  const { agent } = S.workspace, open = S.workspace.file;
+  const affectsOpen = !!open && (open === ne.path || open.startsWith(ne.path + "/"));
+  if (affectsOpen && !leaveEdit()) return cancelName();
+  const { renamed } = await api(filesUrl(agent, "rename", ne.path, "&to=" + encodeURIComponent(name)), { method: "POST" });
+  S.nameEdit = null;
+  toast("Renamed to " + name);
+  if (S.view.kind !== "workspace" || S.workspace.agent !== agent) return;
+  if (affectsOpen) { S.workspace.file = renamed + open.slice(ne.path.length); showFile(); }
+  loadListing(true);
 }
 async function deletePath(path, isDir) {
   const what = isDir ? `the folder ${path} and everything in it` : path;
@@ -2016,43 +2286,50 @@ let lastListing = "";
 async function loadListing(force) {
   const f = S.workspace, list = $("fb-list");
   if (!list) return;
-  if (!force && S.wsDrag) return;              // do not redraw the rows under a drag
+  if (!force && (S.wsDrag || S.nameEdit)) return;   // do not redraw the rows under a drag or a name being typed
   let data;
   try { data = await api(filesUrl(f.agent, "", f.dir)); }
   catch (e) {
-    if (f.dir) { S.editing = null; S.workspace.dir = ""; S.workspace.file = ""; return renderWorkspace(); }   // folder vanished: go to the top
+    if (f.dir) { S.editing = null; S.nameEdit = null; S.workspace.dir = ""; S.workspace.file = ""; return renderWorkspace(); }   // folder vanished: go to the top
     return fill(list, h("div", { class: "fb-empty" }, e.message));
   }
   const key = JSON.stringify(data.entries);
   if (!force && key === lastListing) return;
   lastListing = key;
   if (f.file && !data.entries.some((e) => e.path === f.file) && !force) { S.editing = null; S.workspace.file = ""; showFile(); }
+  const ne = S.nameEdit;
+  if (ne && ne.mode === "rename" && !data.entries.some((e) => e.path === ne.path)) S.nameEdit = null;   // it was deleted meanwhile
   const rows = [];
   if (f.dir) {
     const up = h("div", { class: "fb-line" }, h("button", { class: "fb-row", onclick: () => openDir(parentDir(f.dir)) },
       icon("up"), h("span", { class: "nm" }, "Up one folder"), h("small", {}, "")));
     rows.push(dropTarget(up, parentDir(f.dir)));
   }
+  if (S.nameEdit && S.nameEdit.mode === "new") rows.push(nameRow(S.nameEdit));
   for (const e of data.entries) {
+    if (S.nameEdit && S.nameEdit.mode === "rename" && S.nameEdit.path === e.path) { rows.push(nameRow(S.nameEdit)); continue; }
     const isDir = e.type === "dir";
     const row = h("button", { class: "fb-row", "aria-current": e.path === f.file ? "true" : "false", title: e.path,
       onclick: () => {
         if (isDir) return openDir(e.path);
         if (e.path === S.workspace.file || !leaveEdit()) return;
         S.workspace.file = e.path; markCurrent(); showFile();
-      } },
+      },
+      onkeydown: (ev) => { if (ev.key === "F2") { ev.preventDefault(); startRename(e); } } },
       icon(isDir ? "dir" : "file"), h("span", { class: "nm" }, e.name),
       h("small", {}, isDir ? (e.items === null ? "" : `${e.items} item${e.items === 1 ? "" : "s"}`) : `${size(e.size)}  ${when(e.modified)}`));
     const line = h("div", { class: "fb-line", role: "listitem" }, row,
-      isDir ? h("button", { class: "fb-term", title: `Open ${e.name} in Terminal`, "aria-label": `Open ${e.name} in Terminal`,
+      h("button", { class: "fb-act", title: `Rename ${e.name} (F2)`, "aria-label": `Rename ${e.name}`, onclick: () => startRename(e) }, icon("pencil")),
+      isDir ? h("button", { class: "fb-term", title: `Open ${e.name} in a terminal`, "aria-label": `Open ${e.name} in a terminal`,
         onclick: () => openTerminal(f.agent, e.path) }, icon("term")) : null);
     draggableLine(line, e);
     if (isDir) dropTarget(line, e.path);
     rows.push(line);
   }
-  if (!data.entries.length) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
-    f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat."));
+  if (!data.entries.length && !(S.nameEdit && S.nameEdit.mode === "new")) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
+    f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat, or use New file."));
   fill(list, rows);
+  if (S.nameEdit) focusNameEdit();
 }
 function markCurrent() {
   for (const b of document.querySelectorAll("#fb-list .fb-row")) b.setAttribute("aria-current", b.title === S.workspace.file ? "true" : "false");
@@ -2081,6 +2358,7 @@ async function showFile() {
   const actions = h("div", { class: "fb-actions" },
     isPython ? h("button", { class: "btn small primary", title: "Run this file and show what it prints", onclick: () => runPython(d.agent, d.path) }, "Run") : null,
     editable ? h("button", { class: "btn small", title: "Change this file here", onclick: startEdit }, "Edit") : null,
+    h("button", { class: "btn small", title: "Give this file a new name", onclick: () => startRename({ path: d.path, name: d.name, type: "file" }) }, "Rename"),
     h("a", { class: "btn small", href: raw + "&download=1", download: d.name }, "Download"),
     h("button", { class: "btn small", onclick: () => api(filesUrl(d.agent, "reveal", d.path), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
     d.kind === "text" ? h("button", { class: "btn small", onclick: () => copyText(d.text, "Text copied") }, "Copy text") : null,
@@ -2170,13 +2448,14 @@ async function showFile() {
   const meta = h("p", { class: "fb-meta" }, metaText());
   fill(view, h("h3", {}, d.name), meta, actions, body,
     d.truncated ? h("p", { class: "hint", style: "margin-top:8px" }, "Only the first 512 KB is shown, so this file cannot be edited here. Download the file to see all of it.") : null);
+  if (S.workspace.autoEdit === d.path) { S.workspace.autoEdit = ""; if (editable) startEdit(); }   // a file just made with New file
 }
 
-/* Running a Python file from Workspace. The output opens in a panel beside the file. */
-function runPanel() {
+/* Running a Python file from Workspace. The output opens in the bottom panel, beside the terminals. */
+function outputBody() {
   const r = S.runOut;
   const name = r.path.split("/").pop();
-  const body = h("div", { class: "fb-out-body", role: "status", "aria-live": "polite" });
+  const body = h("div", { class: "dock-out", role: "status", "aria-live": "polite" });
   if (r.running) {
     body.append(h("div", { class: "typing" }, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
       h("span", { class: "typing-label" }, "Running " + name), h("span", { class: "elapsed", "data-since": String(r.started) }, elapsedText(r.started))));
@@ -2184,34 +2463,23 @@ function runPanel() {
     body.append(h("p", { class: "form-error" }, r.error));
   } else {
     const x = r.result;
-    body.append(h("p", { class: "fb-meta" }, [x.timed_out ? `Stopped after ${x.timeout} s` : `Exit code ${x.exit}`, `${x.seconds} s`, `in ${placeLabel(r.place)}`].join(" \u00b7 ")));
+    body.append(h("p", { class: "fb-meta" }, [name, x.timed_out ? `Stopped after ${x.timeout} s` : `Exit code ${x.exit}`, `${x.seconds} s`, `in ${placeLabel(r.place)}`].join(" \u00b7 ")));
     if (x.stdout) body.append(h("div", { class: "step-label" }, "Output"), h("pre", {}, x.stdout));
     if (x.stderr) body.append(h("div", { class: "step-label" }, "Errors"), h("pre", { class: "err" }, x.stderr));
     if (!x.stdout && !x.stderr) body.append(h("p", { class: "hint" }, "The program printed nothing."));
   }
-  return h("aside", { class: "fb-out", id: "fb-out", "aria-label": "Output of " + name },
-    h("div", { class: "fb-out-head" }, h("strong", {}, "Output"), h("span", { class: "nm", title: r.path }, name),
-      h("button", { class: "btn small", disabled: r.running, onclick: () => runPython(r.place, r.path) }, "Run again"),
-      h("button", { class: "btn small", onclick: () => { S.runOut = null; drawRunPanel(); } }, "Close")),
-    body,
-    h("p", { class: "hint fb-out-note" }, "The file runs in its own folder with the same limits as an agent\u2019s Run Python: it may only change files in this folder and stops after a minute. For anything else, use Open in Terminal."));
-}
-function drawRunPanel() {
-  const fb = $("fb");
-  if (!fb) return;
-  const old = $("fb-out");
-  if (old) old.remove();
-  fb.classList.toggle("with-out", !!S.runOut);
-  if (S.runOut) fb.append(runPanel());
+  body.append(h("p", { class: "hint" }, "The file runs in its own folder with the same limits as an agent\u2019s Run Python: it may only change files in this folder and stops after a minute. For anything else, use the terminal."));
+  return body;
 }
 async function runPython(placeName, path) {
   if (S.runOut && S.runOut.running) return;
   const job = S.runOut = { place: placeName, path, running: true, started: Date.now() };
-  drawRunPanel();
+  S.ide.tab = "output"; S.ide.dock = true; saveIde();
+  syncIdeButtons(); drawDock();
   try { job.result = await api(filesUrl(placeName, "run", path), { method: "POST" }); }
   catch (e) { job.error = e.message; }
   job.running = false;
-  if (S.runOut === job) drawRunPanel();
+  if (S.runOut === job) drawDock();
   if (S.view.kind === "workspace" && S.workspace.agent === placeName) loadListing(false);   // files the program made
 }
 
@@ -2248,7 +2516,9 @@ function renderAgents() {
 
 /* -------------------------------------------------------------- terminal
    Shells run by Axis (bash, or cmd on Windows) through pipes: commands and line-based programs work,
-   full-screen programs do not. The agent panel lets a chosen agent see the newest output. */
+   full-screen programs do not. You type straight into the output, like in an ordinary terminal: the
+   page keeps the line being typed and sends it when you press Enter. The same terminal is shown in the
+   Terminal tab and in the Workspace's bottom panel. An agent panel lets a chosen agent see the newest output. */
 const ANSI_RE = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 const TERM_KEEP = 300000;    // characters of output kept in the page per terminal
 function termClean(text) {
@@ -2262,14 +2532,19 @@ async function loadTerminals() {
   catch { return; }
   if (!S.term.sessions.some((t) => t.id === S.term.active)) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
 }
+// Opens a terminal in a folder: in the Workspace's bottom panel when called from there, otherwise in the Terminal tab.
 async function openTerminal(placeName, dir) {
-  if (!leaveEdit()) return;
+  const inDock = S.view.kind === "workspace";
+  if (!inDock && !leaveEdit()) return;
   let t;
   try { t = await api("/api/terminal", { method: "POST", body: { place: placeName || SHARED, path: dir || "" } }); }
   catch (e) { toast(e.message); return; }
   S.term.sessions = S.term.sessions.filter((x) => x.id !== t.id).concat([t]);
   S.term.active = t.id;
-  if (S.view.kind === "terminal") renderTerminal(); else go({ kind: "terminal" });
+  if (inDock) {
+    S.ide.tab = "terminal"; S.ide.dock = true; saveIde();
+    renderNav(); syncIdeButtons(); drawDock(); updateIdeHint(); focusTerm();
+  } else if (S.view.kind === "terminal") renderTerminal(); else go({ kind: "terminal" });
 }
 async function closeTerminal(id) {
   const t = S.term.sessions.find((x) => x.id === id);
@@ -2279,9 +2554,18 @@ async function closeTerminal(id) {
   S.term.sessions = S.term.sessions.filter((x) => x.id !== id);
   delete S.term.buf[id];
   if (S.term.active === id) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
-  renderNav(); renderTerminal();
+  renderNav(); redrawTerm();
+}
+// Draws the terminals again wherever they are on screen.
+function redrawTerm() {
+  if (S.view.kind === "terminal") renderTerminal();
+  else if (S.view.kind === "workspace") { drawDock(); updateIdeHint(); }
 }
 const activeTerm = () => S.term.sessions.find((t) => t.id === S.term.active) || null;
+// What the page knows about one terminal: the output so far, and the line being typed (with the place of the cursor in it).
+// `pending` holds lines that were sent and are shown until the shell's own copy of them arrives.
+function termBuf(id) { return S.term.buf[id] || (S.term.buf[id] = { raw: "", next: 0, line: "", pos: 0, pending: [] }); }
+const focusTerm = () => { const c = $("term-cap"); if (c) c.focus({ preventScroll: true }); };
 
 function renderTerminal() {
   const T = S.term;
@@ -2306,16 +2590,11 @@ function renderTerminal() {
 
   let main;
   if (t) {
-    const inp = h("input", { type: "text", class: "term-in", id: "term-in", autocomplete: "off", autocapitalize: "off", spellcheck: "false",
-      "aria-label": "Command", disabled: !t.alive, placeholder: t.alive ? `Type a command for ${t.shell} and press Enter` : "This terminal has closed. Open a new one.",
-      onkeydown: termKeys });
-    const out = h("pre", { class: "term-out", id: "term-out", tabindex: "0", "aria-label": `Output of the terminal in ${t.title}` });
-    out.addEventListener("mouseup", () => { if (!String(window.getSelection() || "")) inp.focus(); });
-    main = h("div", { class: "term-main" }, out, h("div", { class: "term-line" }, h("span", { class: "term-prompt", "aria-hidden": "true" }, "\u203a"), inp));
+    main = h("div", { class: "term-main" }, terminalSurface(t));
   } else {
     main = h("div", { class: "term-empty" }, h("div", { class: "empty" },
       h("h3", {}, "No terminal is open"),
-      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in an agent\u2019s folder or the shared folder. Use Open in Terminal on any folder in Workspace, or open one here."),
+      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in an agent\u2019s folder or the shared folder. Use the terminal button on any folder in Workspace, or open one here."),
       h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the shared folder")));
   }
   fill($("main"), bar, tabs, h("div", { class: "term" + (T.side ? " with-side" : "") }, main,
@@ -2324,30 +2603,51 @@ function renderTerminal() {
   if (t) {
     drawTermOut(true);
     termFetch(t.id);
-    if (document.activeElement === document.body || !document.activeElement) $("term-in").focus({ preventScroll: true });
+    if (document.activeElement === document.body || !document.activeElement) focusTerm();
   }
   termPoll();
+}
+
+/* The text area of a terminal. The output is one piece of text; the line being typed follows it directly, with a
+   cursor. A hidden text box has the keyboard focus, so typing, pasting and input methods work as in any page. */
+function terminalSurface(t) {
+  const out = h("pre", { class: "term-out", id: "term-out", role: "log", "aria-label": `Output of the terminal in ${t.title}` });
+  const surface = h("div", { class: "term-surface" }, out);
+  if (t.alive) surface.append(h("textarea", { class: "term-cap", id: "term-cap", rows: 1, autocomplete: "off", autocapitalize: "off", spellcheck: "false",
+    "aria-label": `Type commands for the terminal in ${t.title}. Enter runs the line.`, onkeydown: termKeydown, oninput: termInput, oncompositionend: termInput }));
+  surface.addEventListener("mouseup", () => { if (!String(window.getSelection() || "")) focusTerm(); });   // selecting text must not be interrupted
+  return surface;
 }
 
 let termTimer = null, termBusy = false;
 function termPoll() {
   clearInterval(termTimer);
   termTimer = setInterval(async () => {
-    if (S.view.kind !== "terminal") { clearInterval(termTimer); return; }
+    if (!$("term-out")) { clearInterval(termTimer); return; }       // no terminal on screen
     if (termBusy || !S.term.active || document.hidden) return;
     termBusy = true;
     try { await termFetch(S.term.active); } finally { termBusy = false; }
   }, 350);
 }
-async function termFetch(id) {
-  const b = S.term.buf[id] || (S.term.buf[id] = { raw: "", next: 0 });
+// One request at a time per terminal, so output is never added twice.
+function termFetch(id) {
+  const b = termBuf(id);
+  if (b.fetching) { b.again = true; return b.fetching; }
+  b.fetching = (async () => {
+    try { do { b.again = false; await termFetchOnce(id); } while (b.again); }
+    finally { b.fetching = null; }
+  })();
+  return b.fetching;
+}
+async function termFetchOnce(id) {
+  const b = termBuf(id);
   let d;
   try { d = await api(`/api/terminal/${encodeURIComponent(id)}?since=${b.next}`); }
   catch (e) {
     if (/does not exist/.test(e.message)) {   // Axis was restarted: its terminals are gone
       S.term.sessions = S.term.sessions.filter((x) => x.id !== id); delete S.term.buf[id];
       if (S.term.active === id) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
-      if (S.view.kind === "terminal") renderTerminal();
+      redrawTerm();
     }
     return;
   }
@@ -2356,23 +2656,55 @@ async function termFetch(id) {
   const t = S.term.sessions.find((x) => x.id === id);
   const ended = t && t.alive && !d.alive;
   if (t) { t.alive = d.alive; t.exit = d.exit; }
-  if (S.view.kind !== "terminal" || S.term.active !== id) return;
-  if (ended) renderTerminal();
+  if (!$("term-out") || S.term.active !== id) return;
+  if (ended) redrawTerm();
   else if (d.text) drawTermOut(false);
 }
+
+// What follows the output: lines already sent but not yet echoed back, then the line being typed with its cursor.
+function typedNodes(b) {
+  const nodes = [];
+  if (b.pending.length) nodes.push(h("span", { class: "term-typed" }, b.pending.join("\n") + "\n"));
+  nodes.push(h("span", { class: "term-typed" }, b.line.slice(0, b.pos), h("span", { class: "term-caret" }, b.line.charAt(b.pos) || " "), b.line.slice(b.pos + 1)));
+  return nodes;
+}
 function drawTermOut(force) {
-  const out = $("term-out"), b = S.term.buf[S.term.active];
+  const out = $("term-out"), t = activeTerm();
   if (!out) return;
+  const b = t ? termBuf(t.id) : null;
   const stick = force || out.scrollHeight - out.scrollTop - out.clientHeight < 40;
-  out.textContent = b ? termClean(b.raw) : "";
+  const raw = b ? b.raw : "";
+  if (out._raw !== raw || !out.firstChild) { out.replaceChildren(document.createTextNode(termClean(raw))); out._raw = raw; }   // the output changed
+  while (out.childNodes.length > 1) out.lastChild.remove();                                                                       // the typed part is always redrawn
+  if (b && t.alive) out.append(...typedNodes(b));
   if (stick) out.scrollTop = out.scrollHeight;
 }
-async function termSend(text) {
-  const id = S.term.active;
+
+// Sends text to a terminal, one request after another, then reads what came back.
+function termSend(text, id = S.term.active) {
+  if (!id) return Promise.resolve(false);
+  const b = termBuf(id);
+  const run = async () => {
+    try { await api(`/api/terminal/${encodeURIComponent(id)}/input`, { method: "POST", body: { text } }); }
+    catch (e) { toast(e.message); return false; }
+    await termFetch(id);
+    return true;
+  };
+  b.chain = (b.chain || Promise.resolve()).then(run, run);
+  return b.chain;
+}
+async function termSubmit() {
+  const T = S.term, id = T.active;
   if (!id) return;
-  try { await api(`/api/terminal/${encodeURIComponent(id)}/input`, { method: "POST", body: { text } }); }
-  catch (e) { toast(e.message); return; }
-  setTimeout(() => termFetch(id), 60);
+  const b = termBuf(id), text = b.line;
+  if (text.trim() && T.history[T.history.length - 1] !== text) { T.history.push(text); if (T.history.length > 200) T.history.shift(); }
+  T.hpos = -1; T.draft = "";
+  b.line = ""; b.pos = 0; b.pending.push(text);
+  drawTermOut(true);
+  const ok = await termSend(text + "\n", id);
+  b.pending.shift();
+  if (!ok) { b.line = text + b.line; b.pos = b.line.length; }      // not sent: give the line back
+  if (S.term.active === id) drawTermOut(true);
 }
 async function termInterrupt() {
   const id = S.term.active;
@@ -2385,58 +2717,112 @@ function termClear() {
   const b = S.term.buf[S.term.active];
   if (b) b.raw = "";
   drawTermOut(true);
-  const i = $("term-in"); if (i) i.focus();
-}
-function termKeys(e) {
-  const T = S.term, inp = e.target;
-  if (e.key === "Enter" && !e.isComposing) {
-    e.preventDefault();
-    const text = inp.value;
-    inp.value = "";
-    if (text.trim() && T.history[T.history.length - 1] !== text) { T.history.push(text); if (T.history.length > 200) T.history.shift(); }
-    T.hpos = -1;
-    termSend(text + "\n");
-  } else if (e.key === "ArrowUp" && T.history.length) {
-    e.preventDefault();
-    T.hpos = T.hpos < 0 ? T.history.length - 1 : Math.max(0, T.hpos - 1);
-    inp.value = T.history[T.hpos];
-  } else if (e.key === "ArrowDown" && T.hpos >= 0) {
-    e.preventDefault();
-    T.hpos++;
-    if (T.hpos >= T.history.length) { T.hpos = -1; inp.value = ""; } else inp.value = T.history[T.hpos];
-  } else if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "c" && inp.selectionStart === inp.selectionEnd) {
-    e.preventDefault(); inp.value = ""; termInterrupt();
-  } else if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
-    e.preventDefault(); termClear();
-  }
+  focusTerm();
 }
 
-// The terminal an agent should see with this message: the open one, when the message comes from the Terminal tab's panel.
+const wordStart = (s, i) => { while (i > 0 && /\s/.test(s[i - 1])) i--; while (i > 0 && !/\s/.test(s[i - 1])) i--; return i; };
+const wordEnd = (s, i) => { while (i < s.length && /\s/.test(s[i])) i++; while (i < s.length && !/\s/.test(s[i])) i++; return i; };
+function termHistory(b, dir) {
+  const T = S.term;
+  if (dir < 0) {
+    if (!T.history.length) return;
+    if (T.hpos < 0) { T.draft = b.line; T.hpos = T.history.length - 1; } else T.hpos = Math.max(0, T.hpos - 1);
+    b.line = T.history[T.hpos];
+  } else {
+    if (T.hpos < 0) return;
+    T.hpos++;
+    if (T.hpos >= T.history.length) { T.hpos = -1; b.line = T.draft || ""; } else b.line = T.history[T.hpos];
+  }
+  b.pos = b.line.length;
+}
+// Keys that edit the line or act on the terminal. Anything else is typed into the hidden text box and arrives in termInput.
+function termKeydown(e) {
+  if (e.isComposing || e.keyCode === 229) return;
+  const t = activeTerm();
+  if (!t || !t.alive) return;
+  const b = termBuf(t.id), key = e.key;
+  const ctrl = e.ctrlKey && !e.altKey && !e.metaKey, lower = key.length === 1 ? key.toLowerCase() : "";
+  const edit = (fn) => { e.preventDefault(); fn(); drawTermOut(true); };
+  const cut = (from) => { b.line = b.line.slice(0, from) + b.line.slice(b.pos); b.pos = from; };
+  if (key === "Enter") { e.preventDefault(); termSubmit(); return; }
+  if (key === "Backspace") return edit(() => { if (ctrl) cut(wordStart(b.line, b.pos)); else if (b.pos > 0) cut(b.pos - 1); });
+  if (key === "Delete") return edit(() => { if (b.pos < b.line.length) b.line = b.line.slice(0, b.pos) + b.line.slice(b.pos + 1); });
+  if (key === "ArrowLeft") return edit(() => { b.pos = ctrl ? wordStart(b.line, b.pos) : Math.max(0, b.pos - 1); });
+  if (key === "ArrowRight") return edit(() => { b.pos = ctrl ? wordEnd(b.line, b.pos) : Math.min(b.line.length, b.pos + 1); });
+  if (key === "Home" || (ctrl && lower === "a")) return edit(() => { b.pos = 0; });
+  if (key === "End" || (ctrl && lower === "e")) return edit(() => { b.pos = b.line.length; });
+  if (key === "ArrowUp" || key === "ArrowDown") return edit(() => termHistory(b, key === "ArrowUp" ? -1 : 1));
+  if (key === "PageUp" || key === "PageDown") {
+    e.preventDefault();
+    const out = $("term-out"); if (out) out.scrollTop += (key === "PageUp" ? -1 : 1) * out.clientHeight * 0.9;
+    return;
+  }
+  const picked = (e.ctrlKey || e.metaKey) && lower === "c" ? String(window.getSelection() || "") : "";
+  if (picked) { e.preventDefault(); copyText(picked, "Copied"); return; }           // Ctrl+C with text selected copies it
+  if (e.metaKey || !ctrl) return;
+  if (lower === "c") {                                                              // Ctrl+C: drop the line and stop the command
+    e.preventDefault(); b.line = ""; b.pos = 0; drawTermOut(true);
+    if (t.shell !== "cmd") termInterrupt();                                         // Windows cannot stop a command without closing the terminal
+  } else if (lower === "l") edit(() => termClear());
+  else if (lower === "u") edit(() => { b.line = b.line.slice(b.pos); b.pos = 0; });
+  else if (lower === "k") edit(() => { b.line = b.line.slice(0, b.pos); });
+  else if (lower === "w") edit(() => cut(wordStart(b.line, b.pos)));
+}
+// Text that was typed or pasted into the hidden text box.
+function termInput(e) {
+  if (e.isComposing) return;
+  const cap = e.target, text = cap.value;
+  cap.value = "";
+  if (text) termInsert(text);
+}
+function termInsert(text) {
+  const t = activeTerm();
+  if (!t || !t.alive) return;
+  const b = termBuf(t.id);
+  const parts = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").split("\n");
+  let runs = parts.length - 1;                                    // lines the text would run
+  if (runs === 1 && parts[1] === "") runs = 0;                    // one line and its closing newline: put it on the line, do not run it unasked
+  if (runs > 0 && !confirm(`Run ${runs} line${runs === 1 ? "" : "s"} in the terminal?\n\n${parts.slice(0, runs).join("\n").slice(0, 400)}`)) return;
+  parts.forEach((part, i) => {
+    b.line = b.line.slice(0, b.pos) + part + b.line.slice(b.pos); b.pos += part.length;
+    if (i < runs) termSubmit();
+  });
+  drawTermOut(true);
+}
+
+// What an agent is shown with a message sent from a side panel. The Terminal tab's panel shows the open terminal.
+// The Workspace panel shows the folder you are in, and the terminal only while it is open on screen.
 function termContextFor(target) {
-  return termChatShown(target) && S.term.active ? S.term.active : null;
+  if (termChatShown(target)) return S.term.active || null;
+  return ideChatShown(target) && $("term-out") ? (S.term.active || null) : null;
 }
 const termChatShown = (target) => S.view.kind === "terminal" && S.term.side && !!target && S.term.agent === target && !!$("term-side");
+const ideChatShown = (target) => S.view.kind === "workspace" && S.ide.side && !!target && S.ide.agent === target && !!$("ide-side");
+const workspaceContextFor = (target) => ideChatShown(target) ? { place: S.workspace.agent, path: S.workspace.dir, file: S.workspace.file || "" } : null;
 
-function renderTermChat() {
-  const side = $("term-side");
+/* A chat with one agent in a panel beside another page. cfg says where it is drawn and what it tells the user:
+   { host, askId, hintId, state (holds .agent), save(), fallback(), noAgents, placeholder(agent), hint(agent, model), ask(), headExtra }. */
+function renderSideChat(cfg) {
+  const side = $(cfg.host);
   if (!side) return;
-  const T = S.term;
-  const hadFocus = document.activeElement && document.activeElement.id === "term-ask";
+  const st = cfg.state;
+  const hadFocus = !!document.activeElement && document.activeElement.id === cfg.askId;
   const editFocus = editBoxFocused();
   if (!S.agents.length) {
-    return fill(side, h("p", { class: "hint" }, "Make an agent first. It can then see this terminal and help you with it. ",
+    return fill(side, h("p", { class: "hint" }, cfg.noAgents + " ",
       h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")));
   }
-  if (!agentByName(T.agent)) T.agent = S.agents[0].name;
-  const target = T.agent, agent = agentByName(target), model = currentModel(target);
+  if (!agentByName(st.agent)) st.agent = cfg.fallback();
+  const target = st.agent, agent = agentByName(target), model = currentModel(target);
   const stream = streamHere(target), busyElsewhere = !stream && !!S.streams[target];
   const pick = h("select", { "aria-label": "Agent", disabled: !!S.streams[target],
-    onchange: (e) => { T.agent = e.target.value; store("axis.termAgent", T.agent); renderTermChat(); } },
+    onchange: (e) => { st.agent = e.target.value; cfg.save(); renderSideChat(cfg); } },
     S.agents.map((a) => { const o = h("option", { value: a.name }, a.name); o.selected = a.name === target; return o; }));
   const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick),
     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
-      onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderTermChat(); } }, "New chat") : null,
-    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"));
+      onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
+    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
+    cfg.headExtra ? cfg.headExtra() : null);
   if (!ready()) {
     return fill(side, head, h("p", { class: "hint" }, "No model is on. ",
       h("button", { class: "link", onclick: () => go({ kind: "models" }) }, "Start one on the Models page"), "."));
@@ -2447,33 +2833,63 @@ function renderTermChat() {
     loadChat(chatId).then((r) => {
       if (r === "missing" && S.current[target] === chatId) { delete S.current[target]; saveCurrent(); }
       else if (r !== "ok" && r !== "missing") { toast("Could not open the chat: " + r); return; }
-      renderTermChat();
+      renderSideChat(cfg);
     });
     return;
   }
-  const ask = h("textarea", { id: "term-ask", rows: 2, placeholder: `Ask ${target} about this terminal`, "aria-label": `Message ${target}`,
+  const ask = h("textarea", { id: cfg.askId, rows: 2, placeholder: cfg.placeholder(target), "aria-label": `Message ${target}`,
     oninput: (e) => { S.drafts[target] = e.target.value; saveDrafts(); },
-    onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); termAsk(); } } });
+    onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); cfg.ask(); } } });
   ask.value = S.drafts[target] || "";
   const btn = stream ? h("button", { class: "btn small", onclick: () => stream.controller.abort() }, "Stop")
-    : h("button", { class: "btn small primary", disabled: busyElsewhere, title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: termAsk }, "Send");
+    : h("button", { class: "btn small primary", disabled: busyElsewhere, title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: cfg.ask }, "Send");
   fill(side, head,
     h("div", { class: "thread", id: "thread", "data-target": target }, h("div", { class: "thread-inner", id: "thread-inner" })),
-    h("div", { class: "term-ask" }, h("div", { class: "term-ask-row" }, ask, btn),
-      h("p", { class: "hint" }, T.active
-        ? `Each message shows ${target} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
-        : `Open a terminal and ${target} will see its output with each message.`)));
+    h("div", { class: "term-ask" }, h("div", { class: "term-ask-row" }, ask, btn), h("p", { class: "hint", id: cfg.hintId }, cfg.hint(target, model))));
   renderThread(target, agent, model);
   scrollDown(true);
   if (hadFocus) ask.focus({ preventScroll: true });
   if (editFocus) focusEditBox(false);
 }
-function termAsk() {
-  const target = S.term.agent;
-  const box = $("term-ask");
-  if (box) S.drafts[target] = box.value;
-  if (!(S.drafts[target] || "").trim() || S.streams[target]) return;
-  send(target);
+function askFrom(agentName, askId) {
+  const box = $(askId);
+  if (box) S.drafts[agentName] = box.value;
+  if (!(S.drafts[agentName] || "").trim() || S.streams[agentName]) return;
+  send(agentName);
+}
+
+const TERM_CHAT = {
+  host: "term-side", askId: "term-ask", hintId: "term-hint",
+  get state() { return S.term; },
+  save: () => store("axis.termAgent", S.term.agent),
+  fallback: () => S.agents[0].name,
+  noAgents: "Make an agent first. It can then see this terminal and help you with it.",
+  placeholder: (t) => `Ask ${t} about this terminal`,
+  hint: (t, model) => S.term.active
+    ? `Each message shows ${t} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
+    : `Open a terminal and ${t} will see its output with each message.`,
+  ask: () => askFrom(S.term.agent, "term-ask"),
+};
+const IDE_CHAT = {
+  host: "ide-side", askId: "ide-ask", hintId: "ide-hint",
+  get state() { return S.ide; },
+  save: () => saveIde(),
+  fallback: () => (agentByName(S.workspace.agent) ? S.workspace.agent : S.agents[0].name),
+  noAgents: "Make an agent first. It can then see the folder you are in and help you with it.",
+  placeholder: (t) => `Ask ${t} about this folder`,
+  hint: (t, model) => ideHint(t, model),
+  ask: () => askFrom(S.ide.agent, "ide-ask"),
+  headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
+};
+const renderTermChat = () => renderSideChat(TERM_CHAT);
+const renderIdeChat = () => renderSideChat(IDE_CHAT);
+function ideHint(target, model) {
+  const terminal = $("term-out") ? ", and the newest output of the terminal while it is open" : "";
+  return `Each message shows ${target} the folder you are in (${folderLabel()}) and which file is open${terminal}. It can read them but cannot change anything or type into the terminal. Using ${model}.`;
+}
+function updateIdeHint() {
+  const el = $("ide-hint");
+  if (el && agentByName(S.ide.agent)) el.textContent = ideHint(S.ide.agent, currentModel(S.ide.agent));
 }
 
 /* ------------------------------------------------------------ past chats */
@@ -3952,6 +4368,7 @@ function renderSkills() {
       } catch (e) { err.textContent = e.message; err.hidden = false; }
     };
     const form = h("form", { class: "form skill-card", onsubmit: (e) => { e.preventDefault(); save(); } }, err,
+      sk && sk.builtin ? h("p", { class: "hint" }, "This skill is built in. You can change what it tells the model; its actions stay as they are. Reset to default on its card undoes your changes.") : null,
       h("div", { class: "field" }, h("label", {}, "Name"), name),
       h("div", { class: "field" }, h("label", {}, "Description"), desc),
       h("div", { class: "field" }, h("label", {}, "Instructions"), instr),
@@ -3962,19 +4379,49 @@ function renderSkills() {
     return form;
   };
 
-  const customCard = (sk) => {
+  // Everything the skill sends to the model, fetched from Axis each time it is opened so it always matches the saved text.
+  const sendsView = (sk) => {
+    const body = h("div", {}, h("p", { class: "hint" }, "Loading\u2026"));
+    const d = h("details", { class: "sends", ontoggle: () => { if (d.open) load(); } },
+      h("summary", {}, "What this sends to the model"), body);
+    async function load() {
+      try {
+        const x = await api(`/api/skills/${encodeURIComponent(sk.id)}/sends`);
+        fill(body,
+          h("div", { class: "step-label" }, "Added to the system message"), h("pre", {}, x.system),
+          x.tools.length ? [
+            h("div", { class: "step-label" }, "Actions given to the model"), h("pre", {}, JSON.stringify(x.tools, null, 2)),
+            h("details", { class: "sends-sub" }, h("summary", {}, "The same actions as text, for a model without tool support"), h("pre", {}, x.tools_text)),
+          ] : h("p", { class: "hint" }, "This skill gives the model no actions. It only adds the text above."),
+          x.notes.map((n) => h("p", { class: "hint" }, n)));
+      } catch (e) { fill(body, h("p", { class: "form-error" }, e.message)); }
+    }
+    return d;
+  };
+
+  const resetSkill = async (sk) => {
+    if (!confirm(`Put ${sk.name} back to its default text? Your changes to it are lost.`)) return;
+    try { await api("/api/skills/" + encodeURIComponent(sk.id) + "/reset", { method: "POST" }); await loadSkills(); toast("Back to the default"); renderSkills(); }
+    catch (e) { toast(e.message); }
+  };
+  const deleteSkill = async (sk) => {
+    if (!confirm(`Delete the skill ${sk.name}? Agents using it will stop using it.`)) return;
+    try { await api("/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
+          await Promise.all([loadSkills(), loadAgents()]); toast("Skill deleted"); renderSkills(); }
+    catch (e) { toast(e.message); }
+  };
+  const skillCard = (sk) => {
     const card = h("div", { class: "skill-card" },
-      h("h4", {}, sk.name, h("span", { style: "display:flex;gap:12px" },
-        h("button", { class: "link", onclick: () => card.replaceWith(editor(sk, renderSkills)) }, "Edit"),
-        h("button", { class: "link", style: "color:var(--bad)", onclick: async () => {
-          if (!confirm(`Delete the skill ${sk.name}? Agents using it will stop using it.`)) return;
-          try { await api("/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
-                await Promise.all([loadSkills(), loadAgents()]); toast("Skill deleted"); renderSkills(); }
-          catch (e) { toast(e.message); }
-        } }, "Delete"))),
+      h("h4", {}, h("span", { class: "skill-name" }, sk.name,
+          sk.builtin ? h("span", { class: "tag" }, "Built in") : null, sk.modified ? h("span", { class: "tag edited" }, "Edited") : null),
+        h("span", { class: "skill-tools" },
+          h("button", { class: "link", onclick: () => card.replaceWith(editor(sk, renderSkills)) }, "Edit"),
+          sk.builtin ? h("button", { class: "link", disabled: !sk.modified, title: sk.modified ? "Put the text back the way Axis ships it" : "Already the default",
+            onclick: () => resetSkill(sk) }, "Reset to default") : null,
+          sk.builtin ? null : h("button", { class: "link", style: "color:var(--bad)", onclick: () => deleteSkill(sk) }, "Delete"))),
       sk.description ? h("p", {}, sk.description) : null,
-      h("div", { class: "instr" }, sk.instructions),
-      h("p", {}, users(sk.id)));
+      h("p", {}, users(sk.id)),
+      sendsView(sk));
     return card;
   };
 
@@ -3986,13 +4433,10 @@ function renderSkills() {
       newSlot,
       h("div", { class: "skill-group" }, h("h3", {}, "Your skills"),
         h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
-        custom.length ? custom.map(customCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
+        custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent act: files, Python, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder."),
-        builtin.map((sk) => h("div", { class: "skill-card" },
-          h("h4", {}, sk.name, h("span", { class: "tag" }, "Built in")),
-          h("p", {}, sk.description),
-          h("p", {}, users(sk.id))))))));
+        h("p", { class: "hint" }, "These let an agent act: files, Python, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder. Edit changes what a skill tells the model; Reset to default undoes it."),
+        builtin.map(skillCard)))));
 }
 
 /* ---------------------------------------------------------------- update */
@@ -4104,6 +4548,12 @@ window.addEventListener("beforeunload", (e) => {
   S.imagePreview = recall("axis.imagePreview", true) !== false;
   const ocrForm = recall("axis.ocrForm", null);
   if (ocrForm && typeof ocrForm === "object" && !Array.isArray(ocrForm)) Object.assign(S.ocrForm, ocrForm);
+  const ide = recall("axis.ide", null);
+  if (ide && typeof ide === "object" && !Array.isArray(ide)) {
+    S.ide.side = ide.side === true; S.ide.dock = ide.dock === true;
+    S.ide.agent = typeof ide.agent === "string" ? ide.agent : "";
+    if (Number.isFinite(ide.dockH)) S.ide.dockH = Math.min(1200, Math.max(DOCK_MIN, ide.dockH));
+  }
   S.term.side = recall("axis.termSide", true) !== false;
   S.term.agent = String(recall("axis.termAgent", "") || "");
   const tab = recall("axis.modelsTab", "chat");

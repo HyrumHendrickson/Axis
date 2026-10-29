@@ -23,7 +23,7 @@ Never do any of the following, even if a task seems to call for it. Stop and ask
 
 ```bash
 python3 -m unittest discover -s tests            # the whole suite: no network or model needed
-python3 -m unittest tests.test_axis.TestFileManagement   # one test class
+python3 -m unittest discover -s tests -k TestFileManagement   # one test class
 python3 -m axis --no-browser                     # run from the clone; open the printed address
 ```
 

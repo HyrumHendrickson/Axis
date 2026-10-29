@@ -25,6 +25,8 @@ Routes:
   POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
                                             (&mkdirs=1 makes the folder first when it is missing)
   POST   /api/files/<name>/mkdir?path=dir   make a folder
+  POST   /api/files/<name>/create?path=file make a new, empty file (never replaces a file)
+  POST   /api/files/<name>/rename?path=x&to=name   rename a file or folder in place (never replaces anything)
   POST   /api/files/<name>/move?path=x&to=dir   move a file or folder into another folder of the same place
   PUT    /api/files/<name>/save?path=file   replace a text file with the request body (UTF-8 text)
   POST   /api/files/<name>/run?path=file    run a .py file (guarded like Run Python) and return its output
@@ -32,12 +34,15 @@ Routes:
   GET    /api/skills                        list skills (built-in and custom)
   POST   /api/skills                        create a custom skill
   GET    /api/skills/<id>                   one skill
-  PUT    /api/skills/<id>                   update a custom skill
+  PUT    /api/skills/<id>                   update a skill (a built-in skill's name, description and instructions)
   DELETE /api/skills/<id>                   delete a custom skill (and remove it from agents)
+  GET    /api/skills/<id>/sends             exactly what the skill sends to the model: system text and actions
+  POST   /api/skills/<id>/reset             put a built-in skill back to its default text
   POST   /api/chat                          stream a reply as newline-delimited JSON
                                             (a user message may carry "images": [{place, path}] for
                                             models that read pictures; "terminal": id shows the agent
-                                            that terminal's recent output)
+                                            that terminal's recent output; "workspace": {place, path, file}
+                                            shows the agent the Workspace folder the user is looking at)
   GET    /api/terminal                      open terminals
   POST   /api/terminal                      open a terminal {place?, path?} in that folder (default: shared)
   GET    /api/terminal/<id>?since=n         output from offset n {text, next, reset, alive, exit}
@@ -411,6 +416,58 @@ def make_dir(agent: "Place", rel: str) -> str:
     return target.relative_to(agent.workspace.resolve()).as_posix()
 
 
+def create_file(agent: "Place", rel: str) -> str:
+    """Make a new, empty file in a folder that exists. Never replaces a file or folder. Returns its path."""
+    agent.workspace.mkdir(parents=True, exist_ok=True)
+    parent, _, name = str(rel).replace("\\", "/").rpartition("/")
+    why = bad_file_name(name)
+    if why:
+        raise agents.AgentError(why)
+    folder = folder_path(agent, parent)
+    if any(part in HIDDEN for part in folder.relative_to(agent.workspace.resolve()).parts):
+        raise agents.AgentError("Files cannot be made in that folder.")
+    target = folder / name
+    try:
+        os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))   # exclusive: never replaces
+    except FileExistsError:
+        raise agents.AgentError(f"'{name}' already exists in that folder.") from None
+    except OSError as exc:
+        raise agents.AgentError(f"Could not make the file ({exc.strerror or exc}).") from exc
+    return target.relative_to(agent.workspace.resolve()).as_posix()
+
+
+def rename_path(agent: "Place", rel: str, new_name: Any) -> str:
+    """Give a file or folder a new name, keeping it in the same folder. Never replaces anything.
+
+    The new name is a plain name, not a path. On a file system that ignores case (Windows, macOS),
+    changing only the capital letters is allowed. A link is renamed itself, not what it points to.
+    Returns the new path.
+    """
+    if not isinstance(new_name, str):
+        raise agents.AgentError("Give the new name as text.")
+    new_name = new_name.strip()
+    why = bad_file_name(new_name)
+    if why:
+        raise agents.AgentError(why.replace("file name", "name"))
+    parent, _, old_name = str(rel).replace("\\", "/").rstrip("/").rpartition("/")
+    if old_name in ("", ".", "..") or old_name in HIDDEN:
+        raise agents.AgentError("Choose a file or folder to rename.")
+    folder = folder_path(agent, parent)
+    source, target = folder / old_name, folder / new_name
+    if not os.path.lexists(source):
+        raise agents.AgentError(f"'{rel}' does not exist in {_owner(agent)}.")
+    if new_name != old_name:
+        only_case = new_name.lower() == old_name.lower() and os.path.exists(target) and os.path.samefile(source, target)
+        if os.path.lexists(target) and not only_case:
+            raise agents.AgentError(f"'{new_name}' already exists in that folder.")
+        try:
+            os.rename(source, target)
+        except OSError as exc:
+            raise agents.AgentError(f"Could not rename it ({exc.strerror or exc}). "
+                                    "Close any program that has it open and try again.") from exc
+    return target.relative_to(agent.workspace.resolve()).as_posix()
+
+
 def move_path(agent: "Place", rel: str, to_dir: str) -> str:
     """Move a file or folder into another folder of the same agent (or the shared folder).
 
@@ -518,6 +575,70 @@ def with_terminal(messages: List[Dict[str, Any]], sid: Any) -> List[Dict[str, An
             f"Its newest output, which you can see but not type into:\n```\n{shot}\n```")
     last = messages[-1]
     return messages[:-1] + [{**last, "content": last["content"] + note}]
+
+
+WORKSPACE_LIST_LIMIT = 40   # entries of the folder an agent is shown
+
+
+def _size_text(n: Optional[int]) -> str:
+    if n is None:
+        return ""
+    size = float(n)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024:
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def with_workspace(messages: List[Dict[str, Any]], ctx: Any, agent: Optional[agents.Agent] = None) -> List[Dict[str, Any]]:
+    """Show the agent the Workspace folder the user is looking at, added to the newest message.
+
+    ctx is {place, path, file} from the page. Only names, sizes and item counts are shown, never file
+    contents. A folder that does not exist, or a path outside the folder, is left out without an error.
+    """
+    if not isinstance(ctx, dict) or not ctx.get("place"):
+        return messages
+    try:
+        where = place(str(ctx["place"]))
+        listing = folder_listing(where, str(ctx.get("path") or ""))
+    except (agents.AgentError, tools.ToolError):
+        return messages
+    shared = isinstance(where, SharedPlace)
+    own = agent is not None and not shared and where.name == agent.name
+    has_shared = shared and agent is not None and skills.SHARED_SKILL in agent.skills
+    path = listing["path"]
+    if shared:
+        owner = "the folder shared by agents"
+    elif own:
+        owner = "your own folder"
+    else:
+        owner = f"the folder of the agent '{where.name}'"
+    lines = ["---", f"The user is looking at a folder in the Axis Workspace: {path or 'the top level'} of {owner}."]
+    if own:
+        lines.append(f"Your file actions reach it as '{path or '.'}'.")
+    elif shared and has_shared:
+        lines.append(f"Your file actions reach it as 'shared/{path}'." if path else "Your file actions reach it as 'shared'.")
+    else:
+        lines.append("You cannot reach it with your own actions; this list is only so you know what they are looking at.")
+    entries = listing["entries"]
+    if entries:
+        lines.append("It contains:")
+        for e in entries[:WORKSPACE_LIST_LIMIT]:
+            if e["type"] == "dir":
+                count = e["items"]
+                lines.append(f"- {e['name']}/" + (f" ({count} item{'' if count == 1 else 's'})" if count is not None else ""))
+            else:
+                lines.append(f"- {e['name']} ({_size_text(e['size'])})")
+        if len(entries) > WORKSPACE_LIST_LIMIT:
+            lines.append(f"- ... and {len(entries) - WORKSPACE_LIST_LIMIT} more")
+    else:
+        lines.append("It is empty.")
+    opened = str(ctx.get("file") or "").replace("\n", " ").strip()[:200]
+    if opened:
+        lines.append(f"The file open in the editor: {opened}")
+    last = messages[-1]
+    return messages[:-1] + [{**last, "content": last["content"] + "\n\n" + "\n".join(lines)}]
 
 
 def open_folder(path: Path) -> None:
@@ -694,6 +815,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, self._upload(agent, param("path"), param("name"), make=param("mkdirs") == "1"))
             if action == "mkdir" and method == "POST":
                 return self._json(201, {"made": make_dir(agent, param("path"))})
+            if action == "create" and method == "POST":
+                return self._json(201, {"created": create_file(agent, param("path"))})
+            if action == "rename" and method == "POST":
+                return self._json(200, {"renamed": rename_path(agent, param("path"), param("to"))})
             if action == "move" and method == "POST":
                 return self._json(200, {"moved": move_path(agent, param("path"), param("to"))})
             if action == "save" and method == "PUT":
@@ -832,6 +957,10 @@ class Handler(BaseHTTPRequestHandler):
                     skills.delete(parts[2])
                     agents.remove_skill_everywhere(parts[2])
                     return self._json(200, {"deleted": parts[2]})
+            if n == 4 and parts[3] == "sends" and method == "GET":
+                return self._json(200, agents.skill_preview(parts[2]))
+            if n == 4 and parts[3] == "reset" and method == "POST":
+                return self._json(200, skills.reset(parts[2]))
         return self._error(404, "Not found.")
 
     def do_GET(self):
@@ -1010,7 +1139,8 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
         agent = agents.load(body["agent"]) if body.get("agent") else None
-        messages = attach_images(with_terminal(agents.build_messages(agent, body.get("messages")), body.get("terminal")))
+        messages = attach_images(with_workspace(with_terminal(agents.build_messages(agent, body.get("messages")), body.get("terminal")),
+                                                body.get("workspace"), agent))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")

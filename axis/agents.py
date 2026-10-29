@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import chats as chat_lib
+from . import runner
 from . import skills as skill_lib
 from . import tools as tool_lib
 from .paths import axis_home, remove_tree, shared_root
@@ -276,24 +277,10 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
     if agent is None:
         return messages
 
-    system = agent.system_prompt
     names = tool_names(agent)
     uses_files = any(t in names for t in tool_lib.FILE_TOOLS + ("run_python", "run_python_file"))
-    chosen = [skill_lib.get(i) for i in agent.skills if skill_lib.exists(i)]
-    # A skill that only changes how file actions work means nothing without them.
-    needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
-    chosen = [s for s in chosen if uses_files or s["id"] not in needs_files]
-    if chosen:
-        system += "\n\nYou have the following skills. Use them when relevant.\n"
-        system += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
-    if uses_files and shared_folder(agent) is not None:
-        system += "\n\n" + skill_lib.SHARED_WORKSPACE_NOTE
-        if "run_python" in names or "run_python_file" in names:
-            system += " " + skill_lib.SHARED_PYTHON_NOTE
-    elif uses_files:
-        system += "\n\n" + skill_lib.WORKSPACE_NOTE
-    elif names:
-        system += "\n\n" + skill_lib.TOOLS_NOTE
+    shared = shared_folder(agent) is not None if uses_files else False
+    system = agent.system_prompt + skills_prompt(agent.skills, names, shared)
 
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
@@ -302,6 +289,59 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
             "content": f"{messages[-1]['content']}\n\n---\nFollow these instructions:\n{rules}",
         }
     return [{"role": "system", "content": system}] + messages
+
+
+def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False) -> str:
+    """The text an agent's skills add to its system message, after the agent's own system prompt.
+
+    names are the actions the agent has (from its built-in skills); shared says the agent may use the
+    shared folder. build_messages and skill_preview both use this, so what the Skills page shows is
+    exactly what is sent.
+    """
+    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + ("run_python", "run_python_file"))
+    chosen = [skill_lib.get(i) for i in skill_ids if skill_lib.exists(i)]
+    # A skill that only changes how file actions work means nothing without them.
+    needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
+    chosen = [s for s in chosen if uses_files or s["id"] not in needs_files]
+    text = ""
+    if chosen:
+        text += "\n\nYou have the following skills. Use them when relevant.\n"
+        text += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
+    if uses_files and shared:
+        text += "\n\n" + skill_lib.SHARED_WORKSPACE_NOTE
+        if "run_python" in names or "run_python_file" in names:
+            text += " " + skill_lib.SHARED_PYTHON_NOTE
+    elif uses_files:
+        text += "\n\n" + skill_lib.WORKSPACE_NOTE
+    elif names:
+        text += "\n\n" + skill_lib.TOOLS_NOTE
+    return text
+
+
+def skill_preview(skill_id: str) -> Dict[str, Any]:
+    """Everything one skill sends to the model, as the page shows it under "What this sends to the model".
+
+    system   the text added to the system message (built by skills_prompt, the same code a chat uses)
+    tools    the action definitions sent with the request, in the format Ollama and llama.cpp receive
+    tools_text  the same actions written out as text, which is what a model without tool support receives
+    notes    plain-language conditions that apply
+    """
+    skill = skill_lib.get(skill_id)
+    actions = list(skill["tools"])
+    needs_files = bool(next((s.get("needs_files") for s in skill_lib.BUILTIN if s["id"] == skill_id), False))
+    # The Shared folder skill is only sent to an agent that also has a file action, and it changes
+    # the folder note; show it the way such an agent receives it.
+    names = actions or (["list_files"] if needs_files else [])
+    system = skills_prompt([skill_id], names, shared=skill_id == skill_lib.SHARED_SKILL).lstrip("\n")
+    notes = []
+    if needs_files:
+        notes.append("This is only sent to an agent that also has a file or Python skill.")
+    if actions:
+        notes.append("The closing note about the agent's folder is added once per agent, however many action skills it has.")
+    notes.append("The agent's own system prompt comes first, and its config instructions are added to each message "
+                 "you send. They are not part of the skill.")
+    return {"id": skill["id"], "name": skill["name"], "system": system, "tools": tool_lib.specs(actions),
+            "tools_text": runner.text_protocol(actions) if actions else "", "notes": notes}
 
 
 def tool_names(agent: Optional[Agent]) -> List[str]:

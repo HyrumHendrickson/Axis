@@ -23,7 +23,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
   |     +-- procs.py                                     (programs Axis started)         |
-  |     +-- terminal.py                                  (shells for the Terminal tab)   |
+  |     +-- terminal.py                                  (shells: Terminal, Workspace)   |
   |     +-- updates.py                                   (update check against GitHub)   |
   +--------------------------------------------------------------------------------------+
          ^
@@ -58,6 +58,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 |-------|-------|--------|
 | Agents | `~/Axis/agents/<name>/agent.json` and `workspace/` | `agents.py` |
 | Custom skills | `~/Axis/skills/<id>.json` | `skills.py` |
+| Edits to built-in skills | `~/Axis/skills/built-in/<id>.json` (removed by Reset to default) | `skills.py` |
 | Chats | `~/Axis/chats/<id>.json` | `chats.py` |
 | Engine and model settings | `~/Axis/*-settings.json`, `~/Axis/image-models/` | `manager.py`, `images.py`, `ocr.py` |
 | Programs Axis started | `~/Axis/run/` | `procs.py`, `instances.py` |

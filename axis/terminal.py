@@ -6,6 +6,9 @@ That keeps Axis free of extra dependencies and works the same everywhere, but
 full-screen programs (editors, pagers, top) do not work; ordinary commands,
 scripts and line-based programs do.
 
+Axis echoes what the user types into the output (a terminal on a pipe has no line
+editor to do it), except on Windows, where cmd prints each command it reads.
+
 Unlike Run Python, a terminal is not guarded: it runs with the user's own
 rights. Only the user types into it. Agents may be shown its recent output
 (snapshot) but never write to it.
@@ -57,12 +60,14 @@ def _shell() -> Dict[str, Any]:
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
         # cmd prints its prompt and each command it reads, so typed input is not echoed again.
         return {"argv": [comspec, "/D", "/K", "chcp 65001>nul"], "name": "cmd", "echo": False}
-    # bash is preferred (also on macOS, where the login shell is zsh): run with -i it shows a prompt,
-    # loads the user's aliases and echoes each line it reads, even through pipes.
+    # bash is preferred (also on macOS, where the login shell is zsh): run with -i it shows a prompt and loads
+    # the user's aliases. --noediting stops its line editor, which would echo only the lines it reads itself:
+    # Axis echoes what is typed instead, as it does for sh, so a program that reads input (python, read)
+    # shows the answers typed to it as a terminal would. The option must come before -i.
     for candidate in (os.environ.get("SHELL", ""), "/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash",
                       "/opt/homebrew/bin/bash", shutil.which("bash") or ""):
         if candidate and Path(candidate).name == "bash" and Path(candidate).is_file() and os.access(candidate, os.X_OK):
-            return {"argv": [candidate, "-i"], "name": "bash", "echo": False}
+            return {"argv": [candidate, "--noediting", "-i"], "name": "bash", "echo": True}
     sh = shutil.which("sh") or "/bin/sh"
     return {"argv": [sh, "-i"], "name": Path(sh).name, "echo": True}   # sh does not echo through pipes
 

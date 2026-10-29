@@ -4,6 +4,24 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-10-29
+
+### Added
+- **Workspace is now a light editor.** **New file** and **New folder** add a name box to the list (Enter saves, Esc cancels); a new file opens ready to type in. **Rename** any file or folder with the pencil on its row, **F2**, or **Rename** above an open file. Nothing is ever replaced: a taken name is refused. The folder tools moved to a bar under the folder path, with **More** holding **Refresh**, **Show in folder**, **Open a terminal here**, and **Delete this folder**.
+- **Bottom panel in Workspace.** **Terminal** shows or hides a panel under the files with a tab for each terminal and an **Output** tab for Python files you run. Drag its top edge (or use the arrow keys) to resize it. The terminal button on a folder row and **Open a terminal here** now open a terminal in this panel.
+- **Agent chat in Workspace.** **Agent** shows or hides a chat with an agent beside the files. With each message the agent is shown the folder you are in (names, sizes, and item counts only, never file contents), the open file's name, and the terminal's newest output only while the terminal is showing. Which panels are open, their size, and the chosen agent are remembered in the browser.
+- **Skills can be edited and inspected.** **Edit** now works on built-in skills (name, description, instructions; their actions stay fixed), with **Reset to default** and an **Edited** tag. Every skill has a **What this sends to the model** dropdown showing, exactly as sent, the system text, the action definitions, and the same actions as text. Edits are kept in `skills/built-in/`.
+- API: `POST /api/files/<n>/create`, `POST /api/files/<n>/rename`, `GET /api/skills/<id>/sends`, `POST /api/skills/<id>/reset`, and a `workspace` field on `POST /api/chat`.
+- Documentation of features that were already in Axis but missing from the user guide: pictures in chats (**Attach picture**, paste, drop, **From Workspace**) and **Edit a picture** on the Images tab.
+
+### Changed
+- **Terminals are typed in directly.** The separate input box under the output is gone; your text appears after the prompt with a cursor, and Enter runs it. Cursor keys, Home and End, word movement, Ctrl+U, Ctrl+K, Ctrl+W, command history, and Page Up and Page Down work, and Ctrl+C copies selected text. A pasted line is placed on the line and not run until Enter; pasting several lines asks first.
+- Axis now echoes what is typed into a bash terminal itself (bash runs with `--noediting`), as it already did for `sh`. An answer typed to a program that reads input, such as Python's `input()`, now stays visible.
+- Python file output moved from a column beside the file to the **Output** tab of the bottom panel, so the Workspace stays readable beside the agent chat.
+- The Workspace's **Agent** picker is now called **Folder**, since it chooses whose folder is shown. **Delete folder** moved into **More**.
+- Skill cards show their text in the **What this sends to the model** dropdown instead of inline.
+- `docs/principles.md` now says Axis is not a *full* IDE: the Workspace is a light editor with no debugger, language servers, or extensions.
+
 ### Fixed
 - The test workflow uses `actions/checkout@v6` and `actions/setup-python@v6` (Node 24), and cancels a run that a newer push replaces.
 - Tests: deleting an agent whose folder, or a folder inside it, was read-only failed on Linux and macOS, and the test suite failed there. Deleting a folder in the **Files** tab now also removes read-only files and folders, and never follows a link out of the folder.
@@ -12,6 +30,8 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 - Picture making closes the output pipe of `sd-cli`, so its handles are released (Windows could not clean up the files).
 - `axis uninstall` on Windows no longer fails if the PowerShell shortcut removal prints nothing.
 - Closing a browser tab during a reply no longer prints error traces in the terminal.
+- The test commands for a single class or test in `AGENTS.md` and `docs/development.md` failed with `ModuleNotFoundError`; they now use `unittest discover -s tests -k`.
+- Terminal output could be added twice when two reads overlapped; reads now go one at a time per terminal, and lines are sent in order.
 
 ### Security
 - `fetch_page` checks the address it actually connects to, so a site cannot pass the "not your own computer" check and then redirect to it (DNS rebinding). Shared addresses (`100.64.0.0/10`, used by Tailscale) are refused too, and a site that sends its answer too slowly is given up on after 45 seconds.

@@ -6,6 +6,11 @@ folder skill adds no tools of its own; it lets the file actions an agent already
 has also reach ~/Axis/shared, which every agent with that skill can use.
 Custom skills are named instructions written by the user; they are stored as
 ~/Axis/skills/<id>.json. Agents choose skills by id.
+
+The name, description and instructions of a built-in skill can be edited. The
+edit is kept in ~/Axis/skills/built-in/<id>.json and laid over the default, so
+"reset to default" is just deleting that file. A built-in skill's actions (its
+tools) are code and cannot be changed.
 """
 
 from __future__ import annotations
@@ -128,6 +133,7 @@ BUILTIN: List[Dict[str, Any]] = [
     },
 ]
 BUILTIN_IDS = {s["id"] for s in BUILTIN}
+EDITABLE = ("name", "description", "instructions")   # what a user may change on a built-in skill
 
 
 class SkillError(Exception):
@@ -157,8 +163,39 @@ def _public(skill: Dict[str, Any], builtin: bool) -> Dict[str, Any]:
         "instructions": skill.get("instructions", ""),
         "tools": list(skill.get("tools", [])),
         "builtin": builtin,
+        "modified": False,
         "created": skill.get("created", ""),
     }
+
+
+def builtin_dir() -> Path:
+    return skills_root() / "built-in"
+
+
+def _default(skill_id: str) -> Optional[Dict[str, Any]]:
+    return next((s for s in BUILTIN if s["id"] == skill_id), None)
+
+
+def _override(skill_id: str) -> Dict[str, str]:
+    """The user's edits to a built-in skill (only the fields that are usable), or {}."""
+    try:
+        data = json.loads((builtin_dir() / f"{skill_id}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {k: data[k] for k in EDITABLE if isinstance(data.get(k), str)}
+    for required in ("name", "instructions"):   # an edit can never leave these empty
+        if not out.get(required, "").strip():
+            out.pop(required, None)
+    return out
+
+
+def _builtin(default: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {**default, **_override(default["id"])}
+    public = _public(merged, True)
+    public["modified"] = any(merged.get(k, "") != default.get(k, "") for k in EDITABLE)
+    return public
 
 
 def _path(skill_id: str) -> Path:
@@ -168,7 +205,7 @@ def _path(skill_id: str) -> Path:
 
 
 def list_all() -> List[Dict[str, Any]]:
-    result = [_public(s, True) for s in BUILTIN]
+    result = [_builtin(s) for s in BUILTIN]
     root = skills_root()
     if root.is_dir():
         custom = []
@@ -184,9 +221,9 @@ def list_all() -> List[Dict[str, Any]]:
 
 
 def get(skill_id: str) -> Dict[str, Any]:
-    for s in BUILTIN:
-        if s["id"] == skill_id:
-            return _public(s, True)
+    default = _default(skill_id)
+    if default is not None:
+        return _builtin(default)
     path = _path(skill_id)
     if not path.is_file():
         raise SkillError(f"Skill '{skill_id}' does not exist.")
@@ -244,16 +281,45 @@ def create(data: Dict[str, Any]) -> Dict[str, Any]:
     return _public(record, False)
 
 
+def _save_override(skill_id: str, fields: Dict[str, str]) -> None:
+    root = builtin_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / f"{skill_id}.json.tmp"
+    tmp.write_text(json.dumps({"id": skill_id, **fields}, indent=2), encoding="utf-8")
+    os.replace(tmp, root / f"{skill_id}.json")
+
+
 def update(skill_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    if skill_id in BUILTIN_IDS:
-        raise SkillError("Built-in skills cannot be changed.")
+    """Change a skill. For a built-in skill only its name, description and instructions can change,
+    and the change is kept apart from the default so that reset() can bring the default back."""
     current = get(skill_id)
     fields = _fields({**current, **(data if isinstance(data, dict) else {})})
     if any(s["id"] != skill_id and s["name"].lower() == fields["name"].lower() for s in list_all()):
         raise SkillError(f"A skill named '{fields['name']}' already exists.")
+    default = _default(skill_id)
+    if default is not None:
+        if all(fields[k] == default.get(k, "") for k in EDITABLE):
+            reset(skill_id)             # edited back to the default: nothing left to keep
+        else:
+            _save_override(skill_id, fields)
+        return get(skill_id)
     record = {"id": skill_id, **fields, "created": current.get("created", "")}
     _save(record)
     return _public(record, False)
+
+
+def reset(skill_id: str) -> Dict[str, Any]:
+    """Put a built-in skill back to its default text."""
+    if skill_id not in BUILTIN_IDS:
+        get(skill_id)   # a skill that does not exist is reported as such
+        raise SkillError("Only built-in skills have a default to go back to.")
+    try:
+        (builtin_dir() / f"{skill_id}.json").unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise SkillError(f"Could not reset the skill ({exc.strerror or exc}).") from exc
+    return get(skill_id)
 
 
 def delete(skill_id: str) -> None:

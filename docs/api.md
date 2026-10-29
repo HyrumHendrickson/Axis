@@ -30,7 +30,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's recent output) |
+| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's recent output; "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only) |
 
 ## Agents
 
@@ -54,6 +54,8 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `POST` | `/api/files/<name>/reveal?path=x` | select the file in Explorer/Finder |
 | `POST` | `/api/files/<name>/upload?path=dir&name=f` | save the request body as a file (&mkdirs=1 makes the folder first when it is missing) |
 | `POST` | `/api/files/<name>/mkdir?path=dir` | make a folder |
+| `POST` | `/api/files/<name>/create?path=file` | make a new, empty file in a folder that exists (`201`; `400` if the name is taken or unusable; never replaces a file) |
+| `POST` | `/api/files/<name>/rename?path=x&to=name` | rename a file or folder in place; `to` is a plain name, not a path. Never replaces anything. Returns `{renamed: new path}` |
 | `POST` | `/api/files/<name>/move?path=x&to=dir` | move a file or folder into another folder of the same place |
 | `PUT` | `/api/files/<name>/save?path=file` | replace a text file with the request body (UTF-8 text) |
 | `POST` | `/api/files/<name>/run?path=file` | run a .py file (guarded like Run Python) and return its output |
@@ -66,8 +68,10 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `GET` | `/api/skills` | list skills (built-in and custom) |
 | `POST` | `/api/skills` | create a custom skill |
 | `GET` | `/api/skills/<id>` | one skill |
-| `PUT` | `/api/skills/<id>` | update a custom skill |
+| `PUT` | `/api/skills/<id>` | update a skill; for a built-in skill only `name`, `description`, and `instructions` change, and the edit is kept apart from the default |
 | `DELETE` | `/api/skills/<id>` | delete a custom skill (and remove it from agents) |
+| `GET` | `/api/skills/<id>/sends` | exactly what the skill sends to the model: `system` (text added to the system message), `tools` (action definitions), `tools_text` (the same actions as text), `notes` |
+| `POST` | `/api/skills/<id>/reset` | put a built-in skill back to its default text (`400` for a custom skill) |
 
 ## Saved chats
 
@@ -132,6 +136,10 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 ```bash
 # list the files at the top of the shared folder
 curl -s 'http://127.0.0.1:8765/api/files/_shared?path='
+
+# make a file, then rename it, inside agent 'writer'
+curl -s -X POST 'http://127.0.0.1:8765/api/files/writer/create?path=notes/draft.md'
+curl -s -X POST 'http://127.0.0.1:8765/api/files/writer/rename?path=notes/draft.md&to=final.md'
 
 # move notes/today.md into archive/ inside agent 'writer'
 curl -s -X POST 'http://127.0.0.1:8765/api/files/writer/move?path=notes/today.md&to=archive'

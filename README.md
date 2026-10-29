@@ -32,14 +32,14 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **Chat** directly with a model, or with agents you design.
 - **Agents** have their own system prompt, standing instructions, skills, and private folder.
 - **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
-- **Skills** let agents run Python (code they write, or a `.py` file in their folder), read and write files, search the web, read Wikipedia, and generate images.
+- **Skills** let agents run Python (code they write, or a `.py` file in their folder), read and write files, search the web, read Wikipedia, and generate images. Every skill, built in or your own, can be edited, shows exactly what it sends to the model, and built-in ones can be reset to default.
 - **Past chats** are saved automatically and can be resumed at any time. Any message you sent can be edited and sent again.
 - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
 - **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
 - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
 - **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.
-- **Workspace** tab lets you browse, preview, edit, upload to, and download from every agent's folder, move files by dragging them onto folders, run Python files with their output beside them, and open any folder in the Terminal.
-- **Terminal** tab is a shell on your computer, started in any agent's folder. A side panel lets an agent of your choice see the terminal and help with what is in it.
+- **Workspace** tab is a light editor for every agent's folder: browse, preview, create, rename, edit, upload, download, and move files, and run Python files. A collapsible terminal sits underneath, and a collapsible chat on the side lets an agent see the folder you are in (and the terminal, while it is open).
+- **Terminal** is a shell on your computer, started in any agent's folder, in its own tab or in the Workspace. You type directly in it, like an ordinary terminal. An agent of your choice can see its output and help.
 - **Models** tab installs, starts, stops, and deletes chat, image, and OCR models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **OCR models**, **Engine settings**) appear under **Models** in the sidebar while the page is open.
 - **Settings** (top right) switches between light, dark, and your system's appearance.
 

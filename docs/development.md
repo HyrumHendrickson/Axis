@@ -25,8 +25,8 @@ Use a separate `AXIS_HOME` while developing, so your real agents and chats are n
 
 ```bash
 python3 -m unittest discover -s tests -v            # everything
-python3 -m unittest tests.test_axis.TestServer      # one class
-python3 -m unittest tests.test_axis.TestFileManagement.test_move_into_folder   # one test
+python3 -m unittest discover -s tests -k TestServer                  # one class
+python3 -m unittest discover -s tests -k test_move_into_folder        # one test
 ```
 
 On Windows use `py`. The suite starts fake Ollama, llama.cpp, stable-diffusion.cpp, Tesseract, PyTorch, Hugging Face, and GitHub servers inside the test process, so it needs no network, no model, and no GPU, and every test uses a temporary `AXIS_HOME`.
@@ -73,7 +73,7 @@ axis/
   hub.py          Hugging Face names and verified, resumable downloads
   jobs.py         long operations in the background, with progress
   procs.py        programs Axis starts: logs, readiness, stopping, crash recovery
-  terminal.py     shells for the Terminal tab
+  terminal.py     shells for the Terminal tab and the Workspace's bottom panel
   instances.py    running copies of Axis, for `axis quit`
   appwindow.py    opens the page in its own window
   shortcut.py     the Start menu, Applications, or app menu launcher
@@ -95,7 +95,7 @@ The version lives only in `axis/VERSION`. Users running `axis update`, or pressi
 1. Move the **Unreleased** entries in `CHANGELOG.md` under a new version heading with today's date.
 2. Change `axis/VERSION`: the patch number for fixes, the minor number for features, and the major number for changes that break existing data or habits.
 3. Run the full test suite.
-4. Commit, then tag: `git tag v4.1.1 && git push --tags`.
+4. Commit, then tag: `git tag vX.Y.Z && git push --tags`.
 5. Push to `main`. Running copies of Axis will report **Out of date** within half an hour.
 
 ## Continuous integration

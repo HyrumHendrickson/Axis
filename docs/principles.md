@@ -53,7 +53,7 @@ Windows, macOS, and Linux are equal targets. A feature that cannot work on one o
 - Not a hosted chat service, and not a client for one. Support for an OpenAI-compatible server exists for servers the user runs locally.
 - Not a model trainer or fine-tuning tool.
 - Not a security sandbox for untrusted code.
-- Not a general IDE. The Workspace and Terminal exist to help with what agents make.
+- Not a full IDE. The Workspace is a light editor (create, rename, edit, and run files, with a terminal and an agent chat beside them) for working on what agents make. It has no debugger, language servers, or extensions, and will not grow them.
 
 ## Judging a change
 

@@ -281,13 +281,101 @@ class TestSkillsAndAgents(Base):
         skills.update("plain-english", {"instructions": "Use short words."})
         self.assertEqual(skills.get("plain-english")["instructions"], "Use short words.")
         self.assertEqual(skills.get("plain-english")["name"], "Plain English")
-        for bad in (lambda: skills.update("run-python", {"name": "x"}), lambda: skills.delete("run-python")):
-            with self.assertRaisesRegex(skills.SkillError, "Built-in"):
-                bad()
+        with self.assertRaisesRegex(skills.SkillError, "Built-in"):
+            skills.delete("run-python")
         with self.assertRaises(skills.SkillError):
             skills.get("../../etc/passwd")
         skills.delete("plain-english")
         self.assertFalse(skills.exists("plain-english"))
+
+    def test_builtin_skill_edit_and_reset(self):
+        default = skills.get("run-python")
+        self.assertFalse(default["modified"])
+        edited = skills.update("run-python", {"instructions": "Always show your working.", "description": "My words."})
+        self.assertTrue(edited["modified"] and edited["builtin"])
+        self.assertEqual((edited["name"], edited["description"], edited["instructions"]),
+                         ("Run Python", "My words.", "Always show your working."))
+        self.assertEqual(edited["tools"], default["tools"])                       # the actions are code: they never change
+        self.assertTrue((Path(self.home) / "skills" / "built-in" / "run-python.json").is_file())
+        self.assertEqual([s["id"] for s in skills.list_all()][0], "run-python")   # the order is kept
+        self.assertEqual([s["id"] for s in skills.list_all() if not s["builtin"]], [])   # the edit is not a custom skill
+        self.assertTrue(next(s for s in skills.list_all() if s["id"] == "run-python")["modified"])
+        self.assertFalse(skills.get("list-files")["modified"])
+        # agents are sent the edited text
+        a = agents.create({"name": "coder", "skills": ["run-python"]})
+        system = agents.build_messages(a, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertIn("## Run Python\nAlways show your working.", system)
+        self.assertNotIn(default["instructions"], system)
+        # reset brings the default back and removes the edit
+        reset = skills.reset("run-python")
+        self.assertEqual((reset["instructions"], reset["description"], reset["modified"]),
+                         (default["instructions"], default["description"], False))
+        self.assertFalse((Path(self.home) / "skills" / "built-in" / "run-python.json").exists())
+        skills.reset("run-python")                                                # resetting twice is harmless
+        # typing the default text back is the same as a reset
+        skills.update("run-python", {"instructions": "x"})
+        self.assertFalse(skills.update("run-python", {"instructions": default["instructions"]})["modified"])
+        self.assertFalse((Path(self.home) / "skills" / "built-in" / "run-python.json").exists())
+
+    def test_builtin_skill_edit_is_checked(self):
+        with self.assertRaisesRegex(skills.SkillError, "instructions"):
+            skills.update("run-python", {"instructions": "  "})
+        with self.assertRaisesRegex(skills.SkillError, "name"):
+            skills.update("run-python", {"name": ""})
+        with self.assertRaisesRegex(skills.SkillError, "already exists"):
+            skills.update("run-python", {"name": "list files"})                  # another skill's name
+        skills.create({"name": "Mine", "instructions": "x"})
+        with self.assertRaisesRegex(skills.SkillError, "already exists"):
+            skills.update("list-files", {"name": "MINE"})
+        with self.assertRaisesRegex(skills.SkillError, "Only built-in"):
+            skills.reset("mine")                                                 # a custom skill has no default
+        with self.assertRaisesRegex(skills.SkillError, "does not exist"):
+            skills.reset("nope")
+        with self.assertRaisesRegex(skills.SkillError, "Built-in"):
+            skills.delete("run-python")
+        self.assertFalse(skills.get("run-python")["modified"])
+        # a damaged edit file is ignored, not fatal
+        root = Path(self.home) / "skills" / "built-in"
+        root.mkdir(parents=True)
+        (root / "run-python.json").write_text("{not json")
+        (root / "list-files.json").write_text(json.dumps({"name": "", "instructions": "  ", "description": 7}))
+        self.assertFalse(skills.get("run-python")["modified"])
+        self.assertEqual(skills.get("list-files")["name"], "List files")
+        self.assertEqual(len(skills.list_all()), len(skills.BUILTIN) + 1)
+
+    def test_skill_preview_is_what_is_sent(self):
+        skills.create({"name": "Brief", "instructions": "Be brief."})
+        skills.update("web-search", {"instructions": "Search twice."})
+        for skill in skills.list_all():
+            preview = agents.skill_preview(skill["id"])
+            self.assertIn(f"## {skill['name']}\n{skill['instructions']}", preview["system"], skill["id"])
+            self.assertEqual(preview["tools"], tools.specs(skill["tools"]))
+            self.assertEqual(bool(preview["tools_text"]), bool(skill["tools"]))
+            self.assertTrue(preview["notes"])
+            if skill["id"] == skills.SHARED_SKILL:
+                continue                                    # only sent with a file action: checked below
+            # an agent with just this skill is sent exactly the text the page shows
+            agent = agents.Agent(name="p", skills=[skill["id"]])
+            system = agents.build_messages(agent, [{"role": "user", "content": "hi"}])[0]["content"]
+            self.assertEqual(system, agent.system_prompt + "\n\n" + preview["system"], skill["id"])
+        custom = agents.skill_preview("brief")
+        self.assertEqual(custom["system"], "You have the following skills. Use them when relevant.\n\n## Brief\nBe brief.")
+        self.assertEqual((custom["tools"], custom["tools_text"]), ([], ""))
+        search = agents.skill_preview("web-search")
+        self.assertIn("Search twice.", search["system"])
+        self.assertTrue(search["system"].endswith(skills.TOOLS_NOTE))
+        self.assertEqual([t["function"]["name"] for t in search["tools"]], ["web_search", "fetch_page"])
+        self.assertIn("web_search", search["tools_text"])
+        self.assertTrue(agents.skill_preview("write-files")["system"].endswith(skills.WORKSPACE_NOTE))
+        shared = agents.skill_preview("shared-folder")
+        pair = agents.Agent(name="p", skills=["shared-folder", "list-files"])
+        sent = agents.build_messages(pair, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertIn(shared["system"].split(skills.SHARED_WORKSPACE_NOTE)[0].split("\n\n", 1)[1], sent)
+        self.assertTrue(sent.endswith(skills.SHARED_WORKSPACE_NOTE))
+        self.assertTrue(shared["system"].endswith(skills.SHARED_WORKSPACE_NOTE))
+        self.assertIn("also has a file or Python skill", " ".join(shared["notes"]))
+        with self.assertRaisesRegex(skills.SkillError, "does not exist"):
+            agents.skill_preview("nope")
 
     def test_agent_crud_and_workspace(self):
         skills.create({"name": "Brief", "instructions": "Be brief."})
@@ -663,12 +751,35 @@ class TestServer(Base):
         self.assertEqual(request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "x"})[0], 400)
         self.assertEqual(request(self.url + "/api/skills/haiku", "PUT", {"description": "Short poems"})[0], 200)
         self.assertEqual(json.loads(request(self.url + "/api/skills/haiku")[1])["description"], "Short poems")
-        self.assertEqual(request(self.url + "/api/skills/run-python", "PUT", {"name": "x"})[0], 400)
         self.assertEqual(request(self.url + "/api/skills/run-python", "DELETE")[0], 400)
+        self.assertEqual(request(self.url + "/api/skills/run-python", "PUT", {"instructions": " "})[0], 400)
         request(self.url + "/api/agents", "POST", {"name": "poet", "skills": ["haiku"]})
         self.assertEqual(request(self.url + "/api/skills/haiku", "DELETE")[0], 200)
         self.assertEqual(json.loads(request(self.url + "/api/agents/poet")[1])["skills"], [])
         self.assertEqual(request(self.url + "/api/skills/haiku", "DELETE")[0], 404)
+
+    def test_builtin_skill_routes(self):
+        code, text = request(self.url + "/api/skills/run-python", "PUT", {"instructions": "Show your working."})
+        self.assertEqual(code, 200, text)
+        body = json.loads(text)
+        self.assertEqual((body["builtin"], body["modified"], body["instructions"]), (True, True, "Show your working."))
+        listed = {s["id"]: s for s in json.loads(request(self.url + "/api/skills")[1])}
+        self.assertTrue(listed["run-python"]["modified"] and not listed["list-files"]["modified"])
+        code, text = request(self.url + "/api/skills/run-python/sends")
+        self.assertEqual(code, 200, text)
+        sends = json.loads(text)
+        self.assertIn("## Run Python\nShow your working.", sends["system"])
+        self.assertEqual([t["function"]["name"] for t in sends["tools"]], ["run_python", "run_python_file"])
+        self.assertIn("run_python_file", sends["tools_text"])
+        self.assertEqual(request(self.url + "/api/skills/nope/sends")[0], 404)
+        self.assertEqual(request(self.url + "/api/skills/haiku/reset", "POST")[0], 404)
+        request(self.url + "/api/skills", "POST", {"name": "Haiku", "instructions": "5-7-5"})
+        self.assertEqual(request(self.url + "/api/skills/haiku/reset", "POST")[0], 400)   # no default to go back to
+        self.assertEqual(request(self.url + "/api/skills/haiku/sends")[0], 200)
+        code, text = request(self.url + "/api/skills/run-python/reset", "POST")
+        self.assertEqual(code, 200, text)
+        self.assertFalse(json.loads(text)["modified"])
+        self.assertNotIn("Show your working.", request(self.url + "/api/skills/run-python/sends")[1])
 
     def test_agent_routes(self):
         body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."], "skills": ["list-files"]}
@@ -967,6 +1078,104 @@ class TestFileManagement(Base):
     def move(self, path, to):
         q = urllib.parse.quote
         return request(f"{self.base}/move?path={q(path)}&to={q(to)}", "POST", {})
+
+    def create(self, path):
+        return request(f"{self.base}/create?path={urllib.parse.quote(path)}", "POST", {})
+
+    def rename(self, path, to):
+        q = urllib.parse.quote
+        return request(f"{self.base}/rename?path={q(path)}&to={q(to)}", "POST", {})
+
+    def test_create_file(self):
+        status, body = self.create("notes.md")
+        self.assertEqual((status, json.loads(body)), (201, {"created": "notes.md"}))
+        self.assertEqual((self.ws / "notes.md").read_bytes(), b"")
+        (self.ws / "docs").mkdir()
+        self.assertEqual(json.loads(self.create("docs/readme.txt")[1])["created"], "docs/readme.txt")
+        self.assertTrue((self.ws / "docs" / "readme.txt").is_file())
+        self.assertEqual(json.loads(self.create(".env")[1])["created"], ".env")      # names that start with a dot are fine
+        # it never replaces anything: not a file, a folder, or the folder's own contents
+        (self.ws / "notes.md").write_text("keep me")
+        self.assertEqual(self.create("notes.md")[0], 400)
+        self.assertEqual((self.ws / "notes.md").read_text(), "keep me")
+        self.assertEqual(self.create("docs")[0], 400)
+        # the folder must exist, stay inside the agent's folder, and the name must be usable
+        self.assertEqual(self.create("nowhere/x.txt")[0], 404)
+        self.assertEqual(self.create("../x.txt")[0], 400)
+        self.assertEqual(self.create("/tmp/x.txt")[0], 400)
+        for bad in ("", "docs/", "a:b", "x*", ".axis-tmp", "x\x00y", ".."):
+            self.assertEqual(self.create(bad)[0], 400, bad)
+        self.assertEqual(self.create("docs/readme.txt/inner.txt")[0], 404)           # a file is not a folder
+        self.assertFalse(any(p.name.startswith("x") for p in self.ws.rglob("*")))
+        # the shared folder works the same way
+        self.base = self.url + "/api/files/_shared"
+        self.assertEqual(self.create("note.txt")[0], 201)
+        self.assertTrue((Path(self.home) / "shared" / "note.txt").is_file())
+
+    def test_rename(self):
+        (self.ws / "old.txt").write_text("hello")
+        status, body = self.rename("old.txt", "new.txt")
+        self.assertEqual((status, json.loads(body)), (200, {"renamed": "new.txt"}))
+        self.assertEqual((self.ws / "new.txt").read_text(), "hello")
+        self.assertFalse((self.ws / "old.txt").exists())
+        # a folder keeps everything in it, and a file in a subfolder stays there
+        (self.ws / "reports" / "2026").mkdir(parents=True)
+        (self.ws / "reports" / "2026" / "q1.txt").write_text("q1")
+        self.assertEqual(json.loads(self.rename("reports/2026/q1.txt", "first.txt")[1])["renamed"], "reports/2026/first.txt")
+        self.assertEqual(json.loads(self.rename("reports", "archive")[1])["renamed"], "archive")
+        self.assertEqual((self.ws / "archive" / "2026" / "first.txt").read_text(), "q1")
+        self.assertEqual(json.loads(self.rename("archive/2026", "y2026")[1])["renamed"], "archive/y2026")
+        # the same name is not an error and changes nothing
+        self.assertEqual(json.loads(self.rename("new.txt", "new.txt")[1])["renamed"], "new.txt")
+        self.assertEqual(json.loads(self.rename("new.txt", "  spaced.txt  ")[1])["renamed"], "spaced.txt")
+
+    def test_rename_refuses_unsafe_names(self):
+        (self.ws / "a.txt").write_text("a")
+        (self.ws / "b.txt").write_text("b")
+        (self.ws / "d").mkdir()
+        self.assertEqual(self.rename("a.txt", "b.txt")[0], 400)                        # never replaces a file
+        self.assertEqual(self.rename("a.txt", "d")[0], 400)                            # nor a folder
+        self.assertEqual((self.ws / "b.txt").read_text(), "b")
+        for bad in ("../a.txt", "d/a.txt", "x/y", "a\\b", "", "   ", ".", "..", ".axis-tmp", "q?", "c:x"):
+            self.assertEqual(self.rename("a.txt", bad)[0], 400, repr(bad))
+        self.assertTrue((self.ws / "a.txt").is_file())
+        # only things inside the folder can be renamed, and only things that exist
+        for path in ("", ".", "..", "../agent.json", "/etc/passwd", "d/.."):
+            self.assertIn(self.rename(path, "z")[0], (400, 404), path)
+        self.assertTrue((Path(self.home) / "agents" / "a" / "agent.json").is_file())
+        self.assertEqual(self.rename("missing.txt", "z.txt")[0], 404)
+        self.assertEqual(self.rename("nowhere/a.txt", "z.txt")[0], 404)
+        self.assertEqual(self.rename(".axis-tmp", "z")[0], 400)
+
+    def test_rename_only_changes_capital_letters(self):
+        (self.ws / "readme.md").write_text("x")
+        status, body = self.rename("readme.md", "README.md")
+        self.assertEqual((status, json.loads(body)["renamed"]), (200, "README.md"))
+        self.assertEqual(sorted(p.name for p in self.ws.iterdir() if p.is_file()), ["README.md"])
+        # two files whose names differ only by case never replace each other (on file systems that tell them apart)
+        (self.ws / "Other.md").write_text("o")
+        (self.ws / "other.md").write_text("p")
+        if len([p for p in self.ws.iterdir() if p.name.lower() == "other.md"]) == 2:
+            self.assertEqual(self.rename("other.md", "Other.md")[0], 400)
+            self.assertEqual((self.ws / "Other.md").read_text(), "o")
+
+    def test_rename_renames_a_link_not_its_target(self):
+        if os.name == "nt":
+            self.skipTest("links need extra rights on Windows")
+        (self.ws / "real.txt").write_text("real")
+        os.symlink("real.txt", self.ws / "link.txt")
+        self.assertEqual(self.rename("link.txt", "pointer.txt")[0], 200)
+        self.assertTrue((self.ws / "real.txt").is_file())
+        self.assertTrue((self.ws / "pointer.txt").is_symlink())
+        self.assertFalse((self.ws / "link.txt").exists() or (self.ws / "link.txt").is_symlink())
+
+    def test_rename_in_the_shared_folder(self):
+        shared = Path(self.home) / "shared"
+        shared.mkdir(exist_ok=True)
+        (shared / "x.txt").write_text("x")
+        self.base = self.url + "/api/files/_shared"
+        self.assertEqual(json.loads(self.rename("x.txt", "y.txt")[1])["renamed"], "y.txt")
+        self.assertTrue((shared / "y.txt").is_file())
 
     def test_move_into_folder(self):
         (self.ws / "pics").mkdir()
@@ -1965,6 +2174,118 @@ class TestWorkspaceRoutes(Base):
         self.assertIn("error: missing file", msgs[0]["content"])
         self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "missing")[0]["content"], "x")
         self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], None)[0]["content"], "x")
+
+    def test_terminal_echoes_what_is_typed_once(self):
+        if os.name == "nt":
+            self.skipTest("the terminal test uses a POSIX shell")
+        t = terminal.start(self.ws, "echo")
+        self.addCleanup(terminal.close_all)
+
+        def wait_for(needle, since=0):
+            """Read from offset `since` until `needle` has appeared; returns (text read, next offset)."""
+            text = ""
+            for _ in range(60):
+                data = t.read(since)
+                text, since = text + data["text"], data["next"]
+                if needle in text:
+                    return text, since
+                time.sleep(0.1)
+            self.fail(f"{needle!r} never appeared in {text!r}")
+
+        _, offset = wait_for("workspace")                            # the prompt shows the folder
+        t.write("echo marker-one\n")
+        text, offset = wait_for("marker-one\nmarker-one")
+        self.assertEqual(text.count("echo marker-one"), 1)           # the command is shown once, not echoed twice
+        # a program that reads input shows what is typed to it, as a terminal would
+        t.write(f"{sys.executable} -c \"print('got', input('wh' + 'o? '))\"\n")   # the prompt is not in the echoed command
+        _, offset = wait_for("who? ", offset)
+        t.write("ada\n")
+        text, offset = wait_for("got ada", offset)
+        self.assertIn("ada\ngot ada", text)
+
+    def test_workspace_folder_reaches_the_agent(self):
+        (self.ws / "notes").mkdir()
+        (self.ws / "notes" / "a.md").write_text("secret contents")
+        (self.ws / "report.md").write_text("x" * 1500)
+        (self.ws / "sub" / "deep.txt").write_text("d")
+        agent = agents.load("a")
+        user = [{"role": "user", "content": "what is here?"}]
+
+        def note(ctx, who=agent):
+            return server.with_workspace(user, ctx, who)[0]["content"]
+
+        text = note({"place": "a", "path": "", "file": "report.md"})
+        self.assertTrue(text.startswith("what is here?"))
+        self.assertIn("the top level of your own folder", text)
+        self.assertIn("- notes/ (1 item)", text)
+        self.assertIn("- sub/ (1 item)", text)
+        self.assertIn("- report.md (1.5 KB)", text)
+        self.assertIn("The file open in the editor: report.md", text)
+        self.assertNotIn("secret contents", text)                    # names and sizes only, never what is inside
+        self.assertIn("Your file actions reach it as '.'", text)
+        inner = note({"place": "a", "path": "notes"})
+        self.assertIn("notes of your own folder", inner)
+        self.assertIn("'notes'", inner)
+        self.assertIn("- a.md (15 B)", inner)
+        self.assertNotIn("The file open", inner)
+        # another agent's folder cannot be reached with the agent's own actions
+        agents.create({"name": "b"})
+        other = note({"place": "b", "path": ""})
+        self.assertIn("the folder of the agent 'b'", other)
+        self.assertIn("It is empty.", other)
+        self.assertIn("You cannot reach it", other)
+        # the shared folder is reachable only with the Shared folder skill
+        (Path(self.home) / "shared").mkdir(exist_ok=True)
+        (Path(self.home) / "shared" / "inbox.md").write_text("hi")
+        plain = note({"place": "_shared", "path": ""})
+        self.assertIn("the folder shared by agents", plain)
+        self.assertIn("- inbox.md (2 B)", plain)
+        self.assertIn("You cannot reach it", plain)
+        sharer = agents.update("a", {"skills": ["shared-folder", "list-files"]})
+        self.assertIn("'shared'", note({"place": "_shared", "path": ""}, sharer))
+        # a long folder is cut short
+        for i in range(60):
+            (self.ws / f"f{i:02}.txt").write_text("")
+        long = note({"place": "a", "path": ""})
+        self.assertIn(f"... and {len(list(self.ws.iterdir())) - server.WORKSPACE_LIST_LIMIT} more", long)
+        self.assertLess(long.count("\n- "), server.WORKSPACE_LIST_LIMIT + 3)
+
+    def test_workspace_context_ignores_bad_requests(self):
+        agent = agents.load("a")
+        user = [{"role": "user", "content": "hi"}]
+        for ctx in (None, "a", [], {}, {"place": ""}, {"place": "nobody", "path": ""}, {"place": "a", "path": "../.."},
+                    {"place": "a", "path": "missing"}, {"place": "a", "path": "/etc"}, {"place": ["a"]}):
+            self.assertEqual(server.with_workspace(user, ctx, agent), user, ctx)
+        self.assertEqual(server.with_workspace(user, {"place": "a", "path": "", "file": "x\ny"}, agent)[0]["content"].count("\nThe file open"), 1)
+
+    def test_chat_shows_the_folder_and_the_terminal_only_when_asked(self):
+        if os.name == "nt":
+            self.skipTest("the terminal test uses a POSIX shell")
+        model = self.model_server(OllamaHandler, ["m"])
+        url = self.axis_server(model)
+        (self.ws / "sub" / "todo.md").write_text("x")
+        t = terminal.start(self.ws, "t")
+        self.addCleanup(terminal.close_all)
+        t.write("echo visible-in-terminal\n")
+        for _ in range(50):
+            if "visible-in-terminal" in t.snapshot():
+                break
+            time.sleep(0.1)
+        msg = [{"role": "user", "content": "help"}]
+        chat_events(request(url + "/api/chat", "POST", {"agent": "a", "messages": msg,
+                                                        "workspace": {"place": "a", "path": "sub", "file": "sub/todo.md"}})[1])
+        sent = REQUESTS[-1]["messages"][-1]["content"]
+        self.assertIn("- todo.md (1 B)", sent)
+        self.assertIn("sub of your own folder", sent)
+        self.assertNotIn("visible-in-terminal", sent)                # no terminal was open, so none is shown
+        chat_events(request(url + "/api/chat", "POST", {"agent": "a", "messages": msg, "terminal": t.id,
+                                                        "workspace": {"place": "a", "path": ""}})[1])
+        sent = REQUESTS[-1]["messages"][-1]["content"]
+        self.assertIn("visible-in-terminal", sent)
+        self.assertIn("- sub/ (1 item)", sent)
+        chat_events(request(url + "/api/chat", "POST", {"agent": "a", "messages": msg})[1])
+        sent = REQUESTS[-1]["messages"][-1]["content"]
+        self.assertEqual(sent, "help")                               # a plain chat is sent untouched
 
     def test_clean_terminal_text(self):
         self.assertEqual(terminal.clean("\x1b[1;32mok\x1b[0m\r\nprogress 10%\rprogress 100%\n"), "ok\nprogress 100%\n")

@@ -9,6 +9,7 @@ A tour of every page in Axis. Installation is covered in [installation.md](insta
 - You can switch pages or tabs while a reply is generating. The sidebar marks chats that are still working, and several chats can work at once.
 - Every conversation is saved as you go. **Export** downloads the open conversation as Markdown.
 - **Edit** under any of your messages turns it into a text box. Change it and press **Send** (or **Enter**) to send the conversation again from that point; **Cancel** (or **Esc**) leaves it as it was. Every message after the edited one is replaced by the new reply, and pictures attached to the message are kept. **Copy** copies your message.
+- **Pictures in chats.** When the model can read pictures (**Vision** on the Models page, for example `gemma3:4b`), use **Attach picture** under the message box, or paste or drop pictures into it, or choose one already in Axis with **From Workspace**. Up to four pictures go with one message, and large ones are shrunk first. **Attach picture** is dimmed when the model cannot read pictures.
 - Under each reply: **Copy**, **Retry**, and a line showing the model, token count, speed, and duration. A meter under the message box shows context usage when the server reports it.
 
 ## Agents
@@ -76,7 +77,11 @@ Notes:
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
 
-**Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). Built-in skills cannot be edited or deleted.
+**Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). **Edit** and **Delete** are on each card. Deleting a skill removes it from every agent that used it.
+
+**Editing a built-in skill.** **Edit** on a built-in skill changes its name, description, and instructions, which is the text it adds to the model's prompt. Its actions (what the agent can do) are fixed and cannot be changed, and built-in skills cannot be deleted. An edited skill shows an **Edited** tag. **Reset to default** puts the text back the way Axis ships it; it is dimmed while the skill is unchanged. Edits are kept in `skills/built-in/` in your data folder, so they survive `axis update`.
+
+**What this sends to the model.** Every card has this dropdown. It shows, exactly as sent: the text the skill adds to the system message, the action definitions given to the model, and the same actions written out as text (used with models that cannot call tools). It reads from the same code that builds a real chat, so it always matches what an agent sends, including your edits. The agent's own system prompt and config instructions are separate; see [What the model receives](#agents).
 
 ## Recommended models
 
@@ -159,6 +164,8 @@ Then click **Add files I already have** and enter the same files and settings:
 
 **Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/shared/images`. The gallery supports **Reuse settings**, **Reuse with seed**, **Download**, **Open in Workspace**, and **Delete**. One picture is made at a time.
 
+**Edit a picture.** On the Images tab, switch from **Create** to **Edit a picture**. Drop a picture on the box, click **Upload**, or choose one with **Choose from Workspace**, describe how it should look, and set **Strength**: low keeps most of the original, high changes more (image to image, using the image models you have). **Keep the picture’s shape** makes the result the same shape as the original. The result goes to the gallery like any other picture.
+
 **Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `images/` in the agent's folder and shown in the chat.
 
 ## OCR
@@ -194,25 +201,34 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
 
 ## Workspace
 
-Open **Workspace** in the sidebar to browse, change, and run what agents have made.
+Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
 
-- Select an agent, or **Shared folder**, then navigate folders on the left and open files on the right.
+**Layout.** The top bar has **Folder** (choose an agent, or **Shared folder**) and two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. Under it, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
+
+**Files**
+- Navigate folders on the left and open files on the right.
 - Text and code display as-is; Markdown renders formatted (with **Show source**); CSV displays as a table; images and PDFs display inline; `.html` files display as source with **Preview page** for a rendered view. Previews run in a sealed frame that cannot reach Axis or your other data. Clicking a file never runs it.
+- **New file** adds a name box at the top of the list. Type a name and press **Enter** (Esc cancels). The empty file opens in the editor, ready to type in. **New folder** works the same way and opens the new folder. A name that is already taken is refused; nothing is ever replaced.
+- **Rename** a file or folder with the pencil that appears on its row, with **F2** while the row has focus, or with **Rename** above an open file. Type the new name and press **Enter**. The name is a plain name, not a path; it stays in the same folder, and a taken name is refused. An open file follows its new name. Axis asks first if the renamed file has unsaved changes.
 - **Edit** opens any text file (`.txt`, `.py`, `.html`, `.md`, `.csv`, `.json`, and so on) in an editor. **Save** (or Ctrl+S) replaces the file; Tab indents (press Esc first to move on with Tab). Axis asks before discarding unsaved changes. Files larger than 512 KB can be downloaded but not edited here.
-- **Run** on a `.py` file runs it and opens its output (printed text, errors, and exit code) in a panel on the right; **Run again** repeats it. The file runs in its own folder with the same guard and one-minute limit as an agent's Run Python. While editing, **Save and run** does both.
-- Every folder has a terminal button, and **Open in Terminal** opens the current folder: both start a terminal in that folder.
 - **Upload** (or drag and drop) copies files into the current folder, up to 512 MB each. Existing files are never replaced, even when two uploads of the same name arrive at once; duplicates are saved as `data (2).csv`. On Windows, names that Windows reserves (such as `nul` or `con`) are refused. Files dropped from your computer onto a folder in the list are uploaded into that folder.
 - **Move by dragging.** Press and hold a file or folder in the list, drag it onto a folder, and let go to move it there. Drop it on **Up one folder**, or on a part of the folder path above the list, to move it upward. Moves stay inside the same agent's folder, never replace a file of the same name, and cannot put a folder inside itself.
-- **Download**, **Show in folder**, **Copy text**, **Delete**, **New folder**, and **Delete folder** are available. The list refreshes automatically.
+- **Download**, **Show in folder**, **Copy text**, and **Delete** are on each open file. **More** holds **Refresh**, **Show in folder**, **Open a terminal here**, and, inside a folder, **Delete this folder**. The list refreshes automatically.
+
+**The bottom panel (terminal and output).** Click **Terminal** (or the arrow at the right end of the panel) to show or hide it. Drag its top edge, or focus it and press the up and down arrow keys, to change its height. Showing it for the first time opens a terminal in the folder you are looking at. Each terminal is a tab (**×** closes it), **New terminal** opens another in the current folder, and the terminal button on a folder row opens one in that folder. See [Terminal](#terminal) for typing. **Run** on a `.py` file runs it and shows its output (printed text, errors, and exit code) in an **Output** tab of the same panel; **Run again** repeats it. The file runs in its own folder with the same guard and one-minute limit as an agent's Run Python. While editing, **Save and run** does both. Closing the panel does not stop terminals.
+
+**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, the newest output of the open terminal (about 6,000 characters). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the folder belongs to another agent, or is the shared folder and the agent lacks the Shared folder skill, the agent is told it cannot reach those files itself.
 
 ## Terminal
 
-Open **Terminal** in the sidebar, or use **Open in Terminal** in Workspace.
+Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal** switch in Workspace for one under your files. Both are the same terminals.
 
 - Each terminal is a shell (bash, or `sh` where bash is missing; `cmd` on Windows) started in the chosen folder. Several can be open at once; they appear as tabs, and **×** closes one. Terminals keep running while you use other pages and close when Axis stops.
-- Type a command and press **Enter**. Up and Down recall earlier commands. **Stop command** (or Ctrl+C with nothing selected) interrupts the running command on macOS and Linux; **Clear** (or Ctrl+L) clears the output shown.
+- **Type directly in the terminal**, as in any terminal: your text appears after the prompt with a cursor, and **Enter** runs the line. Left and Right move the cursor (with Ctrl, a word at a time), Home and End (or Ctrl+A and Ctrl+E) go to the ends, Backspace and Delete edit, Ctrl+U and Ctrl+K cut to the start or end, Ctrl+W deletes the word before the cursor, Up and Down recall earlier commands, and Page Up and Page Down scroll the output. What you type to a running program, such as an answer to a question, stays visible. Tab completion is not available.
+- **Ctrl+C** copies when text is selected; otherwise it discards the line you are typing and stops the running command (macOS and Linux). **Stop command** does the same. **Clear** (or Ctrl+L) clears the output shown.
+- **Paste** puts text on the line. A pasted line is not run until you press Enter. Pasting several lines asks first, since each would run at once.
 - A terminal runs with your own permissions and is not confined to the agent's folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
-- **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal: with each message it is shown the newest output of the open terminal (about 6,000 characters). It can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
+- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal: with each message it is shown the newest output of the open terminal (about 6,000 characters). It can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
 
 ## Models tab
 
@@ -264,4 +280,5 @@ Axis/                       in your home folder (override with AXIS_HOME)
 ├── shared/                 folder shared by agents with the Shared folder skill
 │   └── images/             pictures made in the Images tab
 └── skills/                 your custom skills, one .json file each
+    └── built-in/           your edits to built-in skills, one .json file each (deleted by Reset to default)
 ```
