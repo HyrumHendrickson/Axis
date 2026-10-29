@@ -231,8 +231,15 @@ def _install_cpp_tools() -> None:
         return
     downloads = engines.root() / "_downloads"
     downloads.mkdir(parents=True, exist_ok=True)
-    installer = downloads / "vs_BuildTools.exe"
+    # Do not reuse a fixed name here. Windows Update, Defender, or a previous
+    # installer process may still have the old bootstrapper open, which makes
+    # opening it with ``wb`` fail with WinError 5. A unique file also lets a
+    # second attempt proceed while Windows is finishing cleanup of the first.
+    installer: Optional[Path] = None
     try:
+        fd, name = tempfile.mkstemp(prefix="vs_BuildTools-", suffix=".exe", dir=str(downloads))
+        os.close(fd)
+        installer = Path(name)
         req = urllib.request.Request(CPP_TOOLS_URL, headers={"User-Agent": f"axis/{__version__}"})
         with urllib.request.urlopen(req, timeout=60) as source, installer.open("wb") as target:
             shutil.copyfileobj(source, target, 1024 * 1024)
@@ -247,7 +254,17 @@ def _install_cpp_tools() -> None:
     except (urllib.error.URLError, OSError, subprocess.SubprocessError) as exc:
         raise ArtCraftError(f"Could not download or install Microsoft C++ Build Tools ({exc}).") from exc
     finally:
-        installer.unlink(missing_ok=True)
+        if installer is not None:
+            try:
+                installer.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # The bootstrapper can remain briefly locked by Windows or
+                # antivirus software. It is uniquely named and harmless; do
+                # not replace the useful installation result with a cleanup
+                # error.
+                pass
     if not _vcvars_env():
         raise ArtCraftError("Microsoft C++ Build Tools were installed, but the Rust linker is still unavailable. Restart Axis and try again.")
 
