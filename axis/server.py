@@ -17,7 +17,7 @@ Routes:
   DELETE /api/agents/<name>                 delete an agent and its folder
   GET    /api/agents/<name>/files           every file in the agent's folder (flat list)
   POST   /api/agents/<name>/open-folder     show the folder in Explorer/Finder
-  GET    /api/files/<name>?path=dir         one folder of an agent's workspace
+  GET    /api/files/<name>?path=dir         one folder of an agent's folder (the Workspace tab)
                                             (<name> "_shared" means the folder shared by agents)
   GET    /api/files/<name>/view?path=file   a file prepared for preview
   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
@@ -25,6 +25,8 @@ Routes:
   POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
                                             (&mkdirs=1 makes the folder first when it is missing)
   POST   /api/files/<name>/mkdir?path=dir   make a folder
+  PUT    /api/files/<name>/save?path=file   replace a text file with the request body (UTF-8 text)
+  POST   /api/files/<name>/run?path=file    run a .py file (guarded like Run Python) and return its output
   DELETE /api/files/<name>?path=x           delete a file or folder
   GET    /api/skills                        list skills (built-in and custom)
   POST   /api/skills                        create a custom skill
@@ -33,7 +35,14 @@ Routes:
   DELETE /api/skills/<id>                   delete a custom skill (and remove it from agents)
   POST   /api/chat                          stream a reply as newline-delimited JSON
                                             (a user message may carry "images": [{place, path}] for
-                                            models that read pictures)
+                                            models that read pictures; "terminal": id shows the agent
+                                            that terminal's recent output)
+  GET    /api/terminal                      open terminals
+  POST   /api/terminal                      open a terminal {place?, path?} in that folder (default: shared)
+  GET    /api/terminal/<id>?since=n         output from offset n {text, next, reset, alive, exit}
+  POST   /api/terminal/<id>/input           type into the terminal {text}
+  POST   /api/terminal/<id>/interrupt       stop the running command (Ctrl+C)
+  DELETE /api/terminal/<id>                 close a terminal
   GET    /api/chats                         saved chats (newest first, without messages)
   GET    /api/chats/<id>                    one saved chat with its messages
   PUT    /api/chats/<id>                    create or replace a saved chat
@@ -86,13 +95,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, tools, updates
+from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
+MAX_SAVE = 5 * 1024 * 1024          # largest text file the Workspace editor saves
 CHAT_IMAGE_TYPES = {".png", ".jpg", ".jpeg"}   # what both Ollama and llama.cpp read
 MAX_CHAT_IMAGE = 20 * 1024 * 1024
 CHAT_IMAGES_SENT = 4                            # only the newest pictures are sent again with each message
@@ -112,7 +122,7 @@ def page() -> bytes:
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 
 
-# The Files tab's name for the shared folder. It can never clash with an agent,
+# The Workspace tab's name for the shared folder. It can never clash with an agent,
 # because agent names must start with a letter or number.
 SHARED_NAME = "_shared"
 
@@ -362,6 +372,65 @@ def make_dir(agent: "Place", rel: str) -> str:
     return target.relative_to(agent.workspace.resolve()).as_posix()
 
 
+def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
+    """Replace a text file in the folder with data (UTF-8). The file must exist already."""
+    path = file_target(agent, rel)
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise agents.AgentError("The text could not be read as UTF-8.") from exc
+    with path.open("rb") as f:
+        old_start = f.read(65536)
+    if b"\r\n" in old_start and b"\r\n" not in data:   # keep Windows line endings
+        data = data.replace(b"\n", b"\r\n")
+    tmp = path.with_name(path.name + ".axis-save")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    st = path.stat()
+    return {"path": path.relative_to(agent.workspace.resolve()).as_posix(), "size": st.st_size, "modified": _when(st.st_mtime)}
+
+
+def run_script(agent: "Place", rel: str) -> Dict[str, Any]:
+    """Run a .py file from the folder the way an agent's run_python_file does (guarded, time-limited)."""
+    shared = None if isinstance(agent, SharedPlace) else agents.shared_folder(agent)
+    started = time.monotonic()
+    try:
+        result = tools.run_file(tools.Places(agent.workspace, shared), rel)
+    except tools.ToolError as exc:
+        raise agents.AgentError(str(exc)) from exc
+    return {**result, "path": rel, "seconds": round(time.monotonic() - started, 2), "timeout": tools.PYTHON_TIMEOUT}
+
+
+def folder_path(agent: "Place", rel: str) -> Path:
+    agent.workspace.mkdir(parents=True, exist_ok=True)
+    try:
+        folder = tools.resolve(agent.workspace, rel, allow_root=True)
+    except tools.ToolError as exc:
+        raise agents.AgentError(str(exc)) from exc
+    if not folder.is_dir():
+        raise agents.AgentError(f"Folder '{rel}' does not exist in {_owner(agent)}.")
+    return folder
+
+
+def with_terminal(messages: List[Dict[str, Any]], sid: Any) -> List[Dict[str, Any]]:
+    """Show the agent the newest output of a terminal, added to the newest message."""
+    if not sid:
+        return messages
+    try:
+        session = terminal.get(str(sid))
+    except terminal.TerminalError:
+        return messages
+    shot = session.snapshot().strip("\n") or "(nothing yet)"
+    note = (f"\n\n---\nThe user's terminal ({session.shell}, started in {session.cwd}). "
+            f"Its newest output, which you can see but not type into:\n```\n{shot}\n```")
+    last = messages[-1]
+    return messages[:-1] + [{**last, "content": last["content"] + note}]
+
+
 def open_folder(path: Path) -> None:
     if os.name == "nt":
         os.startfile(str(path))  # type: ignore[attr-defined]
@@ -452,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
-                ocr.OcrError) as exc:
+                ocr.OcrError, terminal.TerminalError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -530,6 +599,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, self._upload(agent, param("path"), param("name"), make=param("mkdirs") == "1"))
             if action == "mkdir" and method == "POST":
                 return self._json(201, {"made": make_dir(agent, param("path"))})
+            if action == "save" and method == "PUT":
+                length = self._length()
+                if length > MAX_SAVE:
+                    raise agents.AgentError(f"Files larger than {MAX_SAVE // (1024 * 1024)} MB cannot be saved here.")
+                return self._json(200, save_text(agent, param("path"), self.rfile.read(length) if length else b""))
+            if action == "run" and method == "POST":
+                return self._json(200, run_script(agent, param("path")))
             if action == "view" and method == "GET":
                 return self._json(200, file_preview(agent, param("path")))
             if action == "raw" and method == "GET":
@@ -544,6 +620,36 @@ class Handler(BaseHTTPRequestHandler):
                     raise agents.AgentError(f"'{param('path')}' does not exist in {_owner(agent)}.")
                 reveal(target)
                 return self._json(200, {"revealed": str(target)})
+
+        elif n >= 2 and parts[1] == "terminal":
+            if n == 2 and method == "GET":
+                return self._json(200, terminal.list_all())
+            if n == 2 and method == "POST":
+                body = self._body()
+                body = body if isinstance(body, dict) else {}
+                where = place(str(body.get("place") or SHARED_NAME))
+                rel = str(body.get("path") or "")
+                folder = folder_path(where, rel)
+                label = rel.rsplit("/", 1)[-1] if rel else ("shared" if isinstance(where, SharedPlace) else where.name)
+                return self._json(201, terminal.start(folder, label).public())
+            if n >= 3:
+                session = terminal.get(parts[2])
+                if n == 3 and method == "GET":
+                    try:
+                        since = int(param("since") or 0)
+                    except ValueError:
+                        since = 0
+                    return self._json(200, session.read(since))
+                if n == 3 and method == "DELETE":
+                    terminal.close(session.id)
+                    return self._json(200, {"closed": session.id})
+                if parts[3:] == ["input"] and method == "POST":
+                    body = self._body()
+                    session.write(body.get("text", "") if isinstance(body, dict) else "")
+                    return self._json(200, {"ok": True})
+                if parts[3:] == ["interrupt"] and method == "POST":
+                    session.interrupt()
+                    return self._json(200, {"ok": True})
 
         elif n >= 2 and parts[1] == "chats":
             if n == 2 and method == "GET":
@@ -801,7 +907,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
         agent = agents.load(body["agent"]) if body.get("agent") else None
-        messages = attach_images(agents.build_messages(agent, body.get("messages")))
+        messages = attach_images(with_terminal(agents.build_messages(agent, body.get("messages")), body.get("terminal")))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")

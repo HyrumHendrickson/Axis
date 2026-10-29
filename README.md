@@ -17,13 +17,15 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 
 - **Chat** directly with a model, or with agents you design.
 - **Agents** have their own system prompt, standing instructions, skills, and private folder.
-- **Skills** let agents run Python, read and write files, search the web, read Wikipedia, and generate images.
+- **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
+- **Skills** let agents run Python (code they write, or a `.py` file in their folder), read and write files, search the web, read Wikipedia, and generate images.
 - **Past chats** are saved automatically and can be resumed at any time.
 - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
-- **Edit a picture** on the Images tab: upload one or choose one from Files, describe the result, and set how much may change. It uses the image models you already have (image to image).
+- **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
 - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
-- **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Files) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Files, or downloaded.
-- **Files** tab lets you browse, preview, upload to, and download from every agent's folder.
+- **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.
+- **Workspace** tab lets you browse, preview, edit, upload to, and download from every agent's folder, run Python files with their output beside them, and open any folder in the Terminal.
+- **Terminal** tab is a shell on your computer, started in any agent's folder. A side panel lets an agent of your choice see the terminal and help with what is in it.
 - **Models** tab installs, starts, stops, and deletes chat, image, and OCR models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **OCR models**, **Engine settings**) appear under **Models** in the sidebar while the page is open.
 
 Axis manages models itself. Type a model name such as `llama3.1:8b` or `z-image-turbo` on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis installs llama.cpp and stable-diffusion.cpp for you the first time it starts, so nothing else is needed. Ollama is optional; Axis uses it when it is installed.
@@ -376,7 +378,7 @@ The page only answers requests from this computer and only from its own page, so
 
 ### Chat
 
-- **Direct chat** talks to the model with no agent instructions. Click an agent in the sidebar to chat with that agent.
+- **Direct chat** talks to the model with no agent instructions. Open **Agents** in the sidebar and click an agent to chat with that agent.
 - **Enter** sends; **Shift+Enter** adds a new line. **Send** becomes **Stop** while a reply is being written (or press **Esc**).
 - You can switch pages or tabs while a reply is generating. The sidebar marks chats that are still working, and several chats can work at once.
 - Every conversation is saved as you go. **Export** downloads the open conversation as Markdown.
@@ -384,7 +386,7 @@ The page only answers requests from this computer and only from its own page, so
 
 ### Agents
 
-Click **New agent** in the sidebar.
+Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, **Workspace**, and **Past chats**.
 
 | Field | Purpose |
 |-------|---------|
@@ -428,7 +430,7 @@ Open **Skills** in the sidebar. Every agent chooses from the same library.
 
 | Built-in skill | Capability |
 |----------------|------------|
-| Run Python | Write and run Python (60 seconds per run) |
+| Run Python | Write and run Python (`run_python`), or run a `.py` file already in the agent's folder (`run_python_file`); 60 seconds per run |
 | List files | List files and folders in the agent's folder |
 | Read files | Read text files |
 | Make files | Create or overwrite text files and make folders |
@@ -442,7 +444,7 @@ Notes:
 
 - Actions require a model that can call tools. See [Recommended models](#recommended-models).
 - File actions are confined to the agent's own folder (plus `shared/` with Shared folder). Paths using `..`, absolute paths, and links pointing outside are refused.
-- Run Python starts in the agent's folder and blocks writing, renaming, or deleting elsewhere, and launching other programs. It uses the Python Axis was installed with. To make a package such as pandas available to agents, install it into that environment: `pipx inject axis-agent-manager pandas`.
+- Run Python starts in the agent's folder (a Python file starts in its own folder) and blocks writing, renaming, or deleting elsewhere, and launching other programs. It uses the Python Axis was installed with. To make a package such as pandas available to agents, install it into that environment: `pipx inject axis-agent-manager pandas`.
 - This guard is not a security sandbox against code deliberately written to escape it. Review what an agent does when you give it Run Python.
 - Web search uses DuckDuckGo by default. If it rate-limits you, set `AXIS_SEARCH_URL` to a [SearXNG](https://docs.searxng.org/) server. `fetch_page` refuses links to your own machine and local network.
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
@@ -529,7 +531,7 @@ Then click **Add files I already have** and enter the same files and settings:
 
    Relative paths start at the **working folder**: the folder above `bin` when `sd-cli` is in a `bin` folder, otherwise `sd-cli`'s own folder. You can set it explicitly in the sd-cli settings. A single-file SD 1.5 or SDXL model goes in **Checkpoint**; Flux and SD3 use **CLIP-L** and **T5-XXL**. Anything else `sd-cli` accepts goes in **Extra arguments**.
 
-**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/shared/images`. The gallery supports **Reuse settings**, **Reuse with seed**, **Download**, **Open in Files**, and **Delete**. One picture is made at a time.
+**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/shared/images`. The gallery supports **Reuse settings**, **Reuse with seed**, **Download**, **Open in Workspace**, and **Delete**. One picture is made at a time.
 
 **Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `images/` in the agent's folder and shown in the chat.
 
@@ -562,16 +564,28 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
 
 **Start and Stop.** A PyTorch OCR model that is on stays in memory, so each picture is read at once; only one is on at a time. A model that is off is loaded for each picture, which takes longer but uses no memory in between. Tesseract runs for each picture and needs no starting.
 
-**OCR tab.** Drop, paste, upload, or choose a picture from Files, choose the model, and click **Read text**. For Tesseract, combine installed languages with `+` (`eng+lat`) and choose a page layout (automatic, one column, one block, one line, or scattered text). The result shows the word count, the mean confidence, and the time taken. Pictures you upload or paste are saved in `shared/uploads`; **Save to Files** saves the text in `shared/ocr`.
+**OCR tab.** Drop, paste, upload, or choose a picture from Workspace, choose the model, and click **Read text**. For Tesseract, combine installed languages with `+` (`eng+lat`) and choose a page layout (automatic, one column, one block, one line, or scattered text). The result shows the word count, the mean confidence, and the time taken. Pictures you upload or paste are saved in `shared/uploads`; **Save to Workspace** saves the text in `shared/ocr`.
 
-### Files
+### Workspace
 
-Open **Files** in the sidebar to browse what agents have made.
+Open **Workspace** in the sidebar to browse, change, and run what agents have made.
 
 - Select an agent, or **Shared folder**, then navigate folders on the left and open files on the right.
-- Text and code display as-is; Markdown renders formatted (with **Show source**); CSV displays as a table; images and PDFs display inline; `.html` files display as source with **Preview page** for a rendered view. Previews run in a sealed frame that cannot reach Axis or your other data. Axis never executes files you click.
+- Text and code display as-is; Markdown renders formatted (with **Show source**); CSV displays as a table; images and PDFs display inline; `.html` files display as source with **Preview page** for a rendered view. Previews run in a sealed frame that cannot reach Axis or your other data. Clicking a file never runs it.
+- **Edit** opens any text file (`.txt`, `.py`, `.html`, `.md`, `.csv`, `.json`, and so on) in an editor. **Save** (or Ctrl+S) replaces the file; Tab indents (press Esc first to move on with Tab). Axis asks before discarding unsaved changes. Files larger than 512 KB can be downloaded but not edited here.
+- **Run** on a `.py` file runs it and opens its output (printed text, errors, and exit code) in a panel on the right; **Run again** repeats it. The file runs in its own folder with the same guard and one-minute limit as an agent's Run Python. While editing, **Save and run** does both.
+- Every folder has a terminal button, and **Open in Terminal** opens the current folder: both start a terminal in that folder.
 - **Upload** (or drag and drop) copies files into the current folder, up to 512 MB each. Existing files are never replaced; duplicates are saved as `data (2).csv`.
 - **Download**, **Show in folder**, **Copy text**, **Delete**, **New folder**, and **Delete folder** are available. The list refreshes automatically.
+
+### Terminal
+
+Open **Terminal** in the sidebar, or use **Open in Terminal** in Workspace.
+
+- Each terminal is a shell (bash, or `sh` where bash is missing; `cmd` on Windows) started in the chosen folder. Several can be open at once; they appear as tabs, and **×** closes one. Terminals keep running while you use other pages and close when Axis stops.
+- Type a command and press **Enter**. Up and Down recall earlier commands. **Stop command** (or Ctrl+C with nothing selected) interrupts the running command on macOS and Linux; **Clear** (or Ctrl+L) clears the output shown.
+- A terminal runs with your own permissions and is not confined to the agent's folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
+- **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal: with each message it is shown the newest output of the open terminal (about 6,000 characters). It can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
 
 Data layout:
 
@@ -707,6 +721,7 @@ axis/
   jobs.py         background installs, starts, stops, and deletes, with progress
   skills.py       skill library (built-in actions and custom skills)
   tools.py        actions, confined to each agent's folder
+  terminal.py     shells for the Terminal tab
   runner.py       lets an agent use actions while replying
   backend.py      finds Ollama and llama.cpp servers, reads model details, streams replies
   paths.py        where Axis keeps its data

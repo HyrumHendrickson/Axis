@@ -37,8 +37,8 @@ SHARED_WORKSPACE_NOTE = (
     "You cannot reach any other files. " + TOOLS_NOTE
 )
 SHARED_PYTHON_NOTE = (
-    "In run_python, your own folder is the working directory and the shared folder's full path is "
-    "os.environ['AXIS_SHARED_DIR']."
+    "In run_python, your own folder is the working directory (run_python_file uses the file's own folder), "
+    "and the shared folder's full path is os.environ['AXIS_SHARED_DIR']."
 )
 SHARED_SKILL = "shared-folder"
 
@@ -46,10 +46,13 @@ BUILTIN: List[Dict[str, Any]] = [
     {
         "id": "run-python",
         "name": "Run Python",
-        "description": "Write and run Python code in the agent's folder, for calculations, data work and file processing.",
+        "description": "Write and run Python code in the agent's folder, or run a .py file that is already there, "
+        "for calculations, data work and file processing.",
         "instructions": "When a task needs calculation, data processing or checking an answer, write a complete Python "
-        "program and run it with run_python. Print the results you need. Starting other programs is not allowed.",
-        "tools": ["run_python"],
+        "program and run it with run_python. To run a .py file that is already in your folder (one you or the user "
+        "saved), call run_python_file with its path instead of copying its code. Print the results you need. "
+        "Starting other programs is not allowed.",
+        "tools": ["run_python", "run_python_file"],
     },
     {
         "id": "list-files",

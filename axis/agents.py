@@ -292,7 +292,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
 
     system = agent.system_prompt
     names = tool_names(agent)
-    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + ("run_python",))
+    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + ("run_python", "run_python_file"))
     chosen = [skill_lib.get(i) for i in agent.skills if skill_lib.exists(i)]
     # A skill that only changes how file actions work means nothing without them.
     needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
@@ -302,7 +302,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
         system += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
     if uses_files and shared_folder(agent) is not None:
         system += "\n\n" + skill_lib.SHARED_WORKSPACE_NOTE
-        if "run_python" in names:
+        if "run_python" in names or "run_python_file" in names:
             system += " " + skill_lib.SHARED_PYTHON_NOTE
     elif uses_files:
         system += "\n\n" + skill_lib.WORKSPACE_NOTE

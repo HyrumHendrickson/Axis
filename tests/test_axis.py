@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, tools
+from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, terminal, tools
 
 LAST_REQUEST: dict = {}
 REQUESTS: list = []
@@ -351,7 +351,7 @@ class TestSkillsAndAgents(Base):
         self.assertEqual(agents.tool_names(a), [])
 
         b = agents.create({"name": "y", "skills": ["write-files", "run-python"]})
-        self.assertEqual(agents.tool_names(b), ["write_file", "make_folder", "run_python"])
+        self.assertEqual(agents.tool_names(b), ["write_file", "make_folder", "run_python", "run_python_file"])
         self.assertIn("own folder", agents.build_messages(b, history)[0]["content"])
 
     def test_long_history_is_trimmed_to_fit(self):
@@ -801,7 +801,7 @@ class TestServer(Base):
         ws = Path(self.home) / "agents" / "maker" / "workspace"
         self.assertEqual((ws / "result.txt").read_text(), "42")
         first = REQUESTS[0]
-        self.assertEqual([t["function"]["name"] for t in first["tools"]], ["write_file", "make_folder", "run_python"])
+        self.assertEqual([t["function"]["name"] for t in first["tools"]], ["write_file", "make_folder", "run_python", "run_python_file"])
         self.assertIn("Be brief.", first["messages"][0]["content"])
         self.assertIn("- C1", first["messages"][1]["content"])
         files = json.loads(request(self.url + "/api/agents/maker/files")[1])["files"]
@@ -1776,6 +1776,145 @@ class TestCloseWithWindow(Base):
             cli._open_window(srv, True)
         self.assertFalse(srv.close_with_window)
         watch.assert_not_called()
+
+
+# ------------------------------------------------------- Python files, editing and terminals
+
+
+class TestRunPythonFile(Base):
+    def setUp(self):
+        super().setUp()
+        self.ws = Path(self.home) / "ws"
+        (self.ws / "jobs").mkdir(parents=True)
+        self.outside = Path(self.home) / "outside"
+        self.outside.mkdir()
+        self.all = list(tools.HANDLERS)
+
+    def test_runs_in_its_own_folder(self):
+        (self.ws / "jobs" / "data.txt").write_text("3 4")
+        (self.ws / "jobs" / "sum.py").write_text(
+            "import sys\na, b = map(int, open('data.txt').read().split())\nprint(a + b, sys.argv[0])\n"
+            "open('result.txt', 'w').write(str(a * b))\n")
+        ok, out = tools.execute(self.ws, "run_python_file", {"path": "jobs/sum.py"}, self.all)
+        self.assertTrue(ok, out)
+        self.assertIn("Ran jobs/sum.py", out)
+        self.assertIn("7 sum.py", out)
+        self.assertEqual((self.ws / "jobs" / "result.txt").read_text(), "12")
+
+    def test_guard_still_applies(self):
+        (self.ws / "jobs" / "bad.py").write_text(f"open(r'{self.outside / 'x.txt'}', 'w')\n")
+        (self.ws / "jobs" / "up.py").write_text("open('../top.txt', 'w').write('ok')\n")
+        ok, out = tools.execute(self.ws, "run_python_file", {"path": "jobs/bad.py"}, self.all)
+        self.assertIn("Exit code: 1", out)
+        self.assertIn("Axis:", out)
+        self.assertEqual(list(self.outside.iterdir()), [])
+        # the whole agent folder is still the agent's, even when the file is in a subfolder
+        ok, out = tools.execute(self.ws, "run_python_file", {"path": "jobs/up.py"}, self.all)
+        self.assertIn("Exit code: 0", out)
+        self.assertTrue((self.ws / "top.txt").is_file())
+
+    def test_bad_paths(self):
+        (self.ws / "notes.txt").write_text("x")
+        for path, why in (("missing.py", "not a file"), ("notes.txt", "not a Python file"), ("../x.py", "outside")):
+            ok, out = tools.execute(self.ws, "run_python_file", {"path": path}, self.all)
+            self.assertFalse(ok)
+            self.assertIn(why, out)
+
+    def test_names_models_use(self):
+        allowed = ["run_python", "run_python_file"]
+        self.assertEqual(tools.normalize_call("run_script", {"file": "a.py"}, allowed), ("run_python_file", {"path": "a.py"}))
+        self.assertEqual(tools.normalize_call("run_python", {"path": "a.py"}, allowed), ("run_python_file", {"path": "a.py"}))
+        # without the file tool, run_python keeps the call (and reports the missing code)
+        self.assertEqual(tools.normalize_call("run_python", {"path": "a.py"}, ["run_python"])[0], "run_python")
+
+    def test_skill_explains_both_tools(self):
+        a = agents.create({"name": "py", "skills": ["run-python"]})
+        system = agents.build_messages(a, [{"role": "user", "content": "hi"}])[0]["content"]
+        self.assertIn("run_python_file", system)
+        self.assertIn("own folder for files", system)
+
+
+class TestWorkspaceRoutes(Base):
+    def setUp(self):
+        super().setUp()
+        self.url = self.axis_server(None)
+        self.ws = agents.create({"name": "a", "skills": ["run-python"]}).workspace
+        (self.ws / "sub").mkdir()
+        self.base = self.url + "/api/files/a"
+
+    def put_text(self, path, data):
+        req = urllib.request.Request(self.base + "/save?path=" + urllib.parse.quote(path), data=data, method="PUT",
+                                     headers={"Content-Type": "text/plain; charset=utf-8"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=20) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_save_text(self):
+        (self.ws / "sub" / "a.md").write_text("old")
+        code, body = self.put_text("sub/a.md", "new text \u00e9\n".encode())
+        self.assertEqual(code, 200, body)
+        self.assertEqual((self.ws / "sub" / "a.md").read_text(encoding="utf-8"), "new text \u00e9\n")
+        self.assertEqual(body["path"], "sub/a.md")
+        # Windows line endings are kept
+        (self.ws / "w.txt").write_bytes(b"one\r\ntwo\r\n")
+        self.put_text("w.txt", b"one\nthree\n")
+        self.assertEqual((self.ws / "w.txt").read_bytes(), b"one\r\nthree\r\n")
+        # only existing files inside the folder, and only text
+        self.assertEqual(self.put_text("nope.txt", b"x")[0], 404)
+        self.assertEqual(self.put_text("../escape.txt", b"x")[0], 400)
+        self.assertEqual(self.put_text("w.txt", b"\xff\xfe")[0], 400)
+        self.assertFalse(any(p.name.endswith(".axis-save") for p in self.ws.rglob("*")))
+
+    def test_run_file(self):
+        (self.ws / "sub" / "hi.py").write_text("import sys\nprint('hi')\nprint('warn', file=sys.stderr)\nsys.exit(3)\n")
+        code, body = request(self.base + "/run?path=sub/hi.py", "POST")
+        body = json.loads(body)
+        self.assertEqual(code, 200, body)
+        self.assertEqual((body["exit"], body["stdout"], body["stderr"].strip(), body["timed_out"]), (3, "hi\n", "warn", False))
+        self.assertEqual(request(self.base + "/run?path=sub", "POST")[0], 400)
+        (self.ws / "x.txt").write_text("print(1)")
+        self.assertEqual(request(self.base + "/run?path=x.txt", "POST")[0], 400)
+
+    def test_terminal(self):
+        if os.name == "nt":
+            self.skipTest("the terminal test uses a POSIX shell")
+        code, body = request(self.url + "/api/terminal", "POST", {"place": "a", "path": "sub"})
+        self.assertEqual(code, 201, body)
+        t = json.loads(body)
+        self.assertEqual(Path(t["cwd"]).resolve(), (self.ws / "sub").resolve())
+        self.addCleanup(terminal.close_all)
+        request(self.url + f"/api/terminal/{t['id']}/input", "POST", {"text": "echo $((6*7)) && pwd\n"})
+        text, since = "", 0
+        for _ in range(50):
+            data = json.loads(request(self.url + f"/api/terminal/{t['id']}?since={since}")[1])
+            text, since = text + data["text"], data["next"]
+            if "42" in text and "sub" in text.split("42", 1)[-1]:
+                break
+            time.sleep(0.1)
+        self.assertIn("42", text)
+        self.assertNotIn("job control", text)
+        self.assertIn("42", terminal.get(t["id"]).snapshot())
+        self.assertEqual(len(json.loads(request(self.url + "/api/terminal")[1])), 1)
+        # a missing folder, then closing
+        self.assertEqual(request(self.url + "/api/terminal", "POST", {"place": "a", "path": "nope"})[0], 404)
+        self.assertEqual(request(self.url + f"/api/terminal/{t['id']}", "DELETE")[0], 200)
+        self.assertEqual(request(self.url + f"/api/terminal/{t['id']}")[0], 404)
+
+    def test_terminal_output_reaches_the_agent(self):
+        session = mock.Mock(shell="bash", cwd=self.ws)
+        session.snapshot.return_value = "$ make\nerror: missing file\n"
+        with mock.patch.object(terminal, "get", return_value=session):
+            msgs = server.with_terminal([{"role": "user", "content": "why?"}], "t1")
+        self.assertTrue(msgs[0]["content"].startswith("why?"))
+        self.assertIn("error: missing file", msgs[0]["content"])
+        self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "missing")[0]["content"], "x")
+        self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], None)[0]["content"], "x")
+
+    def test_clean_terminal_text(self):
+        self.assertEqual(terminal.clean("\x1b[1;32mok\x1b[0m\r\nprogress 10%\rprogress 100%\n"), "ok\nprogress 100%\n")
 
 
 if __name__ == "__main__":

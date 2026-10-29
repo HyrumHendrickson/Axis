@@ -266,6 +266,67 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .fb-empty { color: var(--muted); padding: 24px 16px; }
 @media (max-width: 760px) { .fb { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 40%) 1fr; } .fb-list { border-right: 0; border-bottom: 1px solid var(--line); } .crumbs, .fb-view { padding-left: 14px; padding-right: 14px; } }
 
+/* workspace: folder rows with a terminal button, the editor and the output of a Python run */
+.fb-line { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+.fb-line .fb-row { flex: 1; min-width: 0; border-bottom: 0; }
+.fb-term { flex: none; border: 0; border-left: 1px solid var(--line); background: none; color: var(--muted); padding: 0 12px; cursor: pointer; display: flex; align-items: center; }
+.fb-term:hover, .fb-term:focus-visible { color: var(--ink); background: var(--accent-soft); }
+.fb-ico.term { color: inherit; }
+.fb-edit { display: block; width: 100%; min-height: 60vh; resize: vertical; border: 1px solid var(--line); border-radius: 6px; padding: 12px; background: var(--code); font: 13px/1.5 var(--mono); tab-size: 4; white-space: pre; overflow: auto; }
+.fb-edit:focus { border-color: var(--accent); outline: none; }
+.fb-edit-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.fb.with-out { grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(260px, 420px); }
+.fb-out { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.fb-out-head { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.fb-out-head strong { font: 400 18px/1.2 var(--serif); }
+.fb-out-head .nm { flex: 1; min-width: 0; color: var(--muted); font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-out-body { flex: 1; overflow: auto; padding: 10px 14px 14px; }
+.fb-out-body pre { margin: 4px 0 10px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fb-out-body pre.err { color: var(--bad); }
+.fb-out-note { padding: 0 14px 10px; margin: 0; font-size: 12px; }
+
+/* ---------- agents ---------- */
+.agent-tools { display: flex; gap: 14px; padding-right: 14px; flex: none; flex-wrap: wrap; }
+
+/* ---------- terminal ---------- */
+.term-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 24px 0; border-bottom: 1px solid var(--line); background: var(--surface); }
+.term-tab { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--bg); padding: 4px 6px 4px 12px; font-size: 13px; }
+.term-tab[aria-selected="true"] { background: var(--code); font-weight: 600; box-shadow: inset 0 2px 0 var(--tan); }
+.term-tab button { border: 0; background: none; cursor: pointer; padding: 0 4px; color: inherit; font: inherit; }
+.term-tab .x { color: var(--muted); font-weight: 400; }
+.term-tab .x:hover { color: var(--bad); }
+.term-tab.closed .label { color: var(--muted); text-decoration: line-through; }
+.term { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
+.term.with-side { grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); }
+.term-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--code); }
+.term-out { flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 13px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.term-out:focus { outline: none; }
+.term-line { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 8px 16px; background: var(--surface); }
+.term-prompt { font: 600 15px var(--mono); color: var(--tan); }
+.term-in { flex: 1; border: 0; background: none; font: 13px/1.6 var(--mono); padding: 4px 0; }
+.term-in:focus { outline: none; }
+.term-empty { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
+.term-side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.term-side-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.term-side-head label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.term-side-head select { flex: 1; min-width: 0; }
+.term-side .thread { padding: 12px 14px; background: var(--bg); }
+.term-side .msg.user { max-width: 95%; }
+.term-side .empty { margin-top: 6vh; }
+.term-side .empty h3 { font-size: 20px; }
+.term-ask { border-top: 1px solid var(--line); padding: 10px 14px 12px; }
+.term-ask-row { display: flex; gap: 8px; align-items: flex-end; }
+.term-ask textarea { flex: 1; resize: none; min-height: 40px; max-height: 160px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+.term-ask .hint { margin: 6px 0 0; font-size: 12px; }
+.term-side > .hint { padding: 14px; margin: 0; }
+@media (max-width: 760px) {
+  .fb.with-out { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 30%) 1fr auto; }
+  .fb-out { border-left: 0; border-top: 1px solid var(--line); max-height: 45vh; }
+  .term.with-side { grid-template-columns: 1fr; grid-template-rows: 1fr minmax(240px, 45%); }
+  .term-side { border-left: 0; border-top: 1px solid var(--line); }
+  .term-tabs { padding-left: 14px; padding-right: 14px; }
+}
+
 /* ---------- past chats ---------- */
 .chat-sub { display: block; font: 13px/1.3 var(--sans); color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
 .chat-search { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--surface); min-width: 160px; }
@@ -415,7 +476,10 @@ const S = {
   status: null,                 // last /api/status result
   agents: [],
   skills: [],                   // the skill library
-  files: { agent: "", dir: "", file: "" },  // Files tab position
+  workspace: { agent: "", dir: "", file: "" },  // Workspace tab position
+  editing: null,                // { agent, path, dirty } while a Workspace file is being edited
+  runOut: null,                 // the Python file run from Workspace: { place, path, running, result | error }
+  term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", history: [], hpos: -1 },   // Terminal tab
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
   streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
@@ -639,6 +703,7 @@ async function refreshStatus() {
     renderStatus();
     if (modelsChanged) loadModels();
     if (S.view.kind === "chat") renderMain();     // safe while replies stream: they are kept in S.streams
+    else if (S.view.kind === "terminal") renderTermChat();
   }
 }
 
@@ -681,6 +746,7 @@ async function loadSkills() {
 const skillById = (id) => S.skills.find((s) => s.id === id);
 
 function go(view) {
+  if (S.view.kind === "workspace" && view.kind !== "workspace" && !leaveEdit()) return;
   if (view.kind === "models" && view.focus) { S.modelsTab = { images: "image" }[view.focus] || view.focus; store("axis.modelsTab", S.modelsTab); }
   S.view = view;
   $("app").classList.remove("menu-open");
@@ -695,10 +761,14 @@ function renderNav() {
   fill($("nav"), 
     item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT }), !!S.streams[DIRECT]),
     item("Past chats", "Earlier conversations", v.kind === "history", () => go({ kind: "history" })),
+    item("Agents", S.agents.length ? `${S.agents.length} agent${S.agents.length === 1 ? "" : "s"}: chat, edit or make one` : "Make agents with their own skills",
+      v.kind === "agents" || v.kind === "edit" || (v.kind === "chat" && v.agent !== DIRECT), () => go({ kind: "agents" }),
+      Object.keys(S.streams).some((k) => k !== DIRECT)),
     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
-    item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
+    item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
+    item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
     v.kind === "models" ? h("div", { class: "nav-sub", role: "group", "aria-label": "Models sections" },
       MODEL_TABS.map(([key, label]) => {
@@ -706,11 +776,6 @@ function renderNav() {
         return h("button", { class: "nav-item" + (busy ? " busy" : ""), "aria-current": S.modelsTab === key ? "true" : "false",
           onclick: () => openModelsTab(key) }, label, busy ? h("small", {}, h("span", { class: "busy-dot", "aria-hidden": "true" })) : null);
       })) : null,
-    h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
-    S.agents.length
-      ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
-          (v.kind === "chat" || v.kind === "edit") && v.agent === a.name, () => go({ kind: "chat", agent: a.name }), !!S.streams[a.name]))
-      : h("p", { class: "nav-empty" }, "No agents yet."),
   );
 }
 
@@ -754,8 +819,10 @@ function menuButton() {
 
 function renderMain() {
   if (S.view.kind === "edit") return renderEditor();
+  if (S.view.kind === "agents") return renderAgents();
+  if (S.view.kind === "terminal") return renderTerminal();
   if (S.view.kind === "skills") return renderSkills();
-  if (S.view.kind === "files") return renderFiles();
+  if (S.view.kind === "workspace") return renderWorkspace();
   if (S.view.kind === "models") return renderModels();
   if (S.view.kind === "history") return renderHistory();
   if (S.view.kind === "images") return renderImages();
@@ -901,7 +968,7 @@ async function attachFiles(target, fileList) {
     saveAttachments(); redrawAttachments(target);
   }
 }
-async function attachFromFiles(target) {
+async function attachFromWorkspace(target) {
   const list = S.attachments[target] = S.attachments[target] || [];
   if (list.length >= MAX_ATTACH) return toast(`A message can carry at most ${MAX_ATTACH} pictures.`);
   const ref = await pickPicture("Attach a picture", attachPlace(target));
@@ -942,7 +1009,7 @@ function composer(target, agent, model) {
     h("button", { class: "link", type: "button", disabled: reads === false, title: why || "Attach a picture from your computer (or paste or drop one)",
       onclick: () => picker.click() }, "Attach picture"), picker,
     h("button", { class: "link", type: "button", disabled: reads === false, title: why || "Attach a picture already in Axis\u2019s folders",
-      onclick: () => attachFromFiles(target) }, "From Files"),
+      onclick: () => attachFromWorkspace(target) }, "From Workspace"),
     makesPictures ? imagePreviewToggle() : null,
   ];
   const box = h("div", { class: "composer",
@@ -990,6 +1057,7 @@ function composerHint(target, agent, model) {
 
 const STEP_TEXT = {
   run_python: ["Running Python", "Ran Python"],
+  run_python_file: ["Running", "Ran"],
   list_files: ["Listing files", "Listed files"],
   read_file: ["Reading", "Read"],
   write_file: ["Writing", "Wrote"],
@@ -1001,18 +1069,19 @@ const STEP_TEXT = {
   wikipedia_article: ["Reading Wikipedia:", "Read Wikipedia:"],
   generate_image: ["Making a picture of", "Made a picture of"],
 };
-const SHARED = "_shared";   // the Files tab's name for the folder agents share
+const SHARED = "_shared";   // the Workspace tab's name for the folder agents share
 function hasShared(agent) {
   const a = S.agents.find((x) => x.name === agent);
   return !!(a && a.skills.includes("shared-folder"));
 }
-function openInFiles(agent, path, isFile) {
+function openInWorkspace(agent, path, isFile) {
+  if (!leaveEdit()) return;
   if (agent !== SHARED && hasShared(agent) && (path === "shared" || path.startsWith("shared/"))) {
     agent = SHARED; path = path.replace(/^shared\/?/, "");
   }
   const dir = isFile ? path.split("/").slice(0, -1).join("/") : path;
-  S.files = { agent, dir, file: isFile ? path : "" };
-  go({ kind: "files" });
+  S.workspace = { agent, dir, file: isFile ? path : "" };
+  go({ kind: "workspace" });
 }
 function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
 function stepLabel(p) {
@@ -1033,11 +1102,12 @@ function stepView(p, agent, wasOpen) {
   if (p.output !== undefined) body.append(h("div", { class: "step-label" }, "Result"), h("pre", {}, p.output));
   if (agent && p.ok) {
     const path = p.args && typeof p.args.path === "string" ? p.args.path.replace(/\\/g, "/").replace(/^\.\//, "") : "";
-    const link = (label, to, isFile) => h("button", { class: "link", style: "margin-top:8px", onclick: () => openInFiles(agent, to, isFile) }, label);
-    if ((p.name === "write_file" || p.name === "read_file") && path) body.append(link("Open in Files", path, true));
-    else if (p.name === "make_folder" && path) body.append(link("Open folder in Files", path, false));
+    const link = (label, to, isFile) => h("button", { class: "link", style: "margin-top:8px", onclick: () => openInWorkspace(agent, to, isFile) }, label);
+    if ((p.name === "write_file" || p.name === "read_file") && path) body.append(link("Open in Workspace", path, true));
+    else if (p.name === "make_folder" && path) body.append(link("Open folder in Workspace", path, false));
+    else if (p.name === "run_python_file" && path) body.append(link("Open in Workspace", path, true));
     else if (p.name === "run_python" || p.name === "list_files") body.append(link("Browse this agent\u2019s files", "", false));
-    else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Files", imagePath(p), true));
+    else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Workspace", imagePath(p), true));
   }
   const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
   if (wasOpen) d.open = true;
@@ -1205,6 +1275,13 @@ document.addEventListener("keydown", (e) => {
   if (s) { e.preventDefault(); s.controller.abort(); }
 });
 
+// Draws a chat wherever it is on screen (its own page or the Terminal tab's agent panel). False when it is not shown.
+function redrawChat(target) {
+  if (viewing(target)) { renderChat(); return true; }
+  if (termChatShown(target)) { renderTermChat(); return true; }
+  return false;
+}
+
 function exportChat(target) {
   const msgs = getHistory(target);
   if (!msgs.length) return;
@@ -1231,7 +1308,8 @@ function exportChat(target) {
   download(`${target || "direct-chat"}-${stamp}.md`, lines.join("\n"), "text/markdown;charset=utf-8");
 }
 
-async function send(target, { resend = false } = {}) {
+async function send(target, { resend = false, terminal } = {}) {
+  if (terminal === undefined) terminal = termContextFor(target);   // asked from the Terminal tab: the agent sees it
   if (S.streams[target] || !ready()) return;
   const msgs = getHistory(target);
   let text, pictures = [];
@@ -1258,7 +1336,7 @@ async function send(target, { resend = false } = {}) {
     chatId: S.current[target] };   // the reply is saved into this chat even if another one is opened meanwhile
   S.streams[target] = stream;
   streamsChanged();
-  if (viewing(target)) renderChat();          // shows the new message, the thinking indicator and the Stop button
+  redrawChat(target);                         // shows the new message, the thinking indicator and the Stop button
 
   const paint = () => {
     stream.frame = 0;
@@ -1308,7 +1386,7 @@ async function send(target, { resend = false } = {}) {
     const history = msgs.map(forModel);
     const res = await fetch("/api/chat", { method: "POST", signal: stream.controller.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview }) });
+      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview, terminal: terminal || null }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -1351,8 +1429,7 @@ async function send(target, { resend = false } = {}) {
   streamsChanged();
   if (stream.stats.length) loadModels();           // the context size may have changed (Ollama reloads at Axis's size)
 
-  if (viewing(target)) renderChat();
-  else if (got || stream.error) toast(`${targetName(target)}: ${stream.error ? "the reply failed" : "reply ready"}`);
+  if (!redrawChat(target) && (got || stream.error)) toast(`${targetName(target)}: ${stream.error ? "the reply failed" : "reply ready"}`);
   if (S.view.kind === "history") loadChatList().then(drawChatList);
   if (stream.error) refreshStatus();
 }
@@ -1424,7 +1501,7 @@ function renderEditor() {
         S.chatList = null;
         for (const map of [S.drafts, S.errors, S.modelChoice, S.current]) if (existing.name in map) { map[saved.name] = map[existing.name]; delete map[existing.name]; }
         saveDrafts(); saveCurrent();
-        if (S.files.agent === existing.name) S.files.agent = saved.name;
+        if (S.workspace.agent === existing.name) S.workspace.agent = saved.name;
       }
       await loadAgents();
       toast(existing ? "Agent saved" : "Agent created");
@@ -1441,7 +1518,7 @@ function renderEditor() {
       delete S.current[existing.name]; S.chatList = null; saveCurrent();
       if (S.history.agent === existing.name) S.history.agent = "*";
       delete S.drafts[existing.name]; delete S.errors[existing.name]; saveDrafts();
-      await loadAgents(); toast("Agent deleted"); go({ kind: "chat", agent: DIRECT });
+      await loadAgents(); toast("Agent deleted"); go({ kind: "agents" });
     } catch (e) { err.textContent = e.message; err.hidden = false; }
   };
 
@@ -1471,7 +1548,7 @@ function renderEditor() {
       existing ? h("button", { class: "btn", type: "button", title: "Make a new agent with these settings", onclick: () => go({ kind: "edit", agent: null, from: existing.name }) }, "Duplicate") : null,
       h("span", { class: "spacer" }),
       existing ? h("button", { class: "btn danger", type: "button", onclick: remove }, "Delete agent")
-               : h("button", { class: "btn", type: "button", onclick: () => go({ kind: "chat", agent: DIRECT }) }, "Cancel")));
+               : h("button", { class: "btn", type: "button", onclick: () => go({ kind: "agents" }) }, "Cancel")));
 
   fill($("main"), 
     h("div", { class: "bar" }, menuButton(), h("h2", {}, existing ? `Edit ${existing.name}` : source ? `New agent (copy of ${source.name})` : "New agent")),
@@ -1493,7 +1570,7 @@ function workspaceSection(agent) {
   return h("div", { class: "section" },
     h("div", { class: "section-head" }, h("h3", {}, "Folder"),
       h("div", { style: "display:flex;gap:8px" },
-        h("button", { class: "btn small", type: "button", onclick: () => openInFiles(agent.name, "", false) }, "Browse files"),
+        h("button", { class: "btn small", type: "button", onclick: () => openInWorkspace(agent.name, "", false) }, "Open in Workspace"),
         h("button", { class: "btn small", type: "button", onclick: show }, "Refresh"),
         h("button", { class: "btn small", type: "button", onclick: async () => {
           try { await api("/api/agents/" + encodeURIComponent(agent.name) + "/open-folder", { method: "POST" }); }
@@ -1509,6 +1586,7 @@ const ICONS = {
   dir: '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h4l1.6 1.8h7.4A1.5 1.5 0 0 1 18 7.3v7.2a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 2 14.5z"/></svg>',
   file: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 2.75h6.5L15.25 6.5v10.75H5z"/><path d="M11.5 2.75V6.5h3.75"/></svg>',
   up: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg>',
+  term: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="1.5"/><path d="m6 8 2.5 2L6 12M10.5 12.5H14"/></svg>',
 };
 function icon(kind) { const sp = h("span", { class: "fb-ico " + kind }); sp.innerHTML = ICONS[kind]; return sp; }
 function size(n) {
@@ -1641,14 +1719,14 @@ function parseCsv(text, limit) {
   return rows;
 }
 
-let filesTimer = null;
-function renderFiles() {
+let workspaceTimer = null;
+function renderWorkspace() {
   const names = S.agents.map((a) => a.name);
   if (names.length) names.push(SHARED);
-  if (!names.includes(S.files.agent)) S.files = { agent: names[0] || "", dir: "", file: "" };
+  if (!names.includes(S.workspace.agent)) S.workspace = { agent: names[0] || "", dir: "", file: "" };
   const label = (n) => n === SHARED ? "Shared folder" : n;
-  const f = S.files;
-  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Files"));
+  const f = S.workspace;
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
   if (!f.agent) {
     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
       h("h3", {}, "No agent folders yet"),
@@ -1656,7 +1734,9 @@ function renderFiles() {
       h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
     return;
   }
-  const pick = h("select", { "aria-label": "Agent", onchange: (e) => { S.files = { agent: e.target.value, dir: "", file: "" }; renderFiles(); } },
+  const pick = h("select", { "aria-label": "Agent", onchange: (e) => {
+      if (!leaveEdit()) { e.target.value = f.agent; return; }
+      S.workspace = { agent: e.target.value, dir: "", file: "" }; renderWorkspace(); } },
     names.map((n) => { const o = h("option", { value: n }, label(n)); o.selected = n === f.agent; return o; }));
   const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   bar.append(
@@ -1664,6 +1744,7 @@ function renderFiles() {
     h("button", { class: "btn small", title: "Copy files from your computer into this folder", onclick: () => picker.click() }, "Upload"), picker,
     h("button", { class: "btn small", onclick: newFolder }, "New folder"),
     f.dir ? h("button", { class: "btn small danger", onclick: () => deletePath(f.dir, true) }, "Delete folder") : null,
+    h("button", { class: "btn small", title: "Open a terminal in this folder", onclick: () => openTerminal(f.agent, f.dir) }, "Open in Terminal"),
     h("button", { class: "btn small", onclick: () => api(filesUrl(f.agent, "reveal", f.dir), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
     h("button", { class: "btn small", onclick: () => loadListing(true) }, "Refresh"));
 
@@ -1678,18 +1759,30 @@ function renderFiles() {
     ondrop: (e) => { e.preventDefault(); list.classList.remove("drop"); uploadFiles(e.dataTransfer.files); } },
     h("div", { class: "fb-empty" }, "Loading\u2026"));
   const view = h("div", { class: "fb-view", id: "fb-view" });
-  fill($("main"), bar, crumbs, h("div", { class: "fb" }, list, view));
+  fill($("main"), bar, crumbs, h("div", { class: "fb", id: "fb" }, list, view));
+  drawRunPanel();
   loadListing(true);
   showFile();
-  clearInterval(filesTimer);
-  filesTimer = setInterval(() => { if (S.view.kind === "files") loadListing(false); else clearInterval(filesTimer); }, 5000);
+  clearInterval(workspaceTimer);
+  workspaceTimer = setInterval(() => { if (S.view.kind === "workspace") loadListing(false); else clearInterval(workspaceTimer); }, 5000);
 }
 
-function openDir(dir) { S.files.dir = dir; S.files.file = ""; renderFiles(); }
+// Asks before throwing away unsaved changes in the Workspace editor. False keeps the user where they are.
+function leaveEdit() {
+  const ed = S.editing;
+  if (ed && ed.dirty && !confirm(`Discard your unsaved changes to ${ed.path}?`)) return false;
+  S.editing = null;
+  return true;
+}
+
+function openDir(dir) {
+  if (!leaveEdit()) return;
+  S.workspace.dir = dir; S.workspace.file = ""; renderWorkspace();
+}
 
 const MAX_UPLOAD = 512 * 1024 * 1024;
 async function uploadFiles(fileList) {
-  const { agent, dir } = S.files;
+  const { agent, dir } = S.workspace;
   const files = [...(fileList || [])];
   if (!files.length || !agent) return;
   let done = 0;
@@ -1705,63 +1798,74 @@ async function uploadFiles(fileList) {
     } catch (e) { toast(e.name === "TypeError" ? `Could not upload ${file.name} (folders cannot be uploaded).` : e.message); }
   }
   if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${agent}`);
-  if (S.view.kind === "files" && S.files.agent === agent) loadListing(true);
+  if (S.view.kind === "workspace" && S.workspace.agent === agent) loadListing(true);
 }
 async function newFolder() {
   const name = (prompt("Name of the new folder:") || "").trim();
   if (!name) return;
   if (/[\\/:*?"<>|]/.test(name) || name === "." || name === "..") return toast("Folder names cannot contain \\ / : * ? \" < > |");
-  const path = S.files.dir ? S.files.dir + "/" + name : name;
-  try { await api(filesUrl(S.files.agent, "mkdir", path), { method: "POST" }); openDir(path); }
+  const path = S.workspace.dir ? S.workspace.dir + "/" + name : name;
+  try { await api(filesUrl(S.workspace.agent, "mkdir", path), { method: "POST" }); openDir(path); }
   catch (e) { toast(e.message); }
 }
 async function deletePath(path, isDir) {
   const what = isDir ? `the folder ${path} and everything in it` : path;
   if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
   try {
-    await api(filesUrl(S.files.agent, "", path), { method: "DELETE" });
+    await api(filesUrl(S.workspace.agent, "", path), { method: "DELETE" });
     toast("Deleted");
+    S.editing = null;
     if (isDir) openDir(path.split("/").slice(0, -1).join("/"));
-    else { S.files.file = ""; showFile(); loadListing(true); }
+    else { S.workspace.file = ""; showFile(); loadListing(true); }
   } catch (e) { toast(e.message); }
 }
 
 let lastListing = "";
 async function loadListing(force) {
-  const f = S.files, list = $("fb-list");
+  const f = S.workspace, list = $("fb-list");
   if (!list) return;
   let data;
   try { data = await api(filesUrl(f.agent, "", f.dir)); }
   catch (e) {
-    if (f.dir) { S.files.dir = ""; S.files.file = ""; return renderFiles(); }   // folder vanished: go to the top
+    if (f.dir) { S.editing = null; S.workspace.dir = ""; S.workspace.file = ""; return renderWorkspace(); }   // folder vanished: go to the top
     return fill(list, h("div", { class: "fb-empty" }, e.message));
   }
   const key = JSON.stringify(data.entries);
   if (!force && key === lastListing) return;
   lastListing = key;
-  if (f.file && !data.entries.some((e) => e.path === f.file) && !force) { S.files.file = ""; showFile(); }
+  if (f.file && !data.entries.some((e) => e.path === f.file) && !force) { S.editing = null; S.workspace.file = ""; showFile(); }
   const rows = [];
-  if (f.dir) rows.push(h("button", { class: "fb-row", onclick: () => openDir(f.dir.split("/").slice(0, -1).join("/")) },
-    icon("up"), h("span", { class: "nm" }, "Up one folder"), h("small", {}, "")));
+  if (f.dir) rows.push(h("div", { class: "fb-line" }, h("button", { class: "fb-row", onclick: () => openDir(f.dir.split("/").slice(0, -1).join("/")) },
+    icon("up"), h("span", { class: "nm" }, "Up one folder"), h("small", {}, ""))));
   for (const e of data.entries) {
     const isDir = e.type === "dir";
-    rows.push(h("button", { class: "fb-row", role: "listitem", "aria-current": e.path === f.file ? "true" : "false", title: e.path,
-      onclick: () => { if (isDir) openDir(e.path); else { S.files.file = e.path; markCurrent(); showFile(); } } },
+    const row = h("button", { class: "fb-row", "aria-current": e.path === f.file ? "true" : "false", title: e.path,
+      onclick: () => {
+        if (isDir) return openDir(e.path);
+        if (e.path === S.workspace.file || !leaveEdit()) return;
+        S.workspace.file = e.path; markCurrent(); showFile();
+      } },
       icon(isDir ? "dir" : "file"), h("span", { class: "nm" }, e.name),
-      h("small", {}, isDir ? (e.items === null ? "" : `${e.items} item${e.items === 1 ? "" : "s"}`) : `${size(e.size)}  ${when(e.modified)}`)));
+      h("small", {}, isDir ? (e.items === null ? "" : `${e.items} item${e.items === 1 ? "" : "s"}`) : `${size(e.size)}  ${when(e.modified)}`));
+    rows.push(h("div", { class: "fb-line", role: "listitem" }, row,
+      isDir ? h("button", { class: "fb-term", title: `Open ${e.name} in Terminal`, "aria-label": `Open ${e.name} in Terminal`,
+        onclick: () => openTerminal(f.agent, e.path) }, icon("term")) : null));
   }
   if (!data.entries.length) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
     f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat."));
   fill(list, rows);
 }
 function markCurrent() {
-  for (const b of document.querySelectorAll("#fb-list .fb-row")) b.setAttribute("aria-current", b.title === S.files.file ? "true" : "false");
+  for (const b of document.querySelectorAll("#fb-list .fb-row")) b.setAttribute("aria-current", b.title === S.workspace.file ? "true" : "false");
 }
 
+const PYTHON_FILE_RE = /\.pyw?$/i;
+
 async function showFile() {
-  const f = S.files, view = $("fb-view");
+  const f = S.workspace, view = $("fb-view");
   if (!view) return;
   if (!f.file) {
+    S.editing = null;
     return fill(view, h("div", { class: "empty", style: "margin-top:8vh" },
       h("h3", {}, "Choose a file"), h("p", {}, "Click a file to open it here, or a folder to look inside it.")));
   }
@@ -1769,15 +1873,74 @@ async function showFile() {
   let d;
   try { d = await api(filesUrl(f.agent, "view", f.file)); }
   catch (e) { return fill(view, h("p", { class: "form-error" }, e.message)); }
-  if (S.files.file !== d.path || S.files.agent !== d.agent) return;   // the user clicked something else meanwhile
+  if (S.workspace.file !== d.path || S.workspace.agent !== d.agent) return;   // the user clicked something else meanwhile
   const raw = filesUrl(d.agent, "raw", d.path);
   const ext = (d.name.match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
+  const isPython = PYTHON_FILE_RE.test(d.name);
+  const editable = d.kind === "text" && !d.truncated;
   const body = h("div", {});
   const actions = h("div", { class: "fb-actions" },
+    isPython ? h("button", { class: "btn small primary", title: "Run this file and show what it prints", onclick: () => runPython(d.agent, d.path) }, "Run") : null,
+    editable ? h("button", { class: "btn small", title: "Change this file here", onclick: startEdit }, "Edit") : null,
     h("a", { class: "btn small", href: raw + "&download=1", download: d.name }, "Download"),
     h("button", { class: "btn small", onclick: () => api(filesUrl(d.agent, "reveal", d.path), { method: "POST" }).catch((e) => toast(e.message)) }, "Show in folder"),
     d.kind === "text" ? h("button", { class: "btn small", onclick: () => copyText(d.text, "Text copied") }, "Copy text") : null,
     h("button", { class: "btn small danger", onclick: () => deletePath(d.path, false) }, "Delete"));
+
+  // The editor: a plain text box. Ctrl+S saves; Tab indents (Esc, then Tab, moves on).
+  function startEdit() {
+    const ed = S.editing = { agent: d.agent, path: d.path, dirty: false };
+    let tabMoves = false;
+    const box = h("textarea", { class: "fb-edit", spellcheck: "false", autocapitalize: "off", autocomplete: "off", wrap: "off",
+      "aria-label": "Edit " + d.name,
+      oninput: () => { ed.dirty = box.value !== d.text; saveBtn.disabled = !ed.dirty; },
+      onkeydown: (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); save(); return; }
+        if (e.key === "Escape") { tabMoves = true; return; }
+        if (e.key === "Tab" && !tabMoves && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+          const indent = isPython ? "    " : "\t";
+          if (e.shiftKey) {   // remove one level of indent from the line the cursor is on
+            const start = box.value.lastIndexOf("\n", box.selectionStart - 1) + 1;
+            const lead = box.value.slice(start).match(/^( {1,4}|\t)/);
+            if (lead) { box.setSelectionRange(start, start + lead[1].length); document.execCommand("delete") || box.setRangeText(""); }
+          } else if (!document.execCommand("insertText", false, indent)) {
+            box.setRangeText(indent, box.selectionStart, box.selectionEnd, "end");
+          }
+          box.dispatchEvent(new Event("input"));
+          return;
+        }
+        tabMoves = false;
+      } });
+    box.value = d.text;
+    const saveBtn = h("button", { class: "btn small primary", disabled: true, onclick: () => save() }, "Save");
+    async function save() {
+      if (!ed.dirty) return true;
+      const text = box.value;
+      try {
+        const res = await fetch(filesUrl(d.agent, "save", d.path), { method: "PUT", headers: { "Content-Type": "text/plain; charset=utf-8" }, body: text });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(r.error || `Could not save (${res.status}).`);
+        d.text = text; d.size = r.size; d.modified = r.modified;
+        ed.dirty = box.value !== d.text; saveBtn.disabled = !ed.dirty;
+        fill(meta, metaText());
+        toast("Saved " + d.name);
+        loadListing(true);
+        return true;
+      } catch (e) {
+        toast(e.name === "TypeError" ? "Axis is not responding. Your changes are still in the editor." : e.message);
+        return false;
+      }
+    }
+    fill(actions, saveBtn,
+      isPython ? h("button", { class: "btn small", title: "Save, then run the file", onclick: async () => { if (await save()) runPython(d.agent, d.path); } }, "Save and run") : null,
+      h("button", { class: "btn small", onclick: () => {
+        if (ed.dirty && !confirm("Discard your unsaved changes?")) return;
+        S.editing = null; showFile();
+      } }, "Done"));
+    fill(body, box, h("p", { class: "fb-edit-note" }, "Ctrl+S saves. Tab indents; press Esc first to move to the next control with Tab."));
+    box.focus();
+  }
 
   const showText = () => fill(body, h("pre", {}, d.text));
   if (d.kind === "image") body.append(h("img", { src: raw, alt: d.name }));
@@ -1804,8 +1967,312 @@ async function showFile() {
     showText();
   } else showText();
 
-  fill(view, h("h3", {}, d.name), h("p", { class: "fb-meta" }, `${d.path}, ${size(d.size)}, changed ${when(d.modified)}`),
-    actions, body, d.truncated ? h("p", { class: "hint", style: "margin-top:8px" }, "Only the first 512 KB is shown. Download the file to see all of it.") : null);
+  const metaText = () => `${d.path}, ${size(d.size)}, changed ${when(d.modified)}`;
+  const meta = h("p", { class: "fb-meta" }, metaText());
+  fill(view, h("h3", {}, d.name), meta, actions, body,
+    d.truncated ? h("p", { class: "hint", style: "margin-top:8px" }, "Only the first 512 KB is shown, so this file cannot be edited here. Download the file to see all of it.") : null);
+}
+
+/* Running a Python file from Workspace. The output opens in a panel beside the file. */
+function runPanel() {
+  const r = S.runOut;
+  const name = r.path.split("/").pop();
+  const body = h("div", { class: "fb-out-body", role: "status", "aria-live": "polite" });
+  if (r.running) {
+    body.append(h("div", { class: "typing" }, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+      h("span", { class: "typing-label" }, "Running " + name), h("span", { class: "elapsed", "data-since": String(r.started) }, elapsedText(r.started))));
+  } else if (r.error) {
+    body.append(h("p", { class: "form-error" }, r.error));
+  } else {
+    const x = r.result;
+    body.append(h("p", { class: "fb-meta" }, [x.timed_out ? `Stopped after ${x.timeout} s` : `Exit code ${x.exit}`, `${x.seconds} s`, `in ${placeLabel(r.place)}`].join(" \u00b7 ")));
+    if (x.stdout) body.append(h("div", { class: "step-label" }, "Output"), h("pre", {}, x.stdout));
+    if (x.stderr) body.append(h("div", { class: "step-label" }, "Errors"), h("pre", { class: "err" }, x.stderr));
+    if (!x.stdout && !x.stderr) body.append(h("p", { class: "hint" }, "The program printed nothing."));
+  }
+  return h("aside", { class: "fb-out", id: "fb-out", "aria-label": "Output of " + name },
+    h("div", { class: "fb-out-head" }, h("strong", {}, "Output"), h("span", { class: "nm", title: r.path }, name),
+      h("button", { class: "btn small", disabled: r.running, onclick: () => runPython(r.place, r.path) }, "Run again"),
+      h("button", { class: "btn small", onclick: () => { S.runOut = null; drawRunPanel(); } }, "Close")),
+    body,
+    h("p", { class: "hint fb-out-note" }, "The file runs in its own folder with the same limits as an agent\u2019s Run Python: it may only change files in this folder and stops after a minute. For anything else, use Open in Terminal."));
+}
+function drawRunPanel() {
+  const fb = $("fb");
+  if (!fb) return;
+  const old = $("fb-out");
+  if (old) old.remove();
+  fb.classList.toggle("with-out", !!S.runOut);
+  if (S.runOut) fb.append(runPanel());
+}
+async function runPython(placeName, path) {
+  if (S.runOut && S.runOut.running) return;
+  const job = S.runOut = { place: placeName, path, running: true, started: Date.now() };
+  drawRunPanel();
+  try { job.result = await api(filesUrl(placeName, "run", path), { method: "POST" }); }
+  catch (e) { job.error = e.message; }
+  job.running = false;
+  if (S.runOut === job) drawRunPanel();
+  if (S.view.kind === "workspace" && S.workspace.agent === placeName) loadListing(false);   // files the program made
+}
+
+/* ---------------------------------------------------------------- agents */
+function renderAgents() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Agents"),
+    h("button", { class: "btn small primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"));
+  if (!S.agents.length) {
+    fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
+      h("h3", {}, "No agents yet"),
+      h("p", {}, "An agent has its own instructions, skills and folder. Make one to give a model a job: an editor, a researcher, a coder."),
+      h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
+    return;
+  }
+  const rows = S.agents.map((a) => {
+    const skills = a.skills.map(skillById).filter(Boolean).map((sk) => sk.name);
+    const busy = !!S.streams[a.name];
+    const prompt = String(a.system_prompt || "").replace(/\s+/g, " ").trim();
+    return h("div", { class: "chat-row" },
+      h("button", { class: "chat-open", title: `Chat with ${a.name}`, onclick: () => go({ kind: "chat", agent: a.name }) },
+        h("span", { class: "chat-title" }, a.name, busy ? h("span", { class: "chip" }, "Replying\u2026") : null),
+        h("small", {}, [a.model || "Any model that is on", skills.length ? skills.join(", ") : "No skills"].join(" \u00b7 ")),
+        prompt ? h("span", { class: "chat-sub" }, prompt) : null),
+      h("div", { class: "agent-tools" },
+        h("button", { class: "link", onclick: () => go({ kind: "chat", agent: a.name }) }, "Chat"),
+        h("button", { class: "link", onclick: () => go({ kind: "edit", agent: a.name }) }, "Edit"),
+        h("button", { class: "link", onclick: () => openInWorkspace(a.name, "", false) }, "Workspace"),
+        h("button", { class: "link", onclick: () => { S.history.agent = a.name; go({ kind: "history" }); } }, "Past chats")));
+  });
+  fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" },
+    h("p", { class: "hint" }, "Click an agent to chat with it. Each agent has its own folder, which you can browse in Workspace."),
+    rows)));
+}
+
+/* -------------------------------------------------------------- terminal
+   Shells run by Axis (bash, or cmd on Windows) through pipes: commands and line-based programs work,
+   full-screen programs do not. The agent panel lets a chosen agent see the newest output. */
+const ANSI_RE = /\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+const TERM_KEEP = 300000;    // characters of output kept in the page per terminal
+function termClean(text) {
+  let out = text.replace(ANSI_RE, "").replace(/\r\n/g, "\n").replace(/\x07/g, "");
+  out = out.split("\n").map((line) => line.includes("\r") ? (line.split("\r").filter(Boolean).pop() || "") : line).join("\n");
+  while (/[^\n\x08]\x08/.test(out)) out = out.replace(/[^\n\x08]\x08/g, "");
+  return out.replace(/\x08/g, "");
+}
+async function loadTerminals() {
+  try { S.term.sessions = await api("/api/terminal"); S.term.loaded = true; }
+  catch { return; }
+  if (!S.term.sessions.some((t) => t.id === S.term.active)) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
+}
+async function openTerminal(placeName, dir) {
+  if (!leaveEdit()) return;
+  let t;
+  try { t = await api("/api/terminal", { method: "POST", body: { place: placeName || SHARED, path: dir || "" } }); }
+  catch (e) { toast(e.message); return; }
+  S.term.sessions = S.term.sessions.filter((x) => x.id !== t.id).concat([t]);
+  S.term.active = t.id;
+  if (S.view.kind === "terminal") renderTerminal(); else go({ kind: "terminal" });
+}
+async function closeTerminal(id) {
+  const t = S.term.sessions.find((x) => x.id === id);
+  if (t && t.alive && !confirm(`Close the terminal in ${t.title}? Anything running in it is stopped.`)) return;
+  try { await api("/api/terminal/" + encodeURIComponent(id), { method: "DELETE" }); }
+  catch (e) { if (!/does not exist/.test(e.message)) { toast(e.message); return; } }
+  S.term.sessions = S.term.sessions.filter((x) => x.id !== id);
+  delete S.term.buf[id];
+  if (S.term.active === id) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
+  renderNav(); renderTerminal();
+}
+const activeTerm = () => S.term.sessions.find((t) => t.id === S.term.active) || null;
+
+function renderTerminal() {
+  const T = S.term;
+  if (!T.loaded) {
+    fill($("main"), h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal")), h("div", { class: "editor" }, h("p", { class: "hint" }, "Loading\u2026")));
+    loadTerminals().then(() => { if (S.view.kind === "terminal") { renderNav(); renderTerminal(); } });
+    return;
+  }
+  const t = activeTerm();
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal"),
+    h("button", { class: "btn small", title: "Open a terminal in the shared folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
+    t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
+    t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
+    h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
+      title: "A panel where an agent can see this terminal and help", onclick: () => { T.side = !T.side; store("axis.termSide", T.side); renderTerminal(); } },
+      T.side ? "Hide agent" : "Show agent"));
+  const tabs = T.sessions.length ? h("div", { class: "term-tabs", role: "tablist", "aria-label": "Open terminals" },
+    T.sessions.map((x) => h("span", { class: "term-tab" + (x.alive ? "" : " closed"), role: "presentation", "aria-selected": x.id === T.active ? "true" : "false" },
+      h("button", { class: "label", role: "tab", "aria-selected": x.id === T.active ? "true" : "false", title: x.cwd,
+        onclick: () => { T.active = x.id; renderTerminal(); } }, x.title),
+      h("button", { class: "x", title: "Close this terminal", "aria-label": "Close " + x.title, onclick: () => closeTerminal(x.id) }, "\u00d7")))) : null;
+
+  let main;
+  if (t) {
+    const inp = h("input", { type: "text", class: "term-in", id: "term-in", autocomplete: "off", autocapitalize: "off", spellcheck: "false",
+      "aria-label": "Command", disabled: !t.alive, placeholder: t.alive ? `Type a command for ${t.shell} and press Enter` : "This terminal has closed. Open a new one.",
+      onkeydown: termKeys });
+    const out = h("pre", { class: "term-out", id: "term-out", tabindex: "0", "aria-label": `Output of the terminal in ${t.title}` });
+    out.addEventListener("mouseup", () => { if (!String(window.getSelection() || "")) inp.focus(); });
+    main = h("div", { class: "term-main" }, out, h("div", { class: "term-line" }, h("span", { class: "term-prompt", "aria-hidden": "true" }, "\u203a"), inp));
+  } else {
+    main = h("div", { class: "term-empty" }, h("div", { class: "empty" },
+      h("h3", {}, "No terminal is open"),
+      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in an agent\u2019s folder or the shared folder. Use Open in Terminal on any folder in Workspace, or open one here."),
+      h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the shared folder")));
+  }
+  fill($("main"), bar, tabs, h("div", { class: "term" + (T.side ? " with-side" : "") }, main,
+    T.side ? h("aside", { class: "term-side", id: "term-side", "aria-label": "Agent that can see the terminal" }) : null));
+  renderTermChat();
+  if (t) {
+    drawTermOut(true);
+    termFetch(t.id);
+    if (document.activeElement === document.body || !document.activeElement) $("term-in").focus({ preventScroll: true });
+  }
+  termPoll();
+}
+
+let termTimer = null, termBusy = false;
+function termPoll() {
+  clearInterval(termTimer);
+  termTimer = setInterval(async () => {
+    if (S.view.kind !== "terminal") { clearInterval(termTimer); return; }
+    if (termBusy || !S.term.active || document.hidden) return;
+    termBusy = true;
+    try { await termFetch(S.term.active); } finally { termBusy = false; }
+  }, 350);
+}
+async function termFetch(id) {
+  const b = S.term.buf[id] || (S.term.buf[id] = { raw: "", next: 0 });
+  let d;
+  try { d = await api(`/api/terminal/${encodeURIComponent(id)}?since=${b.next}`); }
+  catch (e) {
+    if (/does not exist/.test(e.message)) {   // Axis was restarted: its terminals are gone
+      S.term.sessions = S.term.sessions.filter((x) => x.id !== id); delete S.term.buf[id];
+      if (S.term.active === id) S.term.active = (S.term.sessions[S.term.sessions.length - 1] || {}).id || "";
+      if (S.view.kind === "terminal") renderTerminal();
+    }
+    return;
+  }
+  if (d.text) b.raw = (b.raw + d.text).slice(-TERM_KEEP);
+  b.next = d.next;
+  const t = S.term.sessions.find((x) => x.id === id);
+  const ended = t && t.alive && !d.alive;
+  if (t) { t.alive = d.alive; t.exit = d.exit; }
+  if (S.view.kind !== "terminal" || S.term.active !== id) return;
+  if (ended) renderTerminal();
+  else if (d.text) drawTermOut(false);
+}
+function drawTermOut(force) {
+  const out = $("term-out"), b = S.term.buf[S.term.active];
+  if (!out) return;
+  const stick = force || out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+  out.textContent = b ? termClean(b.raw) : "";
+  if (stick) out.scrollTop = out.scrollHeight;
+}
+async function termSend(text) {
+  const id = S.term.active;
+  if (!id) return;
+  try { await api(`/api/terminal/${encodeURIComponent(id)}/input`, { method: "POST", body: { text } }); }
+  catch (e) { toast(e.message); return; }
+  setTimeout(() => termFetch(id), 60);
+}
+async function termInterrupt() {
+  const id = S.term.active;
+  if (!id) return;
+  try { await api(`/api/terminal/${encodeURIComponent(id)}/interrupt`, { method: "POST" }); }
+  catch (e) { toast(e.message); }
+  setTimeout(() => termFetch(id), 100);
+}
+function termClear() {
+  const b = S.term.buf[S.term.active];
+  if (b) b.raw = "";
+  drawTermOut(true);
+  const i = $("term-in"); if (i) i.focus();
+}
+function termKeys(e) {
+  const T = S.term, inp = e.target;
+  if (e.key === "Enter" && !e.isComposing) {
+    e.preventDefault();
+    const text = inp.value;
+    inp.value = "";
+    if (text.trim() && T.history[T.history.length - 1] !== text) { T.history.push(text); if (T.history.length > 200) T.history.shift(); }
+    T.hpos = -1;
+    termSend(text + "\n");
+  } else if (e.key === "ArrowUp" && T.history.length) {
+    e.preventDefault();
+    T.hpos = T.hpos < 0 ? T.history.length - 1 : Math.max(0, T.hpos - 1);
+    inp.value = T.history[T.hpos];
+  } else if (e.key === "ArrowDown" && T.hpos >= 0) {
+    e.preventDefault();
+    T.hpos++;
+    if (T.hpos >= T.history.length) { T.hpos = -1; inp.value = ""; } else inp.value = T.history[T.hpos];
+  } else if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "c" && inp.selectionStart === inp.selectionEnd) {
+    e.preventDefault(); inp.value = ""; termInterrupt();
+  } else if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
+    e.preventDefault(); termClear();
+  }
+}
+
+// The terminal an agent should see with this message: the open one, when the message comes from the Terminal tab's panel.
+function termContextFor(target) {
+  return termChatShown(target) && S.term.active ? S.term.active : null;
+}
+const termChatShown = (target) => S.view.kind === "terminal" && S.term.side && !!target && S.term.agent === target && !!$("term-side");
+
+function renderTermChat() {
+  const side = $("term-side");
+  if (!side) return;
+  const T = S.term;
+  const hadFocus = document.activeElement && document.activeElement.id === "term-ask";
+  if (!S.agents.length) {
+    return fill(side, h("p", { class: "hint" }, "Make an agent first. It can then see this terminal and help you with it. ",
+      h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")));
+  }
+  if (!agentByName(T.agent)) T.agent = S.agents[0].name;
+  const target = T.agent, agent = agentByName(target), model = currentModel(target);
+  const stream = streamHere(target), busyElsewhere = !stream && !!S.streams[target];
+  const pick = h("select", { "aria-label": "Agent", disabled: !!S.streams[target],
+    onchange: (e) => { T.agent = e.target.value; store("axis.termAgent", T.agent); renderTermChat(); } },
+    S.agents.map((a) => { const o = h("option", { value: a.name }, a.name); o.selected = a.name === target; return o; }));
+  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick),
+    getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
+      onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderTermChat(); } }, "New chat") : null,
+    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"));
+  if (!ready()) {
+    return fill(side, head, h("p", { class: "hint" }, "No model is on. ",
+      h("button", { class: "link", onclick: () => go({ kind: "models" }) }, "Start one on the Models page"), "."));
+  }
+  const chatId = S.current[target];
+  if (chatId && !S.chats[chatId]) {
+    fill(side, head, h("p", { class: "hint" }, "Opening chat\u2026"));
+    loadChat(chatId).then((r) => {
+      if (r === "missing" && S.current[target] === chatId) { delete S.current[target]; saveCurrent(); }
+      else if (r !== "ok" && r !== "missing") { toast("Could not open the chat: " + r); return; }
+      renderTermChat();
+    });
+    return;
+  }
+  const ask = h("textarea", { id: "term-ask", rows: 2, placeholder: `Ask ${target} about this terminal`, "aria-label": `Message ${target}`,
+    oninput: (e) => { S.drafts[target] = e.target.value; saveDrafts(); },
+    onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); termAsk(); } } });
+  ask.value = S.drafts[target] || "";
+  const btn = stream ? h("button", { class: "btn small", onclick: () => stream.controller.abort() }, "Stop")
+    : h("button", { class: "btn small primary", disabled: busyElsewhere, title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: termAsk }, "Send");
+  fill(side, head,
+    h("div", { class: "thread", id: "thread", "data-target": target }, h("div", { class: "thread-inner", id: "thread-inner" })),
+    h("div", { class: "term-ask" }, h("div", { class: "term-ask-row" }, ask, btn),
+      h("p", { class: "hint" }, T.active
+        ? `Each message shows ${target} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
+        : `Open a terminal and ${target} will see its output with each message.`)));
+  renderThread(target, agent, model);
+  scrollDown(true);
+  if (hadFocus) ask.focus({ preventScroll: true });
+}
+function termAsk() {
+  const target = S.term.agent;
+  const box = $("term-ask");
+  if (box) S.drafts[target] = box.value;
+  if (!(S.drafts[target] || "").trim() || S.streams[target]) return;
+  send(target);
 }
 
 /* ------------------------------------------------------------ past chats */
@@ -2722,13 +3189,13 @@ function renderImages() {
     }
     const buttons = () => [
       h("button", { class: "btn small", disabled: !!job, onclick: () => filePick.click() }, "Upload"),
-      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose from Files"),
+      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose from Workspace"),
       src ? h("button", { class: "btn small", disabled: !!job, onclick: () => { f.source = null; saveImageForm(); renderImages(); } }, "Clear") : null];
     const box = h("div", { class: "ig-source",
       ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
       ondragleave: (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove("drop"); },
       ondrop: (e) => { e.preventDefault(); box.classList.remove("drop"); if (!job) uploadSource(e.dataTransfer.files[0]); } },
-      shown || h("p", {}, "Drop a picture here, upload one, or choose one from Files."),
+      shown || h("p", {}, "Drop a picture here, upload one, or choose one from Workspace."),
       h("div", { class: "fb-actions" }, ...buttons()), filePick);
     sourceField = h("div", { class: "field" }, h("label", { class: "lbl" }, "Picture to edit"), box);
 
@@ -2828,13 +3295,13 @@ function drawStage() {
     sel.negative_prompt ? h("p", { class: "ig-meta" }, "Negative: " + sel.negative_prompt) : null,
     h("p", { class: "ig-meta" }, meta || sel.file),
     sel.edited_from ? h("p", { class: "ig-meta" }, "Edited from ",
-      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (r) openInFiles(r.place, r.path, true); } }, sel.edited_from.replace(/^_shared:/, "shared/").replace(":", "/"))) : null,
+      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (r) openInWorkspace(r.place, r.path, true); } }, sel.edited_from.replace(/^_shared:/, "shared/").replace(":", "/"))) : null,
     h("div", { class: "fb-actions", style: "margin:10px 0 0" },
       h("button", { class: "btn small", title: "Use this picture as the start of a new one", onclick: () => setSource({ place: sel.place, path: sel.path }) }, "Edit this picture"),
       sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
       sel.seed !== undefined ? h("button", { class: "btn small", title: "Same settings and seed, so you can adjust the prompt", onclick: () => reuse(true) }, "Reuse with seed") : null,
       h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
-      h("button", { class: "btn small", onclick: () => openInFiles(sel.place, sel.path, true) }, "Open in Files"),
+      h("button", { class: "btn small", onclick: () => openInWorkspace(sel.place, sel.path, true) }, "Open in Workspace"),
       h("button", { class: "btn small danger", onclick: () => deleteImage(sel) }, "Delete"))));
 }
 
@@ -3155,7 +3622,7 @@ function renderOcr() {
     h("button", { class: "btn small", disabled: !!job, onclick: async () => {
       const r = await pickPicture("Choose a picture to read", src ? src.place : SHARED);
       if (!r) return;
-      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose from Files"),
+      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose from Workspace"),
     src ? h("button", { class: "btn small", disabled: !!job, onclick: () => setOcrSource(null) }, "Clear") : null];
   let shown = null;
   if (src) {
@@ -3168,7 +3635,7 @@ function renderOcr() {
     ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
     ondragleave: (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove("drop"); },
     ondrop: (e) => { e.preventDefault(); box.classList.remove("drop"); if (!job) uploadOcrSource(e.dataTransfer.files[0]); } },
-    shown || h("p", {}, "Drop a picture here, paste a screenshot, upload one, or choose one from Files."),
+    shown || h("p", {}, "Drop a picture here, paste a screenshot, upload one, or choose one from Workspace."),
     h("div", { class: "fb-actions" }, ...buttons()), filePick);
 
   const form = h("div", { class: "ig-form" },
@@ -3216,8 +3683,8 @@ function drawOcr() {
       h("button", { class: "btn small", onclick: async () => {
         try {
           const path = await uploadPicture(SHARED, "ocr", stem + ".txt", new Blob([r.text], { type: "text/plain" }));
-          toast("Saved as shared/" + path); openInFiles(SHARED, path, true);
-        } catch (e) { toast(e.message); } } }, "Save to Files"),
+          toast("Saved as shared/" + path); openInWorkspace(SHARED, path, true);
+        } catch (e) { toast(e.message); } } }, "Save to Workspace"),
       h("button", { class: "btn small", onclick: () => download(stem + ".txt", r.text, "text/plain") }, "Download .txt")) : null));
 }
 
@@ -3415,6 +3882,7 @@ window.addEventListener("pagehide", () => {
 window.addEventListener("pageshow", (e) => { if (e.persisted) reportPage(); });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) reportPage(); });
 window.addEventListener("beforeunload", (e) => {
+  if (S.editing && S.editing.dirty) { e.preventDefault(); e.returnValue = ""; return; }   // unsaved changes in Workspace
   // Closing the window stops Axis, so warn before cutting off a reply, a picture or an install.
   if (!closesWithWindow || (S.status && S.status.axisDown)) return;
   if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0) {
@@ -3435,12 +3903,15 @@ window.addEventListener("beforeunload", (e) => {
   S.imagePreview = recall("axis.imagePreview", true) !== false;
   const ocrForm = recall("axis.ocrForm", null);
   if (ocrForm && typeof ocrForm === "object" && !Array.isArray(ocrForm)) Object.assign(S.ocrForm, ocrForm);
+  S.term.side = recall("axis.termSide", true) !== false;
+  S.term.agent = String(recall("axis.termAgent", "") || "");
   const tab = recall("axis.modelsTab", "chat");
   if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
   const attached = recall("axis.attachments", {});
   if (attached && typeof attached === "object" && !Array.isArray(attached))
     for (const [k, v] of Object.entries(attached)) if (Array.isArray(v)) S.attachments[k] = v.filter((a) => a && typeof a.path === "string").slice(0, MAX_ATTACH);
-  await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
+  await Promise.all([refreshStatus(), loadAgents(), loadSkills(), loadTerminals()]);
+  renderNav();
   await migrateOldChats();
   renderMain();
   loadModels();

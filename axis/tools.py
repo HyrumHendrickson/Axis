@@ -2,12 +2,12 @@
 
 When the agent has the Shared folder skill, paths that start with "shared/"
 point into ~/Axis/shared, a folder every such agent can read and write. The file
-tools refuse any other path outside the agent's folder. Python code runs with the
-folder as its working directory, and a guard blocks writing, deleting or
-renaming files outside it (and the shared folder, when enabled) and starting
-other programs. The guard keeps
-ordinary code contained; it is not a security sandbox against deliberately
-hostile code.
+tools refuse any other path outside the agent's folder. Python code (run_python)
+runs with the folder as its working directory, and a Python file (run_python_file)
+with the file's own folder. A guard blocks writing, deleting or renaming files
+outside the agent's folder (and the shared folder, when enabled) and starting
+other programs. The guard keeps ordinary code contained; it is not a security
+sandbox against deliberately hostile code.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ SHARED_ENV = "AXIS_SHARED_DIR"
 MAX_OUTPUT = 8000
 MAX_READ = 16000
 PYTHON_TIMEOUT = 60
-# Axis bookkeeping files that agents and the Files tab do not show.
+# Axis bookkeeping files that agents and the Workspace tab do not show.
 HIDDEN_NAMES = {".axis-tmp", images.INDEX_NAME}
 
 
@@ -88,6 +88,17 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"code": {"type": "string", "description": "Complete Python program to run"}},
             "required": ["code"],
+        },
+    },
+    "run_python_file": {
+        "description": "Run a Python file that is already in your folder and return what it prints. "
+        "The file's folder is the working directory, so it can open files next to it by name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "The .py file to run, relative to your folder, e.g. scripts/report.py"},
+            },
+            "required": ["path"],
         },
     },
 }
@@ -281,11 +292,12 @@ def delete_file(ws: Where, args: Dict[str, Any]) -> str:
 
 
 # Runs inside the child Python. Reads the program from stdin, installs the
-# guard, then runs the program.
+# guard, then runs the program. AXIS_ROOT is the folder the guard protects (the
+# working directory when unset); AXIS_SCRIPT names the program when it is a file.
 BOOTSTRAP = r'''
 import os, sys
 _code = sys.stdin.read()
-_ROOTS = [os.path.normcase(os.path.realpath(os.getcwd()))]
+_ROOTS = [os.path.normcase(os.path.realpath(os.environ.get("AXIS_ROOT") or os.getcwd()))]
 if os.environ.get("AXIS_SHARED_DIR"):
     _ROOTS.append(os.path.normcase(os.path.realpath(os.environ["AXIS_SHARED_DIR"])))
 sys.dont_write_bytecode = True
@@ -322,10 +334,13 @@ def _guard(event, args):
     elif event in _RUN:
         _deny("starting other programs is not allowed in Run Python")
 sys.addaudithook(_guard)
-sys.argv = ["agent_code.py"]
+_script = os.environ.get("AXIS_SCRIPT") or "agent_code.py"
+sys.argv = [_script]
 _g = {"__name__": "__main__", "__builtins__": __builtins__}
+if os.environ.get("AXIS_SCRIPT"):
+    _g["__file__"] = os.path.abspath(_script)
 try:
-    exec(compile(_code, "agent_code.py", "exec"), _g)
+    exec(compile(_code, _script, "exec"), _g)
 except SystemExit:
     raise
 except BaseException as _e:
@@ -366,22 +381,28 @@ def _find_python() -> str:
     return sys.executable
 
 
-def run_python(where: Where, args: Dict[str, Any]) -> str:
-    code = _require(args, "code")
-    if not isinstance(code, str) or not code.strip():
-        raise ToolError("code must be a non-empty Python program.")
-    code = fix_escaped_code(code)
+def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "") -> Dict[str, Any]:
+    """Run Python code under the guard. Returns {exit, stdout, stderr, timed_out}.
+
+    The guard protects the personal folder (and the shared folder, when given);
+    cwd, which must be inside one of them, is the working directory (the personal
+    folder by default). script is the file name shown in tracebacks and sys.argv.
+    """
     p = places(where)
     ws = p.personal
     ws.mkdir(parents=True, exist_ok=True)
+    root = ws.resolve()
     tmp = ws / ".axis-tmp"
     tmp.mkdir(exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON") and k != SHARED_ENV}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON") and k not in (SHARED_ENV, "AXIS_ROOT", "AXIS_SCRIPT")}
     if p.shared is not None:
         p.shared.mkdir(parents=True, exist_ok=True)
         env[SHARED_ENV] = str(p.shared.resolve())
     env.update({"TMPDIR": str(tmp), "TEMP": str(tmp), "TMP": str(tmp), "MPLCONFIGDIR": str(tmp),
-                "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1", "MPLBACKEND": "Agg"})
+                "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1", "MPLBACKEND": "Agg",
+                "AXIS_ROOT": str(root)})
+    if script:
+        env["AXIS_SCRIPT"] = script
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -390,27 +411,72 @@ def run_python(where: Where, args: Dict[str, Any]) -> str:
         for exe in dict.fromkeys([python_executable(), sys.executable]):
             try:
                 proc = subprocess.run(
-                    [exe, "-c", BOOTSTRAP], input=code, cwd=str(ws), env=env,
+                    [exe, "-c", BOOTSTRAP], input=code, cwd=str(cwd or ws), env=env,
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=PYTHON_TIMEOUT, **kwargs,
                 )
                 break
             except OSError:  # this interpreter cannot be started; try the next one
                 continue
-    except subprocess.TimeoutExpired:
-        return f"Stopped: the code ran longer than {PYTHON_TIMEOUT} seconds."
+    except subprocess.TimeoutExpired as exc:
+        out = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        err = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        return {"exit": None, "stdout": out, "stderr": err, "timed_out": True}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if proc is None:
         raise ToolError("Python could not be started on this computer.")
-    parts = [f"Exit code: {proc.returncode}"]
-    if proc.stdout:
-        parts.append("Output:\n" + proc.stdout.rstrip())
-    if proc.stderr:
-        parts.append("Errors:\n" + proc.stderr.rstrip())
-    if not proc.stdout and not proc.stderr:
+    return {"exit": proc.returncode, "stdout": proc.stdout or "", "stderr": proc.stderr or "", "timed_out": False}
+
+
+def _report(result: Dict[str, Any]) -> str:
+    if result["timed_out"]:
+        return f"Stopped: the code ran longer than {PYTHON_TIMEOUT} seconds."
+    parts = [f"Exit code: {result['exit']}"]
+    if result["stdout"]:
+        parts.append("Output:\n" + result["stdout"].rstrip())
+    if result["stderr"]:
+        parts.append("Errors:\n" + result["stderr"].rstrip())
+    if not result["stdout"] and not result["stderr"]:
         parts.append("(The code printed nothing. Use print() to show results.)")
     return _clip("\n".join(parts))
+
+
+def run_python(where: Where, args: Dict[str, Any]) -> str:
+    code = _require(args, "code")
+    if not isinstance(code, str) or not code.strip():
+        raise ToolError("code must be a non-empty Python program.")
+    return _report(run_code(where, fix_escaped_code(code)))
+
+
+MAX_SCRIPT = 1024 * 1024
+
+
+def run_file(where: Where, rel: Any) -> Dict[str, Any]:
+    """Run a .py file from the personal (or shared) folder with its own folder as the working directory.
+
+    Returns run_code's result plus the file's path as shown to the agent.
+    """
+    root, path, prefix = locate(where, rel)
+    if not path.is_file():
+        raise ToolError(f"{rel} is not a file in your folder.")
+    if path.suffix.lower() not in (".py", ".pyw"):
+        raise ToolError(f"{rel} is not a Python file (.py).")
+    if path.stat().st_size > MAX_SCRIPT:
+        raise ToolError(f"{rel} is too large to run (limit {MAX_SCRIPT // 1024} KB).")
+    data = path.read_bytes()
+    if b"\0" in data[:4096]:
+        raise ToolError(f"{rel} is not a text file.")
+    code = data.decode("utf-8", errors="replace")
+    if code.startswith("\ufeff"):
+        code = code[1:]
+    result = run_code(where, code, cwd=path.parent, script=path.name)
+    return {**result, "path": _show(root, path, prefix)}
+
+
+def run_python_file(where: Where, args: Dict[str, Any]) -> str:
+    result = run_file(where, _require(args, "path"))
+    return f"Ran {result['path']}.\n" + _report(result)
 
 
 def fix_escaped_code(code: str) -> str:
@@ -434,6 +500,9 @@ def fix_escaped_code(code: str) -> str:
 TOOL_ALIASES = {
     "python": "run_python", "ipython": "run_python", "run_code": "run_python", "execute_python": "run_python",
     "python_exec": "run_python", "code_interpreter": "run_python", "run_python_code": "run_python", "exec_python": "run_python",
+    "run_file": "run_python_file", "run_script": "run_python_file", "run_python_script": "run_python_file",
+    "execute_file": "run_python_file", "execute_python_file": "run_python_file", "python_file": "run_python_file",
+    "run_py": "run_python_file", "exec_file": "run_python_file",
     "ls": "list_files", "list_dir": "list_files", "list_directory": "list_files", "listdir": "list_files",
     "list_folder": "list_files", "list": "list_files",
     "cat": "read_file", "open_file": "read_file", "view_file": "read_file", "get_file": "read_file",
@@ -497,6 +566,11 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
         value = out.get(real)
         if isinstance(value, dict) and "value" in value:  # {"type": "string", "value": "..."}
             out[real] = value["value"]
+    if name == "run_python" and "code" not in out and "run_python_file" in allowed:
+        # {"path": "x.py"} sent to run_python means the file tool.
+        target = next((out[k] for k in ARG_ALIASES["path"] if isinstance(out.get(k), str)), None)
+        if target and target.strip().lower().endswith(".py"):
+            return "run_python_file", {"path": target}
     if name == "run_python" and isinstance(out.get("code"), str):
         out["code"] = fix_escaped_code(out["code"])
     return name, out
@@ -530,6 +604,7 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "make_folder": make_folder,
     "delete_file": delete_file,
     "run_python": run_python,
+    "run_python_file": run_python_file,
     "generate_image": generate_image,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }
