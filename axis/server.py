@@ -86,6 +86,7 @@ import json
 import mimetypes
 import os
 import shutil
+import socketserver
 import subprocess
 import sys
 import threading
@@ -223,6 +224,12 @@ class AxisServer(ThreadingHTTPServer):
     daemon_threads = True
     # On Windows SO_REUSEADDR lets two programs share a port, which hides conflicts.
     allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind calls socket.getfqdn(), a reverse-DNS lookup that can stall for many seconds
+        # on macOS (and some networks). Axis only listens on 127.0.0.1 and never uses the name.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
     def __init__(self, address, model_url: Optional[str] = None):
         super().__init__(address, Handler)

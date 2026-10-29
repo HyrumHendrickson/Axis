@@ -530,6 +530,7 @@ class TestSmallFixes(Base):
         # It used a fixed file name in the shared temp folder, which another program could plant or reuse.
         with mock.patch.object(cli, "installed_with_pipx", return_value=False), \
                 mock.patch.object(cli, "is_windows", return_value=True), \
+                mock.patch.object(cli.shortcut, "remove", return_value=[]), \
                 mock.patch("subprocess.Popen") as popen, \
                 mock.patch("sys.stdout", new=io.StringIO()):
             self.assertEqual(cli.main(["uninstall", "-y"]), 0)

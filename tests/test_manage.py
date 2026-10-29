@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+import socketserver
 import sys
 import tempfile
 import threading
@@ -40,8 +41,16 @@ def request(url, method="GET", body=None, headers=None):
         return exc.code, json.loads(exc.read().decode() or "{}")
 
 
+class QuickServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the getfqdn() reverse-DNS lookup, which stalls for seconds on macOS."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
+
 def serve(handler):
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    srv = QuickServer(("127.0.0.1", 0), handler)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
@@ -262,7 +271,12 @@ class H(BaseHTTPRequestHandler):
             return self._json(202, {"id": jid, "status": "queued"})
         return self._json(404, {"error": "not found"})
 
-ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+import socketserver
+class Quick(ThreadingHTTPServer):
+    def server_bind(self):   # skip getfqdn(): a reverse-DNS lookup that stalls for seconds on macOS
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+Quick(("127.0.0.1", port), H).serve_forever()
 '''
 
 

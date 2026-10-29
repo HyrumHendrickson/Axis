@@ -235,7 +235,7 @@ class TestEngineInstall(EngineBase):
         self.assertEqual((job.result["build"], job.result["version"]), ("cpu", "version: fake 1.0"))
         self.assertIn("vulkan", job.result["note"])
         p = engines.program("llama-server")
-        self.assertTrue(p and p.is_file() and engines.root() in p.parents)
+        self.assertTrue(p and p.is_file() and engines.root().resolve() in p.parents)   # program() returns a resolved path
         self.assertEqual(manager.llama_binary(), p)                    # found without any setting
         self.assertEqual(gh.downloads[-1], "llama-b100-bin-ubuntu-x64.tar.gz")
         self.assertIn("LD_LIBRARY_PATH", engines.run_env(p))

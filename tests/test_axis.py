@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+from test_manage import QuickServer
 from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, terminal, tools
 
 LAST_REQUEST: dict = {}
@@ -164,7 +165,7 @@ class LlamaCppHandler(_Base):
 
 def start_server(handler, models, no_tools=False):
     cls = type(handler.__name__, (handler,), {"models": list(models), "no_tools": no_tools})
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), cls)
+    srv = QuickServer(("127.0.0.1", 0), cls)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
@@ -1286,7 +1287,7 @@ class TestImages(Base):
         self.assertFalse(st["ready"])
         m = self.add_model()
         self.assertEqual(m["id"], "z-image-turbo")
-        self.assertEqual(Path(images.workdir()), self.root)  # the folder above bin/
+        self.assertEqual(Path(images.workdir()).resolve(), self.root.resolve())  # the folder above bin/
         self.assertEqual(m["missing"], [])
         self.assertEqual(m["disk_size"], 15)
         st = images.status()
@@ -1336,7 +1337,8 @@ class TestImages(Base):
         self.assertNotIn({"step": 300, "steps": 300}, progress)  # loading bars are not steps
         self.assertIn({"phase": "Sampling"}, events)
         written = (shared / rec["path"]).read_bytes().decode(errors="replace")
-        self.assertIn(str(self.root / "models" / "z.gguf"), written)
+        model = self.root / "models" / "z.gguf"   # the program may report the path with links and short names resolved
+        self.assertTrue(any(str(m) in written for m in (model, model.resolve())), written)
         gallery = images.gallery(shared)
         self.assertEqual([g["prompt"] for g in gallery], ["a lighthouse on a cliff"])
         listing = tools.list_files(shared, {"path": "images"})
@@ -1588,6 +1590,7 @@ class TestCli(Base):
     def test_uninstall_on_windows_uses_helper(self):
         with mock.patch.object(cli, "installed_with_pipx", return_value=False), \
                 mock.patch.object(cli, "is_windows", return_value=True), \
+                mock.patch.object(cli.shortcut, "remove", return_value=[]), \
                 mock.patch("subprocess.Popen") as popen, redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["uninstall", "-y"]), 0)
         cmd = popen.call_args[0][0]

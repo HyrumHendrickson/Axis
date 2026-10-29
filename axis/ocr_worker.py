@@ -218,7 +218,13 @@ def cmd_serve(args):
                 return self._json(500, {"error": "The model could not read this picture: %s" % exc})
 
     print("Ready on port %d" % args.port, flush=True)
-    HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    class Server(HTTPServer):
+        def server_bind(self):   # skip HTTPServer's getfqdn() lookup, which can stall for seconds on macOS
+            import socketserver
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
+    Server(("127.0.0.1", args.port), Handler).serve_forever()
     return 0
 
 
