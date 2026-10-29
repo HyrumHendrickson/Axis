@@ -208,7 +208,7 @@ pip and pipx cannot run programs while a package is installed, so Axis installs 
 - **Automatically**, as the first step of installing or starting a model that needs one.
 - **From a terminal**, with `axis setup`, for example right after `pipx install`.
 
-Axis downloads the latest release from each project's GitHub page, checks it against the published SHA-256 checksum, and keeps it in `Axis/engines` in your home folder. No administrator rights are needed and nothing is installed system-wide. It picks the build for your computer:
+Axis downloads the latest release from each project's GitHub page, checks it against the published SHA-256 checksum, and keeps it in `Axis/engines` in your home folder. No administrator rights are needed and nothing is installed system-wide. By default it installs the CPU-only build, which runs everywhere (on Apple Silicon, where no CPU build is published, it uses Metal). Choosing **Best for this computer** on the Models page, or `axis setup --build auto`, picks the build for your computer instead:
 
 | Computer | llama.cpp | stable-diffusion.cpp |
 |----------|-----------|----------------------|
@@ -220,7 +220,7 @@ Axis downloads the latest release from each project's GitHub page, checks it aga
 | Linux x86-64 | Vulkan when `vulkaninfo` works, otherwise CPU | Vulkan when `vulkaninfo` works, otherwise CPU |
 | Linux ARM64 | CPU / Vulkan | not available |
 
-If a build does not run (for example, a missing GPU driver), Axis tries the next one. To choose a build yourself, use the menu next to **Install** on the Models page, or `axis setup --build vulkan` (`cpu`, `vulkan`, `cuda`, `rocm`, `metal`). Where no ready-made build exists, build the program from source and set its path on the Models page.
+If a build does not run (for example, a missing GPU driver), Axis tries the next one. To choose a build yourself, use the menu next to **Install** on the Models page, or `axis setup --build vulkan` (`auto`, `cpu`, `vulkan`, `cuda`, `rocm`, `metal`). Where no ready-made build exists, build the program from source and set its path on the Models page.
 
 A copy you installed yourself still works: a path set on the Models page or in `AXIS_LLAMA_SERVER`, `AXIS_SD_CLI`, or `AXIS_SD_SERVER` takes priority over the copy Axis installed. Copies on your PATH are used only when Axis has not installed its own.
 
@@ -305,7 +305,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | Command | Description |
 |---------|-------------|
 | `axis` | Start Axis and open it in its own window |
-| `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
+| `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build auto\|cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. `--check` only reports whether a newer version is available. |
 | `axis quit` | Stop every running copy of Axis and every model: each model loaded in Ollama is unloaded (Ollama itself keeps running), and llama-server and sd-server are stopped. |

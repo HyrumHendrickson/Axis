@@ -1878,13 +1878,15 @@ function engineLines(m) {
   return [ollama, job ? busyView(job) : null, engineLine(m, "llama")];
 }
 /* llama.cpp and stable-diffusion.cpp: Axis installs and updates them itself. */
-const engineBuild = { llama: "auto", sd: "auto" };
+/* Default to CPU only; "auto" only where the platform has no CPU build (Apple Silicon). */
+const engineBuild = {};
 function engineLine(m, key) {
   const e = (m.engines || {})[key];
   if (!e) return null;
   const job = busyJob("engine", key);
   const program = key === "llama" ? "llama-server" : "sd-cli";
   const builds = e.builds || [];
+  if (!engineBuild[key]) engineBuild[key] = e.default_build || (builds.includes("cpu") ? "cpu" : "auto");
   const pick = builds.length > 1 ? h("select", { "aria-label": "Build", "data-free": "1", onchange: (ev) => { engineBuild[key] = ev.target.value; } },
     [["auto", "Best for this computer"]].concat(builds.map((b) => [b, e.build_labels[b] || b])).map(([v, t]) => {
       const o = h("option", { value: v }, t); o.selected = engineBuild[key] === v; return o; })) : null;

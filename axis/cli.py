@@ -167,7 +167,7 @@ def cmd_setup(args) -> int:
             osname, arch = engines.this_platform()
             print(f"{label}: there is no ready-built program for {osname} on {arch}; skipped.")
             continue
-        job = engines.submit(engine, args.build)
+        job = engines.submit(engine, args.build or engines.default_build(engine))
         last = ""
         try:
             while job.state == "running":
@@ -407,8 +407,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="command", metavar="[command]")
     s = sub.add_parser("setup", help="install llama.cpp and stable-diffusion.cpp for Axis")
-    s.add_argument("--build", choices=engines.BUILDS, default="auto",
-                   help="which build to install (default: the best one for this computer)")
+    s.add_argument("--build", choices=engines.BUILDS, default=None,
+                   help="which build to install (default: cpu; auto picks the best one for this computer)")
     s.add_argument("--only", choices=list(engines.ENGINES), help="install only llama.cpp (llama) or stable-diffusion.cpp (sd)")
     s.add_argument("--force", action="store_true", help="install even when a copy is already found")
     s.set_defaults(func=cmd_setup)

@@ -1046,7 +1046,7 @@ def install_engine(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise ManageError("Request body must be a JSON object.")
     engine = _text(body, "engine", "Engine")
-    build = _text(body, "build", "Build") or "auto"
+    build = _text(body, "build", "Build") or None
     job = engines.submit(engine, build)
     return {"job": job.public()}
 

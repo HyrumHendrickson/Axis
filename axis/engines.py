@@ -206,6 +206,12 @@ def graphics() -> List[str]:
     return [line.strip() for line in out.splitlines() if line.strip()] if code == 0 else []
 
 
+def default_build(engine: str, plat: Optional[Tuple[str, str]] = None) -> str:
+    """The build installed when none is chosen: CPU only, or "auto" where no CPU build exists
+    (macOS on Apple Silicon ships Metal only)."""
+    return "cpu" if "cpu" in builds_for(engine, plat) else "auto"
+
+
 def preferred_builds(engine: str, plat: Optional[Tuple[str, str]] = None,
                      gpus: Optional[List[str]] = None, has_vulkan: Optional[bool] = None) -> List[str]:
     """Builds to try, best first, for this computer."""
@@ -605,14 +611,15 @@ def ensure(engine: str, found: Callable[[], Optional[Path]], job: jobs.Job) -> N
         raise EngineError(f"{label} is not installed, and there is no ready-built program for {osname} on {arch}. "
                           "Build it from source and set its path on the Models page.")
     job.progress(phase=f"Installing {label} first")
-    install(engine, "auto", job, unless=found)
+    install(engine, default_build(engine), job, unless=found)
     job.done = job.total = job.rate = None   # the model's own download reports from zero
     job._rate_mark = None
 
 
-def submit(engine: str, build: str = "auto") -> jobs.Job:
+def submit(engine: str, build: Optional[str] = None) -> jobs.Job:
     if engine not in ENGINES:
         raise EngineError("Choose llama.cpp or stable-diffusion.cpp.")
+    build = build or default_build(engine)
     label = ENGINES[engine]["label"]
     verb = "Updating" if installed(engine) else "Installing"
     return jobs.submit("install", "engine", engine, f"{verb} {label}", lambda j: install(engine, build, j))
@@ -673,5 +680,6 @@ def status(found: Dict[str, Callable[[], Optional[Path]]]) -> Dict[str, Any]:
             "installed": {k: info.get(k) for k in ("tag", "build", "version", "installed")} if info else None,
             "builds": builds_for(engine, plat),
             "build_labels": {b: BUILD_LABELS[b] for b in builds_for(engine, plat)},
+            "default_build": default_build(engine, plat),
         }
     return out

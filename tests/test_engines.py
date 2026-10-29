@@ -197,6 +197,12 @@ class TestBuilds(unittest.TestCase):
         self.assertEqual(engines.preferred_builds("sd", win, gpus=["AMD Radeon RX 7800"]), ["vulkan", "cpu"])
         self.assertEqual(engines.preferred_builds("sd", win, gpus=["Microsoft Basic Display Adapter"]), ["cpu"])
         self.assertEqual(engines.preferred_builds("llama", LINUX, has_vulkan=True), ["vulkan", "cpu"])
+
+    def test_default_build_is_cpu(self):
+        self.assertEqual(engines.default_build("llama", ("windows", "x64")), "cpu")
+        self.assertEqual(engines.default_build("sd", LINUX), "cpu")
+        self.assertEqual(engines.default_build("llama", ("macos", "x64")), "cpu")
+        self.assertEqual(engines.default_build("llama", ("macos", "arm64")), "auto")  # Metal only
         self.assertEqual(engines.preferred_builds("sd", ("macos", "arm64")), ["metal"])
         self.assertEqual(engines.preferred_builds("sd", ("linux", "arm64"), has_vulkan=False), [])
 
