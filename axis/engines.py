@@ -163,7 +163,7 @@ def program(name: str) -> Optional[Path]:
 
 def run_env(binary: Optional[Path]) -> Dict[str, str]:
     """Environment additions for running a program Axis installed (its libraries sit beside it)."""
-    if binary is None or platform.system() != "Linux" or not inside(binary, root()):
+    if binary is None or this_platform()[0] != "linux" or not inside(binary, root()):
         return {}
     old = os.environ.get("LD_LIBRARY_PATH", "")
     return {"LD_LIBRARY_PATH": str(binary.parent) + (os.pathsep + old if old else "")}

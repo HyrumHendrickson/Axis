@@ -898,23 +898,20 @@ class _PreviewFile:
 
     def __init__(self, path: Path, steps: int, emit):
         self.path, self.steps, self.emit = path, steps, emit
-        self.seen: Optional[tuple] = None
+        self.last: Optional[bytes] = None
 
     def check(self, step: int) -> None:
-        try:
-            st = self.path.stat()
-        except OSError:
-            return
-        key = (st.st_mtime_ns, st.st_size)
-        if key == self.seen:
-            return
+        # Compare the picture itself, not the file's modified time and size: a step can rewrite the file
+        # within one timestamp tick (Windows rounds to ~15 ms) and a same-sized picture would be skipped.
         try:
             data = self.path.read_bytes()
         except OSError:
             return
         if not (data.startswith(b"\x89PNG") and data.rstrip(b"\0").endswith(PNG_END)):
             return  # still being written: try again on the next line
-        self.seen = key
+        if data == self.last:
+            return
+        self.last = data
         image = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
         self.emit({"preview": {"step": step, "steps": self.steps, "image": image}})
 

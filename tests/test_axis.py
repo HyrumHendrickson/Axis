@@ -1371,6 +1371,18 @@ class TestImages(Base):
         self.assertTrue((shared / rec["path"]).is_file())
         self.assertFalse([e for e in events if "preview" in e])
 
+    def test_preview_file_sees_same_size_rewrite(self):
+        # A step can rewrite the preview within one timestamp tick with a same-sized picture (Windows).
+        path = Path(self.home) / "p.png"
+        events = []
+        watcher = images._PreviewFile(path, 4, events.append)
+        for step in (1, 2):
+            path.write_bytes(b"\x89PNG\r\n\x1a\nstep%d" % step + images.PNG_END)
+            os.utime(path, ns=(1, 1))   # identical modified time and size every time
+            watcher.check(step)
+        watcher.check(2)                # nothing new: no duplicate
+        self.assertEqual([e["preview"]["step"] for e in events], [1, 2])
+
     def test_agent_step_previews(self):
         self.add_model()
         agent = agents.create({"name": "painter", "skills": ["image-generation"]})
