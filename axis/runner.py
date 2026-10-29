@@ -16,6 +16,8 @@ Events sent to `emit` (one dict each):
     {"t": text}                                   reply text as it is written
     {"rewrite": text}                             replace this round's text (a tool call was removed)
     {"tool": {"id", "name", "args"}}              a tool is about to run
+    {"tool_progress": {"id", ...}}                generate_image progress: "phase", "progress",
+                                                  "queued" and, with image_preview, "preview"
     {"tool_result": {"id", "ok", "output"}}       the tool finished
     {"stats": {"prompt_tokens", "output_tokens", "seconds"}}   token counts for the turn just finished
 """
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -143,11 +146,30 @@ class HideToolBlocks:
             self.sent = end
 
 
+IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
+
+
 class Session:
-    def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None):
+    def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None,
+                 image_preview: bool = False):
         self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
+        self.image_preview = image_preview
         self.done: Dict[str, str] = {}  # call signature -> result
         self.repeats = 0
+
+    def _image_events(self, call_id: str) -> Callable[[Dict[str, Any]], None]:
+        """Passes a picture's progress to the page. Log lines become a heartbeat at most once a
+        second: writing it notices a page that has gone away, which stops the picture."""
+        beat = [0.0]
+
+        def on_event(event: Dict[str, Any]) -> None:
+            out = {k: event[k] for k in IMAGE_EVENT_KEYS if k in event}
+            now = time.monotonic()
+            if not out and now - beat[0] < 1.0:
+                return
+            beat[0] = now
+            self.emit({"tool_progress": {"id": call_id, **out}})
+        return on_event
 
     def run(self, name: str, args: Any, call_id: str) -> str:
         name, args = tools.normalize_call(name, args, self.allowed)
@@ -161,7 +183,8 @@ class Session:
         elif not isinstance(args, dict):
             ok, output = False, "Error: the arguments were not valid JSON. Call the tool again with a JSON object."
         else:
-            ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared)
+            ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared,
+                                       on_image_event=self._image_events(call_id), image_preview=self.image_preview)
             if ok:
                 self.done[sig] = output
         self.emit({"tool_result": {"id": call_id, "ok": ok, "output": output}})
@@ -176,10 +199,12 @@ def reply(
     tool_names: Optional[List[str]] = None,
     workspace: Optional[Path] = None,
     shared: Optional[Path] = None,
+    image_preview: bool = False,
 ) -> None:
     """Produce one reply, running tools as the model asks for them.
 
     shared is the folder shared between agents, or None if this agent may not use it.
+    image_preview passes the steps of pictures the agent makes on to the page.
     """
     say = lambda t: emit({"t": t})  # noqa: E731
 
@@ -204,7 +229,7 @@ def reply(
     if text_mode:
         use_text_mode()
     specs = tools.specs(tool_names)
-    session = Session(workspace, tool_names, emit, shared=shared)
+    session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview)
 
     for step in range(MAX_STEPS):
         emit({"round": step})

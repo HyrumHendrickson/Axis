@@ -136,6 +136,9 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .composer-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
 .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 220px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
 .composer-hint { max-width: 760px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+.check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+.check input { margin: 0; accent-color: var(--tan); }
+.composer-opts { max-width: 760px; margin: 6px auto 0; }
 
 /* ---------- gate ---------- */
 .gate { max-width: 620px; margin: 8vh auto 0; }
@@ -315,6 +318,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .ig-progress.indef i { width: 30%; animation: slide 1.4s ease-in-out infinite; }
 @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 .ig-log { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Step previews arrive at 1/8 size; they are scaled up to the picture's shape. */
+.step-preview { display: block; height: auto; max-height: 62vh; object-fit: contain; border-radius: 6px; background: var(--code); }
+.ig-stage .step-preview { margin: 0 auto 10px; }
+.chat-image .step-preview { border: 1px solid var(--line); border-radius: 8px; }
 .ig-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
 .ig-head h3 { font: 400 20px/1.3 var(--serif); margin: 0; flex: 1; }
 .ig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
@@ -377,6 +384,7 @@ const S = {
   images: null,                 // last /api/images result: sd-cli, settings and image models
   imageForm: { model: "", prompt: "", negative_prompt: "", width: 512, height: 512, steps: 20, cfg_scale: 7, sampler: "", seed: -1 },
   imageJob: null,               // the picture being made (kept here so it survives switching pages)
+  imagePreview: true,           // show each step while a picture is made (Images tab and agents)
   imageSelected: null,          // the picture shown large in the Images tab
   imageError: null,
   galleryPlace: "_shared",      // whose images/ folder the gallery shows
@@ -806,7 +814,9 @@ function composer(target, agent, model) {
     ? h("button", { class: "btn", id: "send", onclick: () => stream.controller.abort() }, "Stop")
     : h("button", { class: "btn primary", id: "send", disabled: busyElsewhere,
         title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: () => send(target) }, "Send");
+  const makesPictures = agent && agent.skills.includes("image-generation");
   return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn),
+    makesPictures ? h("div", { class: "composer-opts" }, imagePreviewToggle()) : null,
     h("div", { class: "composer-hint", id: "composer-hint" }, composerHint(target, agent, model)));
 }
 
@@ -871,7 +881,8 @@ function stepLabel(p) {
   const arg = p.args && ["path", "query", "title", "url", "prompt"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
   const target = arg ? " " + (arg.length > 80 ? arg.slice(0, 80) + "\u2026" : arg) : "";
   const state = stepState(p);
-  return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" : "");
+  const at = state === "running" && p.progress ? ` (step ${p.progress.step} of ${p.progress.steps})` : "";
+  return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" + at : "");
 }
 function stepView(p, agent, wasOpen) {
   const state = stepState(p);
@@ -899,6 +910,11 @@ function imagePath(p) {
   return m ? m[1] : "";
 }
 function chatImage(p, agent) {
+  if (p.output === undefined && p.preview && S.imagePreview) {
+    const a = p.args || {};
+    return h("figure", { class: "chat-image", role: "status" }, previewImg(p, p.preview.image, a.width, a.height, a.prompt),
+      h("small", {}, `Step ${p.preview.step} of ${p.preview.steps}`));
+  }
   const path = imagePath(p);
   if (!agent || !path) return null;
   const src = filesUrl(agent, "raw", path);
@@ -1002,7 +1018,7 @@ function forModel(m) {
 const CLIP = 20000;   // keep saved chats small enough for the browser's storage
 function clipParts(parts) {
   const cut = (t) => (typeof t === "string" && t.length > CLIP ? t.slice(0, CLIP) + "\n\u2026 (shortened)" : t);
-  return parts.map((p) => p.type !== "tool" ? p : {
+  return parts.map(({ preview, progress, ...p }) => p.type !== "tool" ? p : {   // previews are only shown live
     ...p, output: cut(p.output),
     args: p.args && typeof p.args === "object" ? Object.fromEntries(Object.entries(p.args).map(([k, v]) => [k, cut(v)])) : p.args,
   });
@@ -1108,6 +1124,13 @@ async function send(target, { resend = false } = {}) {
       if (ev.rewrite.trim()) parts.push({ type: "text", text: ev.rewrite });
     }
     if (ev.tool) parts.push({ type: "tool", id: ev.tool.id, name: ev.tool.name, args: ev.tool.args });
+    if (ev.tool_progress) {
+      const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_progress.id && p.output === undefined);
+      if (step) {
+        if (ev.tool_progress.progress) step.progress = ev.tool_progress.progress;
+        if (ev.tool_progress.preview) step.preview = ev.tool_progress.preview;
+      }
+    }
     if (ev.tool_result) {
       const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_result.id && p.output === undefined);
       if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; }
@@ -1121,7 +1144,8 @@ async function send(target, { resend = false } = {}) {
   try {
     const history = msgs.map(forModel);
     const res = await fetch("/api/chat", { method: "POST", signal: stream.controller.signal,
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: target || null, model, messages: history }) });
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -2098,6 +2122,28 @@ function applyModelDefaults(f) {
   Object.assign(f, { width: m.width || 512, height: m.height || 512, steps: m.steps || 20, cfg_scale: m.cfg_scale ?? 7, sampler: m.sampler || "" });
 }
 function saveImageForm() { store("axis.imageForm", S.imageForm); }
+
+/* Step previews. One setting, shown on the Images tab and in chats with agents that make pictures.
+   Turning it off makes sd-cli skip writing a preview after every step. */
+function setImagePreview(on) {
+  S.imagePreview = !!on; store("axis.imagePreview", S.imagePreview);
+  for (const box of document.querySelectorAll("input[data-image-preview]")) box.checked = S.imagePreview;
+}
+function imagePreviewToggle(disabled) {
+  return h("label", { class: "check", title: "Shows the picture after every step while it is made. Turn it off to finish a little sooner." },
+    h("input", { type: "checkbox", "data-image-preview": "1", checked: S.imagePreview, disabled: !!disabled,
+      onchange: (e) => setImagePreview(e.target.checked) }), "Show each step");
+}
+// One <img> per picture being made, reused between redraws so new steps replace the old without flicker.
+const previewImgs = new WeakMap();
+function previewImg(owner, src, width, height, alt) {
+  let img = previewImgs.get(owner);
+  if (!img) { img = h("img", { class: "step-preview", alt: alt || "The picture so far" }); previewImgs.set(owner, img); }
+  const w = Number(width) || 512, hgt = Number(height) || 512;
+  img.style.width = `min(100%, ${w}px)`; img.style.aspectRatio = `${w} / ${hgt}`;
+  if (img.getAttribute("src") !== src) img.src = src;
+  return img;
+}
 const imageUrl = (place, path, dl) => filesUrl(place, "raw", path, dl ? "&download=1" : "");
 
 function renderImages() {
@@ -2177,6 +2223,7 @@ function renderImages() {
     h("div", { class: "ig-go" },
       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
           : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0, onclick: generateImage }, "Generate")),
+    h("div", { style: "margin-top:8px" }, imagePreviewToggle(!!job)),
     h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images."),
     model && model.missing.length ? h("p", { class: "form-error" }, `Missing files: ${model.missing.join(", ")}. Fix the paths on the Models page.`) : null);
 
@@ -2193,7 +2240,9 @@ function drawStage() {
   if (job) {
     const p = job.progress;
     const pct = p ? Math.round(100 * p.step / p.steps) : null;
+    const shot = S.imagePreview && job.preview ? previewImg(job, job.preview.image, job.width, job.height, job.prompt) : null;
     return fill(box, h("div", { class: "ig-stage", role: "status" },
+      shot,
       h("div", { class: "typing" }, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
         h("span", { class: "typing-label" }, job.queued ? "Waiting for the previous picture to finish" : (job.phase || "Starting")),
         p ? h("span", { class: "elapsed" }, `step ${p.step} of ${p.steps}`) : null,
@@ -2263,7 +2312,8 @@ async function generateImage() {
   const prompt = (($("ig-prompt") || {}).value ?? f.prompt ?? "").trim();
   if (!prompt) { toast("Write a prompt first."); return; }
   f.prompt = prompt; saveImageForm();
-  const job = S.imageJob = { controller: new AbortController(), started: Date.now(), prompt, phase: "", progress: null, log: "", queued: false };
+  const job = S.imageJob = { controller: new AbortController(), started: Date.now(), prompt, phase: "", progress: null, log: "", queued: false,
+    preview: null, width: f.width, height: f.height };
   S.imageError = null;
   streamsChanged();
   if (S.view.kind === "images") renderImages();
@@ -2273,7 +2323,7 @@ async function generateImage() {
   let result = null, error = null;
   try {
     const body = { place: SHARED, model: f.model, prompt, negative_prompt: f.negative_prompt || "", width: f.width, height: f.height,
-      steps: f.steps, cfg_scale: f.cfg_scale, sampler: f.sampler || "", seed: f.seed ?? -1 };
+      steps: f.steps, cfg_scale: f.cfg_scale, sampler: f.sampler || "", seed: f.seed ?? -1, preview: S.imagePreview };
     const res = await fetch("/api/images/generate", { method: "POST", signal: job.controller.signal,
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
@@ -2290,6 +2340,7 @@ async function generateImage() {
         if (ev.queued) job.queued = true;
         if (ev.phase) { job.phase = ev.phase; job.queued = false; }
         if (ev.progress) job.progress = ev.progress;
+        if (ev.preview) job.preview = ev.preview;
         if (ev.log) job.log = ev.log;
         if (ev.image) result = ev.image;
         if (ev.error) error = ev.error;
@@ -2620,6 +2671,7 @@ window.addEventListener("beforeunload", (e) => {
   if (current && typeof current === "object" && !Array.isArray(current)) S.current = current;
   const form = recall("axis.imageForm", null);
   if (form && typeof form === "object" && !Array.isArray(form)) Object.assign(S.imageForm, form);
+  S.imagePreview = recall("axis.imagePreview", true) !== false;
   await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
   await migrateOldChats();
   renderMain();

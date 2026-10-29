@@ -5,6 +5,7 @@ Run with:  python -m unittest discover -s tests -v
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -1150,8 +1151,14 @@ if "FAIL" in get("--prompt"):
 print("loading tensors")
 sys.stdout.write("  |=====| 300/300 - 1.0it/s\r")
 print("\nsampling using Euler method")
+if "--preview" in a and os.environ.get("FAKE_OLD_SD"):
+    print("error: unknown argument: --preview"); sys.exit(1)
 for i in range(1, steps + 1):
+    if "--preview" in a:
+        with open(get("--preview-path"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\nstep%d" % i + b"IEND\xaeB`\x82")
     sys.stdout.write("  |==| %d/%d - 0.10s/it\r" % (i, steps))
+    sys.stdout.flush()
 print("\ndecoding 1 latents")
 with open(get("--output"), "wb") as f:
     f.write(b"\x89PNG\r\n\x1a\n" + " ".join(a).encode())
@@ -1248,6 +1255,42 @@ class TestImages(Base):
             images.generate({"prompt": "FAIL please"}, shared)
         self.assertIn("out of memory", str(ctx.exception))
         self.assertEqual(len(list((shared / "images").glob("*.png"))), 1)
+
+    def test_step_previews(self):
+        self.add_model()
+        shared = Path(self.home) / "shared"
+        events = []
+        images.generate({"prompt": "a fox"}, shared, on_event=events.append)
+        self.assertFalse([e for e in events if "preview" in e])   # off unless asked for
+        events = []
+        rec = images.generate({"prompt": "a fox"}, shared, on_event=events.append, preview=True)
+        shots = [e["preview"] for e in events if "preview" in e]
+        self.assertTrue(shots)
+        self.assertTrue(all(s["image"].startswith("data:image/png;base64,") and s["steps"] == 4 for s in shots))
+        self.assertEqual(base64.b64decode(shots[-1]["image"].split(",", 1)[1])[8:13], b"step4")
+        self.assertEqual(len(list((shared / "images").glob("*.png"))), 2)   # the preview file is not kept
+        self.assertTrue((shared / rec["path"]).is_file())
+        cmd = images.build_command(self.cli, images.find_model(None), images.resolve_params(images.find_model(None), {"prompt": "x"}),
+                                   Path("o.png"), self.root, Path("p.png"))
+        self.assertEqual(cmd[cmd.index("--preview") + 1], "proj")
+        with mock.patch.dict(os.environ, {"FAKE_OLD_SD": "1"}):          # an sd-cli without --preview
+            events = []
+            rec = images.generate({"prompt": "old"}, shared, on_event=events.append, preview=True)
+        self.assertTrue((shared / rec["path"]).is_file())
+        self.assertFalse([e for e in events if "preview" in e])
+
+    def test_agent_step_previews(self):
+        self.add_model()
+        agent = agents.create({"name": "painter", "skills": ["image-generation"]})
+        for preview in (False, True):
+            events = []
+            session = runner.Session(agent.workspace, ["generate_image"], events.append, image_preview=preview)
+            out = session.run("generate_image", {"prompt": "a fox %s" % preview}, "0-0")
+            self.assertTrue(out.startswith("Saved images/"), out)
+            prog = [e["tool_progress"] for e in events if "tool_progress" in e]
+            self.assertTrue(all(p["id"] == "0-0" for p in prog))
+            self.assertIn({"id": "0-0", "progress": {"step": 4, "steps": 4}}, prog)
+            self.assertEqual(any("preview" in p for p in prog), preview)
 
     def test_cancel_kills_sd_cli(self):
         self.add_model()

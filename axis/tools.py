@@ -511,10 +511,11 @@ def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
     return run
 
 
-def generate_image(ws: Where, args: Dict[str, Any]) -> str:
+def generate_image(ws: Where, args: Dict[str, Any],
+                   on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False) -> str:
     p = places(ws)
     try:
-        rec = images.generate(args, p.personal, source="agent")
+        rec = images.generate(args, p.personal, source="agent", on_event=on_event, preview=preview)
     except images.ImageError as exc:
         raise ToolError(str(exc)) from exc
     return (f"Saved {rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
@@ -534,10 +535,13 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
 }
 
 
-def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: Optional[Path] = None) -> tuple:
+def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: Optional[Path] = None,
+            on_image_event: Optional[Callable[[Dict[str, Any]], None]] = None, image_preview: bool = False) -> tuple:
     """Run one tool. Returns (ok, text). Never raises for tool-level problems.
 
-    shared is the shared folder when the agent may use it, otherwise None.
+    shared is the shared folder when the agent may use it, otherwise None. on_image_event
+    receives generate_image's progress events (see images.generate), with step previews
+    when image_preview is true.
     """
     name, args = normalize_call(name, args, allowed)
     if name not in allowed or name not in HANDLERS:
@@ -546,6 +550,8 @@ def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: O
         return False, "Tool arguments must be a JSON object."
     try:
         workspace.mkdir(parents=True, exist_ok=True)
+        if name == "generate_image":
+            return True, HANDLERS[name](Places(workspace, shared), args, on_event=on_image_event, preview=image_preview)
         return True, HANDLERS[name](Places(workspace, shared), args)
     except ToolError as exc:
         return False, f"Error: {exc}"

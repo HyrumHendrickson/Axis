@@ -498,6 +498,8 @@ Gated models (some Stability AI and Black Forest Labs repositories) need you to 
 
 **Start and Stop.** **Start** loads an image model into `sd-server` and keeps it in memory, so each picture begins immediately. **Stop** frees the memory. Only one image model is on at a time; starting another stops the first. When no image model is on, each picture runs `sd-cli`, which loads the model, makes the picture, and exits. If only `sd-server` is available, generating a picture starts the model automatically.
 
+**Show each step.** With **Show each step** on (under **Generate** on the Images tab, and under the message box when chatting with an agent that has the Image generation skill), the picture appears after every sampling step and sharpens as it goes. The previews use stable-diffusion.cpp's `proj` method, a cheap projection of the latent to colour at one eighth of the final size, so they add very little time. Turn it off to skip them; with `sd-cli` that also stops it writing a preview file after each step. The setting is remembered and applies to the next picture.
+
 **Delete** removes the image model and the files Axis downloaded for it. A file another image model also uses is kept. Files you added yourself are kept unless you tick **Also delete the files you added yourself**.
 
 **Files you already have.** Click **Add files I already have** and enter the files and settings yourself. First confirm the files work from a terminal:

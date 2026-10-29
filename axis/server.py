@@ -43,6 +43,7 @@ Routes:
   DELETE /api/images/models/<id>            remove an image model (its files are not touched)
   GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
+                                            ("preview": true also streams each step as a small picture)
   GET    /api/manage                        engines, installed models, what is running, and jobs
   POST   /api/manage/install                install a model {engine, name, choice?, role?, target?}
                                             (answers {choose: [...]} when the user must pick a file;
@@ -671,7 +672,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ClientGone() from exc  # stops sd-cli: the user pressed Cancel or left
 
         try:
-            record = images.generate(body, where.workspace, source=source, on_event=emit)
+            record = images.generate(body, where.workspace, source=source, on_event=emit,
+                                     preview=body.get("preview") is True)
             emit({"image": {**record, "place": where.name}})
             emit({"done": True})
         except ClientGone:
@@ -709,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
             emit({"model": model})
             runner.reply(conn, model, messages, emit,
                          tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None,
-                         shared=agents.shared_folder(agent))
+                         shared=agents.shared_folder(agent), image_preview=body.get("image_preview") is True)
             emit({"done": True})
         except ClientGone:
             return

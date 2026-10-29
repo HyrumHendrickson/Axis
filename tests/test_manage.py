@@ -653,6 +653,12 @@ class TestImageModels(Base):
         sent = json.loads(self.req.read_text())
         self.assertEqual((sent["prompt"], sent["seed"], sent["sample_params"]["sample_steps"]), ("a lighthouse", 7, 4))
         self.assertIn({"progress": {"step": 1, "steps": 4}}, events)
+        self.assertFalse([e for e in events if "preview" in e])
+        events = []
+        images.generate({"prompt": "a lighthouse", "model": mid}, Path(self.home) / "out", on_event=events.append, preview=True)
+        shot = next(e["preview"] for e in events if "preview" in e)
+        self.assertEqual((shot["step"], shot["steps"]), (1, 4))
+        self.assertTrue(shot["image"].startswith("data:image/png;base64,"))
 
         code, r = request(url + "/api/manage/delete", "POST", {"engine": "image", "model": mid})
         job = wait_job(r["job"]["id"])

@@ -20,6 +20,12 @@ Pictures made in the Images tab go to ~/Axis/shared/images. Pictures an agent
 makes with the generate_image action go to images/ in that agent's own folder.
 Each images/ folder keeps a hidden index (.axis-images.json) with the prompt and
 settings of every picture, for the gallery.
+
+Step previews: when asked, Axis shows the picture as it forms. stable-diffusion.cpp
+makes each preview with its "proj" method, a cheap linear projection of the latent
+to colours at 1/8 of the final size, so it costs almost nothing next to a sampling
+step. With sd-cli, Axis passes --preview proj and reads the small file it writes
+after each step; with sd-server it forwards the preview the job status carries.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -436,7 +443,8 @@ def split_args(text: str) -> List[str]:
     return out
 
 
-def build_command(cli: Path, model: Dict[str, Any], params: Dict[str, Any], out_file: Path, base: Path) -> List[str]:
+def build_command(cli: Path, model: Dict[str, Any], params: Dict[str, Any], out_file: Path, base: Path,
+                  preview_file: Optional[Path] = None) -> List[str]:
     cmd = [str(cli)]
     for key in FILE_FIELDS:
         rel = model.get(key) or ""
@@ -452,6 +460,8 @@ def build_command(cli: Path, model: Dict[str, Any], params: Dict[str, Any], out_
         cmd += ["--sampling-method", params["sampler"]]
     if model.get("scheduler"):
         cmd += ["--scheduler", model["scheduler"]]
+    if preview_file is not None:  # before extra_args, so a model's own preview settings still win
+        cmd += ["--preview", "proj", "--preview-path", str(preview_file), "--preview-interval", "1"]
     cmd += split_args(model.get("extra_args") or "")
     cmd += ["--output", str(out_file)]
     return cmd
@@ -490,11 +500,13 @@ _LOCK = threading.Lock()  # one picture at a time: they compete for the same GPU
 
 
 def generate(raw: Dict[str, Any], folder: Path, source: str = "",
-             on_event: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+             on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False) -> Dict[str, Any]:
     """Make one picture in folder/images. Returns its index record (with "path").
 
     on_event receives {"queued": True}, {"phase": text}, {"progress": {"step", "steps"}}
-    and {"log": line}. If it raises, the run is stopped and the exception passes on.
+    and {"log": line}; with preview=True also {"preview": {"step", "steps", "image"}},
+    where image is a data: URL of the picture so far. If on_event raises, the run is
+    stopped and the exception passes on.
     """
     from . import manager  # imported here: manager imports this module
 
@@ -532,15 +544,28 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
             except (manager.ManageError, manager.procs.ProcessError) as exc:
                 raise ImageError(str(exc)) from exc
             started = time.time()
+        preview_dir = None
         try:
             if url:
-                _generate_with_server(url, params, out_file, emit)
+                _generate_with_server(url, params, out_file, emit, preview)
             else:
                 assert cli is not None
                 base = workdir(cli)
-                cmd = build_command(cli, model, params, out_file, base)
+                cwd = base if base.is_dir() else None
+                preview_file = None
+                if preview:
+                    preview_dir = Path(tempfile.mkdtemp(prefix="axis-preview-"))
+                    preview_file = preview_dir / "preview.png"
                 emit({"phase": "Starting sd-cli"})
-                lines = _run(cmd, base if base.is_dir() else None, params["steps"], emit)
+                try:
+                    lines = _run(build_command(cli, model, params, out_file, base, preview_file), cwd,
+                                 params["steps"], emit, preview_file)
+                except ImageError as exc:
+                    if preview_file is None or "--preview" not in str(exc) or "unknown argument" not in str(exc).lower():
+                        raise
+                    # An older sd-cli without step previews: make the picture without them.
+                    emit({"phase": "This sd-cli cannot show steps; generating without them"})
+                    lines = _run(build_command(cli, model, params, out_file, base), cwd, params["steps"], emit)
                 if not out_file.is_file():
                     tail = "\n".join(l for l in lines[-8:] if l.strip())
                     raise ImageError("sd-cli finished without making a picture." + (f"\n{tail}" if tail else ""))
@@ -548,6 +573,9 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
             if out_file.exists():  # never leave half a picture behind
                 out_file.unlink()
             raise
+        finally:
+            if preview_dir is not None:
+                shutil.rmtree(preview_dir, ignore_errors=True)
         seconds = round(time.time() - started, 1)
     finally:
         _LOCK.release()
@@ -563,6 +591,14 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
 
 _SERVER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 POLL = 0.5
+POLL_PREVIEW = 0.2  # more often while previews are shown, so fast steps are not skipped
+
+
+def _data_url(b64: str) -> str:
+    """A data: URL for a base64 PNG or JPEG (sd-server sends both)."""
+    if b64.startswith("data:"):
+        return b64
+    return ("data:image/jpeg;base64," if b64.startswith("/9j/") else "data:image/png;base64,") + b64
 
 
 def _server_json(url: str, body: Optional[Dict[str, Any]] = None, timeout: float = 30.0) -> Any:
@@ -600,8 +636,12 @@ def _save_png(b64: Any, out_file: Path) -> None:
     os.replace(tmp, out_file)
 
 
-def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit) -> None:
-    """Make a picture with sd-server's job API (/sdcpp/v1), or its WebUI API on older builds."""
+def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit, preview: bool = False) -> None:
+    """Make a picture with sd-server's job API (/sdcpp/v1), or its WebUI API on older builds.
+
+    The job API reports the current step only with a preview, so "proj" previews are always
+    asked for (they are cheap); preview decides whether they are passed on.
+    """
     sample: Dict[str, Any] = {"sample_steps": params["steps"], "guidance": {"txt_cfg": params["cfg_scale"]}}
     if params.get("sampler"):
         sample["sample_method"] = params["sampler"]
@@ -618,7 +658,7 @@ def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit
             job = _server_json(url + "/sdcpp/v1/img_gen", body)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return _generate_with_sdapi(url, params, out_file, emit)
+                return _generate_with_sdapi(url, params, out_file, emit, preview)
             if exc.code in (429, 503) and time.time() < deadline:  # busy, or still loading
                 emit({"phase": "Waiting for sd-server"})
                 time.sleep(1.0)
@@ -659,6 +699,9 @@ def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit
                     if prev["step"] != last_step:
                         last_step = prev["step"]
                         emit({"progress": {"step": prev["step"], "steps": prev["total_steps"]}})
+                        if preview and isinstance(prev.get("b64_json"), str) and prev["b64_json"]:
+                            emit({"preview": {"step": prev["step"], "steps": prev["total_steps"],
+                                              "image": _data_url(prev["b64_json"])}})
                         if phase != "Sampling":
                             phase = "Sampling"
                             emit({"phase": phase})
@@ -670,7 +713,7 @@ def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit
                     emit({"phase": phase})
                 else:
                     emit({"log": "working"})  # keeps noticing a browser that has gone away
-            time.sleep(POLL)
+            time.sleep(POLL_PREVIEW if preview else POLL)
     except BaseException:
         try:
             _server_json(poll + "/cancel", {}, timeout=5)  # stop the work, not just the waiting
@@ -679,7 +722,7 @@ def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit
         raise
 
 
-def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit) -> None:
+def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit, preview: bool = False) -> None:
     body = {"prompt": params["prompt"], "negative_prompt": params.get("negative_prompt") or "",
             "width": params["width"], "height": params["height"], "steps": params["steps"],
             "cfg_scale": params["cfg_scale"], "seed": params["seed"], "batch_size": 1}
@@ -700,13 +743,20 @@ def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit)
     worker = threading.Thread(target=call, daemon=True)
     worker.start()
     emit({"phase": "Generating"})
+    last_step = None
+    query = "false" if preview else "true"
     while worker.is_alive():
-        worker.join(POLL)
+        worker.join(POLL_PREVIEW if preview else POLL)
         try:
-            prog = _server_json(url + "/sdapi/v1/progress?skip_current_image=true", timeout=5)
+            prog = _server_json(url + "/sdapi/v1/progress?skip_current_image=" + query, timeout=5)
             state = prog.get("state") if isinstance(prog, dict) else None
             if isinstance(state, dict) and state.get("sampling_steps"):
-                emit({"progress": {"step": int(state.get("sampling_step") or 0), "steps": int(state["sampling_steps"])}})
+                step, steps = int(state.get("sampling_step") or 0), int(state["sampling_steps"])
+                emit({"progress": {"step": step, "steps": steps}})
+                image = prog.get("current_image")
+                if preview and step != last_step and isinstance(image, str) and image:
+                    last_step = step
+                    emit({"preview": {"step": step, "steps": steps, "image": _data_url(image)}})
             else:
                 emit({"log": "working"})
         except (urllib.error.URLError, OSError, ValueError, TypeError):
@@ -717,7 +767,36 @@ def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit)
     _save_png(imgs[0] if imgs else None, out_file)
 
 
-def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit) -> List[str]:
+PNG_END = b"IEND\xaeB`\x82"
+
+
+class _PreviewFile:
+    """Watches the preview file sd-cli rewrites after each step and passes on each new picture."""
+
+    def __init__(self, path: Path, steps: int, emit):
+        self.path, self.steps, self.emit = path, steps, emit
+        self.seen: Optional[tuple] = None
+
+    def check(self, step: int) -> None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return
+        key = (st.st_mtime_ns, st.st_size)
+        if key == self.seen:
+            return
+        try:
+            data = self.path.read_bytes()
+        except OSError:
+            return
+        if not (data.startswith(b"\x89PNG") and data.rstrip(b"\0").endswith(PNG_END)):
+            return  # still being written: try again on the next line
+        self.seen = key
+        image = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+        self.emit({"preview": {"step": step, "steps": self.steps, "image": image}})
+
+
+def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit, preview_file: Optional[Path] = None) -> List[str]:
     from . import engines
 
     kwargs: Dict[str, Any] = {"env": {**os.environ, **engines.run_env(Path(cmd[0]))}}
@@ -738,7 +817,8 @@ def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit) -> List[str]:
     timer.daemon = True
     timer.start()
     lines: List[str] = []
-    buf, phase = b"", ""
+    buf, phase, step = b"", "", 0
+    watcher = _PreviewFile(preview_file, steps, emit) if preview_file is not None else None
     try:
         assert proc.stdout is not None
         while True:
@@ -762,9 +842,12 @@ def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit) -> List[str]:
                         break
                 m = PROGRESS.search(line)
                 if m and int(m.group(2)) == steps:  # loading bars use other totals
-                    emit({"progress": {"step": int(m.group(1)), "steps": steps}})
+                    step = int(m.group(1))
+                    emit({"progress": {"step": step, "steps": steps}})
                 else:
                     emit({"log": line[:300]})
+                if watcher is not None and step:
+                    watcher.check(step)
         code = proc.wait()
     except BaseException:
         proc.kill()
