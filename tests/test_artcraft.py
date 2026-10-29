@@ -17,7 +17,7 @@ import time
 import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path
+from pathlib import Path, PosixPath
 from unittest import mock
 
 from axis import artcraft, engines, jobs
@@ -472,6 +472,21 @@ class TestOpen(ArtBase):
 
 
 class TestRust(ArtBase):
+    def test_windows_vcvarsall_is_called_and_the_axis_install_is_found(self):
+        vcvars = Path(self.home) / "engines" / "msvc" / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+        vcvars.parent.mkdir(parents=True)
+        vcvars.write_text("", encoding="utf-8")
+        engine_root = Path(self.home) / "engines"
+        result = mock.Mock(returncode=0, stdout="PATH=C:\\msvc\\bin\nVCToolsInstallDir=C:\\msvc\\\n")
+        with mock.patch.object(artcraft.os, "name", "nt"), mock.patch.object(artcraft, "Path", PosixPath), \
+                mock.patch.object(artcraft.engines, "root", return_value=engine_root), \
+                mock.patch.object(artcraft.subprocess, "run", return_value=result) as run:
+            env = artcraft._vcvars_env()
+        self.assertEqual(env["VCToolsInstallDir"], "C:\\msvc\\")
+        command = run.call_args.args[0]
+        self.assertIn("call ", command[4])
+        self.assertIn("vcvarsall.bat", command[4])
+
     @POSIX_ONLY
     def test_install_rust_into_its_own_folder_without_touching_the_path(self):
         path_before = os.environ["PATH"]

@@ -1,0 +1,130 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index dc45224..663e4a4 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,8 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++- Fixed Windows Rust setup so Axis loads `vcvarsall.bat` with `call` and detects the C++ Build Tools installed under `Axis/engines/msvc` without requiring a restart.
++
+ ## [4.2.2] - 2026-10-29
+ 
+ ### Added
+diff --git a/axis/artcraft.py b/axis/artcraft.py
+index 463e287..80668a0 100644
+--- a/axis/artcraft.py
++++ b/axis/artcraft.py
+@@ -174,7 +174,7 @@ def _vcvars_env() -> Dict[str, str]:
+     base = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or ""
+     candidates = [Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"] if base else []
+     candidates += [Path(os.environ.get("ProgramFiles", "")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"]
+-    install = ""
++    installs: List[Path] = []
+     for vswhere in candidates:
+         if not vswhere.is_file():
+             continue
+@@ -183,33 +183,43 @@ def _vcvars_env() -> Dict[str, str]:
+                                 "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=20,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+-            install = r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else ""
++            if r.returncode == 0:
++                installs.extend(Path(line.strip()) for line in r.stdout.splitlines() if line.strip())
+         except (OSError, subprocess.SubprocessError):
+             pass
+-        if install:
+-            break
+-    if not install:
+-        if shutil.which("cl") and shutil.which("link"):
+-            return dict(os.environ)
+-        return {}
+-    vcvars = Path(install) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+-    if not vcvars.is_file():
+-        return {}
+-    try:
+-        r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+-                            f'"{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+-                           text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+-    except (OSError, subprocess.SubprocessError):
+-        return {}
+-    if r.returncode != 0:
+-        return {}
+-    env = {}
+-    for line in r.stdout.splitlines():
+-        if "=" in line:
+-            key, value = line.split("=", 1)
+-            if key and "\x00" not in key:
+-                env[key] = value
+-    return env if env.get("PATH") and env.get("VCToolsInstallDir") else {}
++    # The installer used by Axis has an explicit path. It may not be returned
++    # by an older or incomplete vswhere installation, so check it directly.
++    installs.append(engines.root() / "msvc")
++    seen = set()
++    for install in installs:
++        install = install.resolve()
++        if install in seen:
++            continue
++        seen.add(install)
++        vcvars = install / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
++        if not vcvars.is_file():
++            continue
++        try:
++            # vcvarsall.bat is a batch file. CALL is required for cmd.exe to
++            # return to this command and execute `set` afterward.
++            r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
++                                f'call "{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                               text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
++        except (OSError, subprocess.SubprocessError):
++            continue
++        if r.returncode != 0:
++            continue
++        env = {}
++        for line in r.stdout.splitlines():
++            if "=" in line:
++                key, value = line.split("=", 1)
++                if key and "\x00" not in key:
++                    env[key] = value
++        if env.get("PATH") and env.get("VCToolsInstallDir"):
++            return env
++    if shutil.which("cl") and shutil.which("link"):
++        return dict(os.environ)
++    return {}
+ 
+ 
+ def rust_build_env() -> Dict[str, str]:
+diff --git a/tests/test_artcraft.py b/tests/test_artcraft.py
+index c7b46b7..b20b283 100644
+--- a/tests/test_artcraft.py
++++ b/tests/test_artcraft.py
+@@ -17,7 +17,7 @@ import time
+ import unittest
+ import urllib.parse
+ from http.server import BaseHTTPRequestHandler
+-from pathlib import Path
++from pathlib import Path, PosixPath
+ from unittest import mock
+ 
+ from axis import artcraft, engines, jobs
+@@ -472,6 +472,21 @@ class TestOpen(ArtBase):
+ 
+ 
+ class TestRust(ArtBase):
++    def test_windows_vcvarsall_is_called_and_the_axis_install_is_found(self):
++        vcvars = Path(self.home) / "engines" / "msvc" / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
++        vcvars.parent.mkdir(parents=True)
++        vcvars.write_text("", encoding="utf-8")
++        engine_root = Path(self.home) / "engines"
++        result = mock.Mock(returncode=0, stdout="PATH=C:\\msvc\\bin\nVCToolsInstallDir=C:\\msvc\\\n")
++        with mock.patch.object(artcraft.os, "name", "nt"), mock.patch.object(artcraft, "Path", PosixPath), \
++                mock.patch.object(artcraft.engines, "root", return_value=engine_root), \
++                mock.patch.object(artcraft.subprocess, "run", return_value=result) as run:
++            env = artcraft._vcvars_env()
++        self.assertEqual(env["VCToolsInstallDir"], "C:\\msvc\\")
++        command = run.call_args.args[0]
++        self.assertIn("call ", command[4])
++        self.assertIn("vcvarsall.bat", command[4])
++
+     @POSIX_ONLY
+     def test_install_rust_into_its_own_folder_without_touching_the_path(self):
+         path_before = os.environ["PATH"]

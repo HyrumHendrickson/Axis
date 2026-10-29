@@ -174,7 +174,7 @@ def _vcvars_env() -> Dict[str, str]:
     base = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or ""
     candidates = [Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"] if base else []
     candidates += [Path(os.environ.get("ProgramFiles", "")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"]
-    install = ""
+    installs: List[Path] = []
     for vswhere in candidates:
         if not vswhere.is_file():
             continue
@@ -183,33 +183,43 @@ def _vcvars_env() -> Dict[str, str]:
                                 "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=20,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            install = r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else ""
+            if r.returncode == 0:
+                installs.extend(Path(line.strip()) for line in r.stdout.splitlines() if line.strip())
         except (OSError, subprocess.SubprocessError):
             pass
-        if install:
-            break
-    if not install:
-        if shutil.which("cl") and shutil.which("link"):
-            return dict(os.environ)
-        return {}
-    vcvars = Path(install) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
-    if not vcvars.is_file():
-        return {}
-    try:
-        r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
-                            f'"{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    if r.returncode != 0:
-        return {}
-    env = {}
-    for line in r.stdout.splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            if key and "\x00" not in key:
-                env[key] = value
-    return env if env.get("PATH") and env.get("VCToolsInstallDir") else {}
+    # The installer used by Axis has an explicit path. It may not be returned
+    # by an older or incomplete vswhere installation, so check it directly.
+    installs.append(engines.root() / "msvc")
+    seen = set()
+    for install in installs:
+        install = install.resolve()
+        if install in seen:
+            continue
+        seen.add(install)
+        vcvars = install / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+        if not vcvars.is_file():
+            continue
+        try:
+            # vcvarsall.bat is a batch file. CALL is required for cmd.exe to
+            # return to this command and execute `set` afterward.
+            r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+                                f'call "{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0:
+            continue
+        env = {}
+        for line in r.stdout.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key and "\x00" not in key:
+                    env[key] = value
+        if env.get("PATH") and env.get("VCToolsInstallDir"):
+            return env
+    if shutil.which("cl") and shutil.which("link"):
+        return dict(os.environ)
+    return {}
 
 
 def rust_build_env() -> Dict[str, str]:

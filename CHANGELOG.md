@@ -4,6 +4,8 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+- Fixed Windows Rust setup so Axis loads `vcvarsall.bat` with `call` and detects the C++ Build Tools installed under `Axis/engines/msvc` without requiring a restart.
+
 ## [4.2.2] - 2026-10-29
 
 ### Added
