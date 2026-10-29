@@ -83,6 +83,7 @@ a.btn { display: inline-block; text-decoration: none; color: var(--ink); line-he
 .btn.small { padding: 3px 10px; font-size: 13px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .link { border: 0; background: none; color: var(--link); cursor: pointer; padding: 0; font-size: 13px; font-weight: 600; }
+.link:disabled { color: var(--muted); cursor: not-allowed; }
 
 /* ---------- main ---------- */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -138,7 +139,36 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .composer-hint { max-width: 760px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
 .check input { margin: 0; accent-color: var(--tan); }
-.composer-opts { max-width: 760px; margin: 6px auto 0; }
+.composer-opts { max-width: 760px; margin: 6px auto 0; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.composer-opts .link { font-size: 13px; }
+.composer.drop .composer-inner textarea { border-color: var(--accent); border-style: dashed; }
+.attach-row { max-width: 760px; margin: 0 auto 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.attach { position: relative; width: 64px; height: 64px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--code); }
+.attach img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach button { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; border: 0; padding: 0;
+  background: var(--accent); color: var(--accent-ink); font: 600 13px/20px var(--sans); cursor: pointer; }
+.attach.busy::after { content: ""; position: absolute; inset: 0; background: var(--surface); opacity: .6; }
+.msg-pics { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-bottom: 6px; }
+.msg.user .msg-pics { margin: 0 0 6px; }
+.msg-pics a { display: block; width: 120px; height: 120px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); background: var(--code); }
+.msg-pics img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.msg-pics .gone { display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; color: var(--muted); padding: 6px; }
+
+/* ---------- picture picker ---------- */
+.picker { border: 1px solid var(--line); border-radius: 10px; padding: 0; background: var(--surface); color: var(--ink);
+  width: min(760px, 94vw); max-height: 86vh; }
+.picker::backdrop { background: rgba(0, 0, 0, .45); }
+.picker-inner { display: flex; flex-direction: column; max-height: 86vh; }
+.picker-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.picker-head h3 { font: 400 20px/1.3 var(--serif); margin: 0; flex: 1; }
+.picker .crumbs { padding: 8px 16px 0; margin: 0; }
+.picker-body { overflow-y: auto; padding: 12px 16px 16px; }
+.picker-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.picker-grid button { border: 1px solid var(--line); border-radius: 6px; padding: 0; background: var(--code); cursor: pointer; overflow: hidden; text-align: left; }
+.picker-grid button:hover, .picker-grid button:focus-visible { border-color: var(--accent); }
+.picker-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.picker-grid small { display: block; padding: 4px 6px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- gate ---------- */
 .gate { max-width: 620px; margin: 8vh auto 0; }
@@ -328,6 +358,17 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .ig-thumb { border: 1px solid var(--line); border-radius: 8px; padding: 0; background: var(--surface); cursor: pointer; overflow: hidden; aspect-ratio: 1; }
 .ig-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ig-thumb[aria-current="true"] { outline: 3px solid var(--accent); outline-offset: -3px; }
+.ig-mode { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-bottom: 16px; }
+.ig-mode button { border: 0; background: transparent; padding: 7px 0; cursor: pointer; font-size: 14px; }
+.ig-mode button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.ig-source { border: 1px dashed var(--line); border-radius: 8px; padding: 10px; text-align: center; background: var(--bg); }
+.ig-source.drop { border-color: var(--accent); }
+.ig-source img { display: block; max-width: 100%; max-height: 200px; margin: 0 auto 8px; border-radius: 4px; }
+.ig-source p { margin: 4px 0 8px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.ig-source .fb-actions { justify-content: center; margin: 0; }
+.ig-strength { display: flex; gap: 8px; align-items: center; }
+.ig-strength input[type=range] { flex: 1; accent-color: var(--tan); }
+.ig-strength input[type=number] { width: 72px; }
 .chat-image { margin: 6px 0 10px; }
 .chat-image img { display: block; max-width: min(100%, 512px); border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; }
 .chat-image small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -382,7 +423,9 @@ const S = {
   history: { agent: "*", sort: "new", query: "" },   // Past chats filter and order
   unseen: false,                // a reply finished while the browser tab was hidden
   images: null,                 // last /api/images result: sd-cli, settings and image models
-  imageForm: { model: "", prompt: "", negative_prompt: "", width: 512, height: 512, steps: 20, cfg_scale: 7, sampler: "", seed: -1 },
+  imageForm: { model: "", prompt: "", negative_prompt: "", width: 512, height: 512, steps: 20, cfg_scale: 7, sampler: "", seed: -1,
+    mode: "create", source: null, strength: 0.6, matchSource: true },   // mode "edit" changes source (a {place, path} picture)
+  attachments: {},              // target -> pictures waiting to be sent: [{ place, path }], or { busy: name } while uploading
   imageJob: null,               // the picture being made (kept here so it survives switching pages)
   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
   imageSelected: null,          // the picture shown large in the Images tab
@@ -698,7 +741,7 @@ const targetName = (target) => target || "Direct chat";
 function chatTitle(chat) {
   if (chat.title) return chat.title;
   const first = (chat.messages || []).find((m) => m.role === "user");
-  const line = first ? String(first.content).replace(/\s+/g, " ").trim() : "";
+  const line = first ? (String(first.content).replace(/\s+/g, " ").trim() || (first.images && first.images.length ? "Picture" : "")) : "";
   return line ? (line.length > 80 ? line.slice(0, 79) + "\u2026" : line) : "New chat";
 }
 const streamHere = (target) => { const s = S.streams[target]; return s && s.chatId === S.current[target] ? s : null; };
@@ -804,20 +847,86 @@ function gateView() {
     h("p", { style: "margin-top:18px" }, "This page checks every few seconds and unlocks as soon as a model is on."));
 }
 
+/* Pictures attached to the next message. Pictures from the computer are saved in chat-images/ of
+   the agent's folder (the shared folder in Direct chat), so saved chats can show them again. */
+const MAX_ATTACH = 4;
+const attachPlace = (target) => target || SHARED;
+function saveAttachments() { store("axis.attachments", Object.fromEntries(Object.entries(S.attachments).map(([k, v]) => [k, v.filter((a) => !a.busy)]))); }
+function readsPictures(model) {
+  const info = modelInfo(model), caps = (info && info.capabilities) || [];
+  return caps.length ? caps.includes("vision") : null;   // null: the server does not say
+}
+function redrawAttachments(target) {
+  if (!viewing(target)) return;
+  const row = $("attach-row");
+  if (row) fill(row, attachChips(target)); else renderChat();
+  updateHint();
+}
+async function attachFiles(target, fileList) {
+  const list = S.attachments[target] = S.attachments[target] || [];
+  for (const file of [...(fileList || [])]) {
+    if (list.length >= MAX_ATTACH) { toast(`A message can carry at most ${MAX_ATTACH} pictures.`); break; }
+    const slot = { busy: file.name, preview: URL.createObjectURL(file) };
+    list.push(slot); redrawAttachments(target);
+    try { Object.assign(slot, await savePicture(file, attachPlace(target), "chat-images")); delete slot.busy; }
+    catch (e) { list.splice(list.indexOf(slot), 1); toast(e.message); }
+    URL.revokeObjectURL(slot.preview); delete slot.preview;
+    saveAttachments(); redrawAttachments(target);
+  }
+}
+async function attachFromFiles(target) {
+  const list = S.attachments[target] = S.attachments[target] || [];
+  if (list.length >= MAX_ATTACH) return toast(`A message can carry at most ${MAX_ATTACH} pictures.`);
+  const ref = await pickPicture("Attach a picture", attachPlace(target));
+  if (!ref) return;
+  const slot = { busy: ref.path };
+  list.push(slot); redrawAttachments(target);
+  try { Object.assign(slot, await readablePicture(ref, attachPlace(target), "chat-images")); delete slot.busy; }
+  catch (e) { list.splice(list.indexOf(slot), 1); toast(e.message); }
+  saveAttachments(); redrawAttachments(target);
+}
+function attachChips(target) {
+  return (S.attachments[target] || []).map((a, i) => h("div", { class: "attach" + (a.busy ? " busy" : ""), title: a.busy || a.path },
+    h("img", { src: a.preview || (a.busy ? "" : filesUrl(a.place, "raw", a.path)), alt: a.busy || a.path }),
+    a.busy ? null : h("button", { type: "button", "aria-label": "Remove " + a.path,
+      onclick: () => { S.attachments[target].splice(i, 1); saveAttachments(); redrawAttachments(target); } }, "\u00d7")));
+}
+
 function composer(target, agent, model) {
   const stream = streamHere(target), busyElsewhere = !stream && !!S.streams[target];
   const input = h("textarea", { id: "input", rows: 1, placeholder: agent ? `Message ${agent.name}` : "Message the model",
     "aria-label": "Message",
     oninput: (e) => { autosize(e.target); S.drafts[target] = e.target.value; saveDrafts(); },
+    onpaste: (e) => {
+      const pics = [...(e.clipboardData ? e.clipboardData.files : [])].filter((f) => f.type.startsWith("image/"));
+      if (pics.length) { e.preventDefault(); attachFiles(target, pics); }
+    },
     onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(target); } } });
   const btn = stream
     ? h("button", { class: "btn", id: "send", onclick: () => stream.controller.abort() }, "Stop")
     : h("button", { class: "btn primary", id: "send", disabled: busyElsewhere,
         title: busyElsewhere ? "Another chat with this agent is still replying" : null, onclick: () => send(target) }, "Send");
   const makesPictures = agent && agent.skills.includes("image-generation");
-  return h("div", { class: "composer" }, h("div", { class: "composer-inner" }, input, btn),
-    makesPictures ? h("div", { class: "composer-opts" }, imagePreviewToggle()) : null,
+  const reads = readsPictures(model);
+  const picker = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true,
+    onchange: (e) => { attachFiles(target, e.target.files); e.target.value = ""; } });
+  const why = reads === false ? `${model} cannot read pictures. Start a model with Vision on the Models page.` : null;
+  const opts = [
+    h("button", { class: "link", type: "button", disabled: reads === false, title: why || "Attach a picture from your computer (or paste or drop one)",
+      onclick: () => picker.click() }, "Attach picture"), picker,
+    h("button", { class: "link", type: "button", disabled: reads === false, title: why || "Attach a picture already in Axis\u2019s folders",
+      onclick: () => attachFromFiles(target) }, "From Files"),
+    makesPictures ? imagePreviewToggle() : null,
+  ];
+  const box = h("div", { class: "composer",
+    ondragover: (e) => { if (reads !== false && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
+    ondragleave: (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove("drop"); },
+    ondrop: (e) => { if (reads === false) return; e.preventDefault(); box.classList.remove("drop"); attachFiles(target, e.dataTransfer.files); } },
+    h("div", { class: "attach-row", id: "attach-row" }, attachChips(target)),
+    h("div", { class: "composer-inner" }, input, btn),
+    h("div", { class: "composer-opts" }, opts),
     h("div", { class: "composer-hint", id: "composer-hint" }, composerHint(target, agent, model)));
+  return box;
 }
 
 function composerHint(target, agent, model) {
@@ -825,6 +934,9 @@ function composerHint(target, agent, model) {
   let text = streamHere(target) ? "Esc or Stop ends the reply."
     : S.streams[target] ? "Another chat with this agent is still replying; you can send once it finishes."
     : "Enter to send, Shift+Enter for a new line.";
+  const pics = (S.attachments[target] || []).length;
+  if (pics && readsPictures(model) === false) text += ` ${model} cannot read pictures; choose a model with Vision.`;
+  else if (pics && readsPictures(model) === null) text += ` ${pics} picture${pics === 1 ? "" : "s"} attached; the reply fails if ${model} cannot read pictures.`;
   if (agent) {
     const on = agent.skills.filter(skillById).length;
     text += ` ${agent.config.length} config instruction${agent.config.length === 1 ? "" : "s"} and ${on} skill${on === 1 ? "" : "s"} active.`;
@@ -942,8 +1054,21 @@ function statsText(st) {
   if (st.elapsed) bits.push(`${st.elapsed < 10 ? st.elapsed.toFixed(1) : Math.round(st.elapsed)} s`);
   return bits.join(" \u00b7 ");
 }
+function messagePictures(m) {
+  if (!Array.isArray(m.images) || !m.images.length) return null;
+  return h("div", { class: "msg-pics" }, m.images.map((ref) => {
+    const src = filesUrl(ref.place || SHARED, "raw", ref.path);
+    const img = h("img", { src, alt: ref.path, loading: "lazy" });
+    const a = h("a", { href: src, target: "_blank", rel: "noopener", title: ref.path }, img);
+    img.addEventListener("error", () => fill(a, h("span", { class: "gone" }, ref.path + " (deleted)")), { once: true });
+    return a;
+  }));
+}
 function messageView(m, target, isLast) {
-  if (m.role === "user") return h("div", { class: "msg user" }, String(m.content || ""));
+  if (m.role === "user") {
+    const text = String(m.content || "");
+    return h("div", { class: "msg user" }, messagePictures(m), text || null);
+  }
   const content = String(m.content || "");
   const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: content }];
   const tools = [];
@@ -1005,6 +1130,8 @@ function scrollDown(force) { const t = $("thread"); if (t && (force || nearBotto
 // What the model sees for an earlier message: its text plus a short note of any actions,
 // so it can refer back to files it made.
 function forModel(m) {
+  if (m.role === "user" && Array.isArray(m.images) && m.images.length)
+    return { role: "user", content: String(m.content || ""), images: m.images.map((r) => ({ place: r.place || SHARED, path: r.path })) };
   if (m.role !== "assistant" || !Array.isArray(m.parts)) return { role: m.role, content: String(m.content || "") };
   const steps = m.parts.filter((p) => p.type === "tool" && p.ok).map((p) => {
     const target = p.args && p.args.path ? " " + p.args.path : "";
@@ -1057,7 +1184,12 @@ function exportChat(target) {
   const chat = S.chats[S.current[target]];
   const lines = [`# ${chat ? chatTitle(chat) : targetName(target)}`, "", `${targetName(target)}, exported from Axis on ${new Date().toLocaleString()}.`, ""];
   for (const m of msgs) {
-    if (m.role === "user") { lines.push("## You", "", String(m.content || ""), ""); continue; }
+    if (m.role === "user") {
+      lines.push("## You", "");
+      for (const r of m.images || []) lines.push(`[Picture: ${placeLabel(r.place || SHARED)}/${r.path}]`, "");
+      lines.push(String(m.content || ""), "");
+      continue;
+    }
     lines.push(`## ${target || "Model"}${m.model ? ` (${m.model})` : ""}`, "");
     const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ type: "text", text: String(m.content || "") }];
     for (const p of parts) {
@@ -1075,7 +1207,7 @@ function exportChat(target) {
 async function send(target, { resend = false } = {}) {
   if (S.streams[target] || !ready()) return;
   const msgs = getHistory(target);
-  let text;
+  let text, pictures = [];
   if (resend) {
     while (msgs.length && msgs[msgs.length - 1].role === "assistant") msgs.pop();
     if (!msgs.length) return;
@@ -1083,9 +1215,13 @@ async function send(target, { resend = false } = {}) {
   } else {
     const input = viewing(target) ? $("input") : null;
     text = (input ? input.value : S.drafts[target] || "").trim();
-    if (!text) return;
-    msgs.push({ role: "user", content: text });
+    const waiting = S.attachments[target] || [];
+    if (waiting.some((a) => a.busy)) { toast("Wait for the pictures to finish uploading."); return; }
+    pictures = waiting.map((a) => ({ place: a.place, path: a.path }));
+    if (!text && !pictures.length) return;
+    msgs.push(pictures.length ? { role: "user", content: text, images: pictures } : { role: "user", content: text });
     S.drafts[target] = ""; saveDrafts();
+    S.attachments[target] = []; saveAttachments();
   }
   setHistory(target, msgs);
   delete S.errors[target];
@@ -1177,8 +1313,9 @@ async function send(target, { resend = false } = {}) {
     saved.push({ role: "assistant", content: reply, parts: clipParts(parts), model: stream.model,
       stats: summarize(stream), stopped: aborted || undefined });
   } else if (!resend && saved.length && saved[saved.length - 1].role === "user") {
-    saved.pop();                                    // nothing came back: undo the message and give the text back
+    saved.pop();                                    // nothing came back: undo the message and give the text and pictures back
     if (!(S.drafts[target] || "").trim()) { S.drafts[target] = text; saveDrafts(); }
+    if (pictures.length && !(S.attachments[target] || []).length) { S.attachments[target] = pictures; saveAttachments(); }
   }
   saveChat(stream.chatId, target, saved);
   if (S.chatList) S.chatList = null;               // Past chats re-reads the list next time
@@ -1360,6 +1497,108 @@ function when(iso) {
 }
 const filesUrl = (agent, action, path, extra) =>
   "/api/files/" + encodeURIComponent(agent) + (action ? "/" + action : "") + "?path=" + encodeURIComponent(path || "") + (extra || "");
+
+/* ------------------------------------------------------------ pictures
+   Shared by the Images tab (picture to edit) and chats (pictures for models that read them). */
+const PICTURE_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+const MODEL_READS_RE = /\.(png|jpe?g)$/i;    // what both Ollama and llama.cpp read without conversion
+const MAX_PICTURE_SIDE = 2048;
+
+// A picture as a PNG or JPEG Blob no larger than maxSide on its longest side. Files that already
+// fit are returned as they are; anything else (WebP, GIF, BMP, very large photos) is redrawn.
+async function normalizePicture(blob, name, maxSide = MAX_PICTURE_SIDE) {
+  let bmp;
+  try { bmp = await createImageBitmap(blob); }
+  catch { throw new Error(`${name} is not a picture this browser can open.`); }
+  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const isJpeg = /jpe?g$/i.test(blob.type) || /\.jpe?g$/i.test(name);
+  if (scale === 1 && (isJpeg || /png$/i.test(blob.type) || /\.png$/i.test(name))) {
+    bmp.close && bmp.close();
+    return { blob, name: name.replace(/\.jpeg$/i, ".jpg"), width: bmp.width, height: bmp.height };
+  }
+  const w = Math.max(1, Math.round(bmp.width * scale)), hgt = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = hgt;
+  canvas.getContext("2d").drawImage(bmp, 0, 0, w, hgt);
+  bmp.close && bmp.close();
+  const type = isJpeg ? "image/jpeg" : "image/png";
+  const out = await new Promise((resolve) => canvas.toBlob(resolve, type, 0.92));
+  if (!out) throw new Error(`Could not convert ${name}.`);
+  const stem = name.replace(/\.[^.]+$/, "") || "picture";
+  return { blob: out, name: stem + (isJpeg ? ".jpg" : ".png"), width: w, height: hgt };
+}
+
+// Saves a Blob into dir of a folder (made when missing). Returns its path there; names never clash.
+async function uploadPicture(placeName, dir, name, blob) {
+  const res = await fetch(filesUrl(placeName, "upload", dir, "&mkdirs=1&name=" + encodeURIComponent(name)),
+    { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: blob });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d.error || `Upload failed (${res.status}).`);
+  return d.path;
+}
+
+// A picture from the computer, converted where needed and saved in dir. Returns { place, path }.
+async function savePicture(file, placeName, dir) {
+  if (!file.type.startsWith("image/") && !PICTURE_RE.test(file.name)) throw new Error(`${file.name} is not a picture.`);
+  const pic = await normalizePicture(file, file.name || "picture.png");
+  return { place: placeName, path: await uploadPicture(placeName, dir, pic.name, pic.blob) };
+}
+
+// A picture already in Axis's folders, made readable by chat models (PNG or JPEG) by saving a converted copy.
+async function readablePicture(ref, placeName, dir) {
+  if (MODEL_READS_RE.test(ref.path)) return ref;
+  const res = await fetch(filesUrl(ref.place, "raw", ref.path));
+  if (!res.ok) throw new Error(`Could not open ${ref.path}.`);
+  const name = ref.path.split("/").pop();
+  const pic = await normalizePicture(await res.blob(), name);
+  return { place: placeName, path: await uploadPicture(placeName, dir, pic.name, pic.blob) };
+}
+
+const placeLabel = (n) => n === SHARED ? "Shared folder" : n;
+
+// A dialog for choosing a picture from the shared folder or any agent's folder.
+// Resolves to { place, path }, or null when closed without choosing.
+function pickPicture(title, startPlace) {
+  return new Promise((resolve) => {
+    const places = [SHARED, ...S.agents.map((a) => a.name)];
+    const state = { place: places.includes(startPlace) ? startPlace : SHARED, dir: "" };
+    let chosen = null;
+    const body = h("div", { class: "picker-body" });
+    const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
+    const sel = h("select", { "aria-label": "Folder", onchange: (e) => { state.place = e.target.value; state.dir = ""; load(); } },
+      places.map((n) => { const o = h("option", { value: n }, placeLabel(n)); o.selected = n === state.place; return o; }));
+    const dlg = h("dialog", { class: "picker", "aria-label": title },
+      h("div", { class: "picker-inner" },
+        h("div", { class: "picker-head" }, h("h3", {}, title), h("label", { class: "hint", style: "margin:0;display:flex;gap:6px;align-items:center" }, "From", sel),
+          h("button", { class: "btn small", onclick: () => dlg.close() }, "Cancel")),
+        crumbs, body));
+    dlg.addEventListener("close", () => { dlg.remove(); resolve(chosen); });
+    const open = (dir) => { state.dir = dir; load(); };
+    async function load() {
+      const { place: where, dir } = state;
+      fill(crumbs, h("button", { onclick: () => open("") }, where === SHARED ? "shared" : where),
+        (dir ? dir.split("/") : []).map((seg, i, all) => [h("span", {}, "/"), h("button", { onclick: () => open(all.slice(0, i + 1).join("/")) }, seg)]));
+      fill(body, h("p", { class: "hint" }, "Loading\u2026"));
+      let data;
+      try { data = await api(filesUrl(where, "", dir)); }
+      catch (e) { return fill(body, h("p", { class: "form-error" }, e.message)); }
+      if (where !== state.place || dir !== state.dir) return;
+      const dirs = data.entries.filter((e) => e.type === "dir");
+      const pics = data.entries.filter((e) => e.type === "file" && PICTURE_RE.test(e.name))
+        .sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
+      fill(body,
+        dirs.length || dir ? h("div", { class: "picker-dirs" },
+          dir ? h("button", { class: "btn small", onclick: () => open(dir.split("/").slice(0, -1).join("/")) }, "Up one folder") : null,
+          dirs.map((e) => h("button", { class: "btn small", onclick: () => open(e.path) }, icon("dir"), " ", e.name))) : null,
+        pics.length ? h("div", { class: "picker-grid" }, pics.map((e) => h("button", { title: e.path,
+          onclick: () => { chosen = { place: where, path: e.path }; dlg.close(); } },
+          h("img", { src: filesUrl(where, "raw", e.path), alt: e.name, loading: "lazy" }), h("small", {}, e.name))))
+          : h("p", { class: "hint" }, "No pictures in this folder." + (dirs.some((e) => e.name === "images") ? " Pictures made in Axis are in images." : "")));
+    }
+    document.body.append(dlg);
+    dlg.showModal();
+    load();
+  });
+}
 
 function parseCsv(text, limit) {
   const rows = []; let row = [], cell = "", q = false;
@@ -1821,6 +2060,7 @@ function modelCard(m, actions) {
   if (!m.running && m.modified) add("Installed", when(m.modified));
   add("From", m.source);
   add("Model file", m.model_path);
+  add("Vision file", m.mmproj);
   add("Server build", m.build);
   add("License", m.license);
 
@@ -1876,7 +2116,8 @@ function chatCards(d, m) {
     const on = lm.running && lm.ready;
     const card = { ...(info || {}), name: lm.name, engine: "llama.cpp", running: on, disk_size: lm.size, parts: lm.parts,
       model_path: lm.file, source: lm.repo ? "huggingface.co/" + lm.repo : null, adopted: lm.adopted,
-      missing_parts: lm.missing_parts, crash_log: lm.crashed };
+      missing_parts: lm.missing_parts, crash_log: lm.crashed, mmproj: lm.mmproj };
+    if (!(info && info.capabilities && info.capabilities.length) && lm.vision) card.capabilities = ["vision"];
     cards.push({ on, name: lm.name, el: modelCard(card, modelActions("llamacpp", lm.id, on, lm.alias, card.capabilities,
       `Delete ${lm.name}? Its file${lm.parts > 1 ? "s" : ""} (${size(lm.size)}) ${lm.parts > 1 ? "are" : "is"} removed from disk. You can install it again later.`,
       m.llamacpp.binary ? null : "llama-server was not found. Set its path under Engine settings.")) });
@@ -2146,6 +2387,40 @@ function previewImg(owner, src, width, height, alt) {
 }
 const imageUrl = (place, path, dl) => filesUrl(place, "raw", path, dl ? "&download=1" : "");
 
+/* Editing a picture (image to image). The result keeps the source's shape at about the model's
+   usual number of pixels unless a size is set; this matches images.fit_size in Axis. */
+const sourceSizes = {};   // "place:path" -> [width, height] of pictures shown as a source
+const sourceKey = (ref) => ref ? ref.place + ":" + ref.path : "";
+function fitSize(w, hgt, area) {
+  const scale = Math.sqrt(area / (w * hgt));
+  let a = w * scale, b = hgt * scale;
+  const big = Math.max(a, b);
+  if (big > 2048) { a = a * 2048 / big; b = b * 2048 / big; }
+  const snap = (v) => Math.min(2048, Math.max(64, Math.round(v / 64) * 64));
+  return [snap(a), snap(b)];
+}
+function editSize(f) {
+  const src = sourceSizes[sourceKey(f.source)], m = imageModel(f.model);
+  if (!src || !m) return null;
+  return fitSize(src[0], src[1], (m.width || 512) * (m.height || 512));
+}
+function setSource(ref) {
+  const f = S.imageForm;
+  f.mode = "edit"; f.source = ref; saveImageForm();
+  if (S.view.kind === "images") renderImages();
+}
+async function uploadSource(file) {
+  if (!file) return;
+  toast(`Uploading ${file.name}\u2026`);
+  try { setSource(await savePicture(file, SHARED, "uploads")); toast("Picture ready to edit"); }
+  catch (e) { toast(e.message); }
+}
+// "shared:uploads/cat.png" (as saved in a picture's record) -> { place, path }
+function parseSource(text) {
+  const i = typeof text === "string" ? text.indexOf(":") : -1;
+  return i > 0 ? { place: text.slice(0, i), path: text.slice(i + 1) } : null;
+}
+
 function renderImages() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Images"));
   if (!S.images) {
@@ -2203,13 +2478,70 @@ function renderImages() {
     h("option", { value: "" }, "Model default"), st.samplers.map((x) => { const o = h("option", { value: x }, x); o.selected = x === f.sampler; return o; }));
   const seed = h("input", { type: "number", min: -1, step: 1, value: f.seed ?? -1, "aria-label": "Seed", oninput: set("seed", num) });
 
+  const editing = f.mode === "edit";
+  if (editing) prompt.placeholder = "the same scene in winter, snow on the roofs";
+  const modeBtn = (mode, label) => h("button", { type: "button", "aria-pressed": f.mode === mode ? "true" : "false", disabled: !!job,
+    onclick: () => { f.mode = mode; saveImageForm(); renderImages(); } }, label);
+
+  let sourceField = null, strengthField = null;
+  if (editing) {
+    const filePick = h("input", { type: "file", accept: "image/*", hidden: true, onchange: (e) => { uploadSource(e.target.files[0]); e.target.value = ""; } });
+    const src = f.source;
+    let shown = null;
+    if (src) {
+      const img = h("img", { src: imageUrl(src.place, src.path), alt: "Picture to edit" });
+      img.addEventListener("load", () => {
+        const key = sourceKey(src), had = sourceSizes[key];
+        sourceSizes[key] = [img.naturalWidth, img.naturalHeight];
+        if (!had && f.matchSource && S.view.kind === "images") renderImages();   // show the size it will be made at
+      }, { once: true });
+      img.addEventListener("error", () => fill(box, h("p", { class: "form-error" }, `${src.path} is no longer there. Choose another picture.`),
+        h("div", { class: "fb-actions" }, ...buttons())), { once: true });
+      shown = [img, h("p", {}, `${placeLabel(src.place)} / ${src.path}`)];
+    }
+    const buttons = () => [
+      h("button", { class: "btn small", disabled: !!job, onclick: () => filePick.click() }, "Upload"),
+      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose from Files"),
+      src ? h("button", { class: "btn small", disabled: !!job, onclick: () => { f.source = null; saveImageForm(); renderImages(); } }, "Clear") : null];
+    const box = h("div", { class: "ig-source",
+      ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
+      ondragleave: (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove("drop"); },
+      ondrop: (e) => { e.preventDefault(); box.classList.remove("drop"); if (!job) uploadSource(e.dataTransfer.files[0]); } },
+      shown || h("p", {}, "Drop a picture here, upload one, or choose one from Files."),
+      h("div", { class: "fb-actions" }, ...buttons()), filePick);
+    sourceField = h("div", { class: "field" }, h("label", { class: "lbl" }, "Picture to edit"), box);
+
+    const range = h("input", { type: "range", min: 0.05, max: 1, step: 0.05, value: f.strength ?? 0.6, "aria-label": "Strength" });
+    const exact = h("input", { type: "number", min: 0.05, max: 1, step: 0.05, value: f.strength ?? 0.6, "aria-label": "Strength value" });
+    const onStrength = (v) => { const n = Math.min(1, Math.max(0.05, Number(v) || 0.6)); f.strength = n; range.value = n; exact.value = n; saveImageForm(); };
+    range.addEventListener("input", () => onStrength(range.value));
+    exact.addEventListener("change", () => onStrength(exact.value));
+    strengthField = h("div", { class: "field" }, h("label", { class: "lbl" }, "Strength"), h("div", { class: "ig-strength" }, range, exact),
+      h("p", { class: "hint", style: "margin:4px 0 0" }, "How much may change. Low keeps the picture and alters details; high follows the prompt "
+        + "more and keeps less. About strength \u00d7 steps steps run, so turbo models with few steps may need more steps here."));
+  }
+
+  const madeAt = editing && f.matchSource ? editSize(f) : null;
+  const sizeField = editing && f.matchSource
+    ? h("div", { class: "field" }, h("label", { class: "lbl" }, "Resolution"),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: true, onchange: () => { f.matchSource = false; saveImageForm(); renderImages(); } }),
+          "Keep the picture\u2019s shape"),
+        h("p", { class: "hint", style: "margin:4px 0 0" }, madeAt ? `Made at ${madeAt[0]} \u00d7 ${madeAt[1]}, about ${model ? model.name + "\u2019s" : "the model\u2019s"} usual size.`
+          : "Made at about the model\u2019s usual size, in the picture\u2019s shape."))
+    : h("div", { class: "field" }, h("label", { class: "lbl" }, "Resolution"), preset,
+        h("div", { class: "ig-pair", style: "margin-top:6px" }, w, h("span", {}, "\u00d7"), hh),
+        h("button", { class: "link", style: "margin-top:4px", onclick: () => { [w.value, hh.value] = [hh.value, w.value]; onSize(); } }, "Swap width and height"),
+        editing ? h("label", { class: "check", style: "display:flex;margin-top:6px" }, h("input", { type: "checkbox", checked: false,
+          onchange: () => { f.matchSource = true; saveImageForm(); renderImages(); } }), "Keep the picture\u2019s shape") : null);
+
   const form = h("div", { class: "ig-form" },
-    h("div", { class: "field" }, h("label", { class: "lbl", for: "ig-prompt" }, "Prompt"), prompt),
+    h("div", { class: "ig-mode", role: "group", "aria-label": "What to do" }, modeBtn("create", "Create"), modeBtn("edit", "Edit a picture")),
+    sourceField,
+    h("div", { class: "field" }, h("label", { class: "lbl", for: "ig-prompt" }, editing ? "Describe the result" : "Prompt"), prompt),
     h("details", { class: "field", open: !!f.negative_prompt }, h("summary", { class: "lbl", style: "cursor:pointer" }, "Negative prompt"),
       h("p", { class: "hint", style: "margin:4px 0" }, "Things to keep out. Ignored by models run at CFG scale 1 (most turbo models)."), negative),
-    h("div", { class: "field" }, h("label", { class: "lbl" }, "Resolution"), preset,
-      h("div", { class: "ig-pair", style: "margin-top:6px" }, w, h("span", {}, "\u00d7"), hh),
-      h("button", { class: "link", style: "margin-top:4px", onclick: () => { [w.value, hh.value] = [hh.value, w.value]; onSize(); } }, "Swap width and height")),
+    strengthField,
+    sizeField,
     h("div", { class: "ig-two" },
       h("div", { class: "field" }, h("label", { class: "lbl" }, "Steps"),
         h("input", { type: "number", min: 1, max: 150, value: f.steps, oninput: set("steps", num) })),
@@ -2222,9 +2554,11 @@ function renderImages() {
     model ? h("button", { class: "link", onclick: () => { applyModelDefaults(f); saveImageForm(); renderImages(); } }, `Reset to ${model.name}\u2019s defaults`) : null,
     h("div", { class: "ig-go" },
       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
-          : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0, onclick: generateImage }, "Generate")),
+          : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0 || (editing && !f.source), onclick: generateImage },
+              editing ? "Edit picture" : "Generate")),
     h("div", { style: "margin-top:8px" }, imagePreviewToggle(!!job)),
-    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images."),
+    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images"
+      + (editing ? "; the original is left as it is." : ".")),
     model && model.missing.length ? h("p", { class: "form-error" }, `Missing files: ${model.missing.join(", ")}. Fix the paths on the Models page.`) : null);
 
   const main = h("div", { class: "ig-main" }, h("div", { id: "ig-stage" }), h("div", { id: "ig-gallery" }));
@@ -2257,12 +2591,14 @@ function drawStage() {
     h("h3", {}, "No picture yet"), h("p", {}, "Write a prompt and click Generate. The first picture takes longer while sd-cli loads the model."))));
   const meta = [sel.model, sel.width && `${sel.width}\u00d7${sel.height}`, sel.steps && `${sel.steps} steps`,
     sel.cfg_scale !== undefined && `CFG ${sel.cfg_scale}`, sel.sampler, sel.seed !== undefined && `seed ${sel.seed}`,
-    sel.seconds && `${sel.seconds} s`, when(sel.created)].filter(Boolean).join(" \u00b7 ");
+    sel.strength !== undefined && `strength ${sel.strength}`, sel.seconds && `${sel.seconds} s`, when(sel.created)].filter(Boolean).join(" \u00b7 ");
   const reuse = (withSeed) => {
     const f = S.imageForm;
     if (sel.model_id && imageModel(sel.model_id)) f.model = sel.model_id;
-    for (const k of ["prompt", "negative_prompt", "width", "height", "steps", "cfg_scale", "sampler"]) if (sel[k] !== undefined) f[k] = sel[k];
+    for (const k of ["prompt", "negative_prompt", "width", "height", "steps", "cfg_scale", "sampler", "strength"]) if (sel[k] !== undefined) f[k] = sel[k];
     f.seed = withSeed && sel.seed !== undefined ? sel.seed : -1;
+    const from = parseSource(sel.edited_from);
+    if (from) { f.mode = "edit"; f.source = from; f.matchSource = false; } else f.mode = "create";
     saveImageForm(); renderImages();
   };
   fill(box, h("div", { class: "ig-stage" },
@@ -2270,7 +2606,10 @@ function drawStage() {
     sel.prompt ? h("p", { class: "ig-prompt" }, sel.prompt) : null,
     sel.negative_prompt ? h("p", { class: "ig-meta" }, "Negative: " + sel.negative_prompt) : null,
     h("p", { class: "ig-meta" }, meta || sel.file),
+    sel.edited_from ? h("p", { class: "ig-meta" }, "Edited from ",
+      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (r) openInFiles(r.place, r.path, true); } }, sel.edited_from.replace(/^_shared:/, "shared/").replace(":", "/"))) : null,
     h("div", { class: "fb-actions", style: "margin:10px 0 0" },
+      h("button", { class: "btn small", title: "Use this picture as the start of a new one", onclick: () => setSource({ place: sel.place, path: sel.path }) }, "Edit this picture"),
       sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
       sel.seed !== undefined ? h("button", { class: "btn small", title: "Same settings and seed, so you can adjust the prompt", onclick: () => reuse(true) }, "Reuse with seed") : null,
       h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
@@ -2310,10 +2649,14 @@ async function generateImage() {
   if (S.imageJob) return;
   const f = imageForm();
   const prompt = (($("ig-prompt") || {}).value ?? f.prompt ?? "").trim();
-  if (!prompt) { toast("Write a prompt first."); return; }
+  if (!prompt) { toast(f.mode === "edit" ? "Describe what the edited picture should look like." : "Write a prompt first."); return; }
+  const editing = f.mode === "edit";
+  if (editing && !f.source) { toast("Choose a picture to edit first."); return; }
+  const keepShape = editing && f.matchSource;
+  const shape = keepShape ? editSize(f) : null;
   f.prompt = prompt; saveImageForm();
   const job = S.imageJob = { controller: new AbortController(), started: Date.now(), prompt, phase: "", progress: null, log: "", queued: false,
-    preview: null, width: f.width, height: f.height };
+    preview: null, width: shape ? shape[0] : f.width, height: shape ? shape[1] : f.height };
   S.imageError = null;
   streamsChanged();
   if (S.view.kind === "images") renderImages();
@@ -2324,6 +2667,10 @@ async function generateImage() {
   try {
     const body = { place: SHARED, model: f.model, prompt, negative_prompt: f.negative_prompt || "", width: f.width, height: f.height,
       steps: f.steps, cfg_scale: f.cfg_scale, sampler: f.sampler || "", seed: f.seed ?? -1, preview: S.imagePreview };
+    if (editing) {
+      body.init_image = f.source; body.strength = f.strength ?? 0.6;
+      if (keepShape) { delete body.width; delete body.height; }   // Axis keeps the source's shape
+    }
     const res = await fetch("/api/images/generate", { method: "POST", signal: job.controller.signal,
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
@@ -2672,6 +3019,9 @@ window.addEventListener("beforeunload", (e) => {
   const form = recall("axis.imageForm", null);
   if (form && typeof form === "object" && !Array.isArray(form)) Object.assign(S.imageForm, form);
   S.imagePreview = recall("axis.imagePreview", true) !== false;
+  const attached = recall("axis.attachments", {});
+  if (attached && typeof attached === "object" && !Array.isArray(attached))
+    for (const [k, v] of Object.entries(attached)) if (Array.isArray(v)) S.attachments[k] = v.filter((a) => a && typeof a.path === "string").slice(0, MAX_ATTACH);
   await Promise.all([refreshStatus(), loadAgents(), loadSkills()]);
   await migrateOldChats();
   renderMain();

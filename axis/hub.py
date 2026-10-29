@@ -323,6 +323,29 @@ def pick_gguf(files: List[Dict[str, Any]], ref: Ref, choice: str = "") -> List[D
                      [_option(_split_parts(files, f)) for f in cands])
 
 
+MMPROJ_PREFERENCE = ("f16", "bf16", "q8_0", "f32")
+
+
+def mmproj_rank(name: str) -> tuple:
+    """Sort key for vision projector files: f16 first (what llama-server -hf picks), then bf16, Q8_0, F32."""
+    low = name.lower()
+    for i, tag in enumerate(MMPROJ_PREFERENCE):
+        if re.search(rf"(^|[-._]){tag}([-._]|$)", low):
+            return (i, low)
+    return (len(MMPROJ_PREFERENCE), low)
+
+
+def pick_mmproj(files: List[Dict[str, Any]], model_path: str) -> Optional[Dict[str, Any]]:
+    """The vision projector (mmproj) that goes with a chat model: in the model's folder of the
+    repository, preferring f16. None when the repository has none (a text-only model)."""
+    folder = PurePosixPath(model_path).parent
+    cands = [f for f in files if PurePosixPath(f["path"]).parent == folder
+             and f["path"].lower().endswith(".gguf") and "mmproj" in PurePosixPath(f["path"]).name.lower()]
+    if not cands:
+        return None
+    return min(cands, key=lambda f: mmproj_rank(PurePosixPath(f["path"]).name))
+
+
 def pick_image_file(files: List[Dict[str, Any]], ref: Ref, choice: str = "") -> Dict[str, Any]:
     """One weights file (checkpoint, diffusion model, VAE or text encoder) for stable-diffusion.cpp."""
     if choice:

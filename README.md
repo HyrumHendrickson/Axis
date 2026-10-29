@@ -20,6 +20,8 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **Skills** let agents run Python, read and write files, search the web, read Wikipedia, and generate images.
 - **Past chats** are saved automatically and can be resumed at any time.
 - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
+- **Edit a picture** on the Images tab: upload one or choose one from Files, describe the result, and set how much may change. It uses the image models you already have (image to image).
+- **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
 - **Files** tab lets you browse, preview, upload to, and download from every agent's folder.
 - **Models** tab installs, starts, stops, and deletes chat and image models, and shows memory use, context size, and capabilities for each.
 

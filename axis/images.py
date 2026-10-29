@@ -21,6 +21,13 @@ makes with the generate_image action go to images/ in that agent's own folder.
 Each images/ folder keeps a hidden index (.axis-images.json) with the prompt and
 settings of every picture, for the gallery.
 
+Editing a picture (image to image): when a request names an init image, the same
+model starts from that picture instead of from noise. strength (0 to 1) sets how far
+it may move from it: low keeps the picture and changes details, high mostly follows
+the prompt. sd-cli gets --init-img and --strength; sd-server gets init_image and
+strength (or /sdapi/v1/img2img on older builds). Without a width and height the
+result keeps the source's shape, at about the model's usual number of pixels.
+
 Step previews: when asked, Axis shows the picture as it forms. stable-diffusion.cpp
 makes each preview with its "proj" method, a cheap linear projection of the latent
 to colours at 1/8 of the final size, so it costs almost nothing next to a sampling
@@ -55,6 +62,9 @@ TIMEOUT = float(os.environ.get("AXIS_IMAGE_TIMEOUT", "1800"))
 MAX_PROMPT = 4000
 MIN_SIZE, MAX_SIZE = 64, 2048
 MAX_STEPS = 150
+INIT_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+MAX_INIT_BYTES = 50 * 1024 * 1024
+DEFAULT_STRENGTH = 0.6
 
 FILE_FIELDS = ("model", "diffusion_model", "llm", "clip_l", "t5xxl", "vae")
 FILE_FLAGS = {
@@ -460,6 +470,8 @@ def build_command(cli: Path, model: Dict[str, Any], params: Dict[str, Any], out_
         cmd += ["--sampling-method", params["sampler"]]
     if model.get("scheduler"):
         cmd += ["--scheduler", model["scheduler"]]
+    if params.get("init_image"):
+        cmd += ["--init-img", str(params["init_image"]), "--strength", f"{params['strength']:g}"]
     if preview_file is not None:  # before extra_args, so a model's own preview settings still win
         cmd += ["--preview", "proj", "--preview-path", str(preview_file), "--preview-interval", "1"]
     cmd += split_args(model.get("extra_args") or "")
@@ -487,6 +499,99 @@ def resolve_params(model: Dict[str, Any], raw: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
+# ------------------------------------------------------------- image to image
+
+
+def image_size(path: Path) -> Optional[tuple]:
+    """(width, height) of a PNG, JPEG, WebP, GIF or BMP file, read from its header; None if unknown."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(64)
+            if head.startswith(b"\x89PNG\r\n\x1a\n") and head[12:16] == b"IHDR":
+                return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+            if head[:6] in (b"GIF87a", b"GIF89a"):
+                return int.from_bytes(head[6:8], "little"), int.from_bytes(head[8:10], "little")
+            if head[:2] == b"BM" and len(head) >= 26:
+                return int.from_bytes(head[18:22], "little", signed=True), abs(int.from_bytes(head[22:26], "little", signed=True))
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                kind = head[12:16]
+                if kind == b"VP8 " and head[23:26] == b"\x9d\x01\x2a":
+                    return int.from_bytes(head[26:28], "little") & 0x3FFF, int.from_bytes(head[28:30], "little") & 0x3FFF
+                if kind == b"VP8L" and head[20] == 0x2F:
+                    b = int.from_bytes(head[21:25], "little")
+                    return (b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1
+                if kind == b"VP8X":
+                    return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
+                return None
+            if head[:2] != b"\xff\xd8":
+                return None
+            f.seek(2)
+            while True:  # JPEG: walk the segments to the frame header (SOFn)
+                b = f.read(1)
+                while b and b != b"\xff":
+                    b = f.read(1)
+                while b == b"\xff":
+                    b = f.read(1)
+                if not b:
+                    return None
+                marker = b[0]
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    continue
+                length = int.from_bytes(f.read(2), "big")
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    data = f.read(5)
+                    return int.from_bytes(data[3:5], "big"), int.from_bytes(data[1:3], "big")
+                if length < 2:
+                    return None
+                f.seek(length - 2, 1)
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def fit_size(src_w: int, src_h: int, area: int) -> tuple:
+    """A width and height with the source's shape and about `area` pixels, in multiples of 64."""
+    if src_w <= 0 or src_h <= 0:
+        raise ImageError("The source picture has no size.")
+    scale = (area / (src_w * src_h)) ** 0.5
+    w, h = src_w * scale, src_h * scale
+    big = max(w, h)
+    if big > MAX_SIZE:
+        w, h = w * MAX_SIZE / big, h * MAX_SIZE / big
+    snap = lambda v: int(min(MAX_SIZE, max(MIN_SIZE, round(v / 64) * 64)))  # noqa: E731
+    return snap(w), snap(h)
+
+
+def check_init_image(path: Path) -> Path:
+    """The picture to edit, checked: an existing image file Axis can send to stable-diffusion.cpp."""
+    if not path.is_file():
+        raise ImageError(f"The picture to edit ({path.name}) does not exist.")
+    if path.suffix.lower() not in INIT_TYPES:
+        raise ImageError(f"{path.name} cannot be edited. Use a PNG, JPEG, WebP or BMP picture.")
+    if path.stat().st_size > MAX_INIT_BYTES:
+        raise ImageError(f"{path.name} is larger than {MAX_INIT_BYTES // (1024 * 1024)} MB.")
+    return path
+
+
+def edit_params(model: Dict[str, Any], raw: Dict[str, Any], init_image: Path) -> Dict[str, Any]:
+    """resolve_params for an edit: adds the strength and, when no size is given, keeps the source's shape."""
+    raw = dict(raw)
+    if raw.get("width") in (None, "") or raw.get("height") in (None, ""):
+        size = image_size(init_image)
+        if size:
+            area = int(model.get("width") or 512) * int(model.get("height") or 512)
+            raw["width"], raw["height"] = fit_size(size[0], size[1], area)
+    params = resolve_params(model, raw)
+    params["strength"] = _float(raw.get("strength"), "Strength", 0.01, 1.0, DEFAULT_STRENGTH)
+    params["init_image"] = str(init_image)
+    return params
+
+
+def _image_b64(path: Path) -> str:
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+            ".bmp": "image/bmp"}.get(path.suffix.lower(), "application/octet-stream")
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+
 def _file_name(prompt: str) -> str:
     words = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40].strip("-") or "image"
     return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{words}"
@@ -500,8 +605,12 @@ _LOCK = threading.Lock()  # one picture at a time: they compete for the same GPU
 
 
 def generate(raw: Dict[str, Any], folder: Path, source: str = "",
-             on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False) -> Dict[str, Any]:
+             on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False,
+             init_image: Optional[Path] = None, init_name: str = "") -> Dict[str, Any]:
     """Make one picture in folder/images. Returns its index record (with "path").
+
+    With init_image the picture is an edit of that file (image to image); init_name is
+    how the source is shown in the gallery (for example "shared:uploads/cat.png").
 
     on_event receives {"queued": True}, {"phase": text}, {"progress": {"step", "steps"}}
     and {"log": line}; with preview=True also {"preview": {"step", "steps", "image"}},
@@ -515,7 +624,10 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     if model["missing"]:
         raise ImageError(f"Files for {model['name']} are missing: {', '.join(model['missing'])}. "
                          "Check the paths on the Models page.")
-    params = resolve_params(model, raw)
+    if init_image is not None:
+        params = edit_params(model, raw, check_init_image(init_image))
+    else:
+        params = resolve_params(model, raw)
     cli = find_cli()
     if cli is None and not manager.image_server_url(model["id"]) and manager.sd_server_binary() is None:
         raise ImageError("stable-diffusion.cpp is not installed. Install it on the Models page under Image models.")
@@ -580,8 +692,11 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     finally:
         _LOCK.release()
 
+    shown = {k: v for k, v in params.items() if k != "init_image"}   # the full path stays private
+    if init_image is not None:
+        shown["edited_from"] = init_name or init_image.name
     record = {"file": out_file.name, "path": f"{IMAGES_DIR}/{out_file.name}", "model": model["name"],
-              "model_id": model["id"], **params, "seconds": seconds, "source": source,
+              "model_id": model["id"], **shown, "seconds": seconds, "source": source,
               "created": datetime.now().isoformat(timespec="seconds")}
     _add_to_index(out_dir, record)
     return record
@@ -650,6 +765,9 @@ def _generate_with_server(url: str, params: Dict[str, Any], out_file: Path, emit
     body = {"prompt": params["prompt"], "negative_prompt": params.get("negative_prompt") or "",
             "width": params["width"], "height": params["height"], "seed": params["seed"], "batch_count": 1,
             "sample_params": sample, "preview": "proj", "preview_interval": 1, "output_format": "png"}
+    if params.get("init_image"):
+        body["init_image"] = _image_b64(Path(params["init_image"]))
+        body["strength"] = params["strength"]
     emit({"phase": "Sending the request to sd-server"})
     deadline = time.time() + TIMEOUT
     job = None
@@ -730,11 +848,16 @@ def _generate_with_sdapi(url: str, params: Dict[str, Any], out_file: Path, emit,
         body["sampler_name"] = params["sampler"]
     if params.get("scheduler"):
         body["scheduler"] = params["scheduler"]
+    route = "/sdapi/v1/txt2img"
+    if params.get("init_image"):
+        body["init_images"] = [_image_b64(Path(params["init_image"]))]
+        body["denoising_strength"] = params["strength"]
+        route = "/sdapi/v1/img2img"
     result: Dict[str, Any] = {}
 
     def call() -> None:
         try:
-            result["data"] = _server_json(url + "/sdapi/v1/txt2img", body, timeout=TIMEOUT)
+            result["data"] = _server_json(url + route, body, timeout=TIMEOUT)
         except urllib.error.HTTPError as exc:
             result["error"] = f"sd-server could not make the picture: {_server_error(exc)}"
         except Exception as exc:

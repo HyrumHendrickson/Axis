@@ -10,7 +10,7 @@ Image models (stable-diffusion.cpp)
     install downloads them all and sets the model up.
 
 Chat models (llama.cpp)
-    llama3.2:1b, llama3.2:3b, llama3.1:8b, qwen3:4b, qwen3:8b
+    llama3.2:1b, llama3.2:3b, llama3.1:8b, qwen3:4b, qwen3:8b, gemma3:4b (reads pictures)
     These map to GGUF repositories on Hugging Face, so the names typed for Ollama
     also work with llama.cpp.
 
@@ -91,8 +91,10 @@ CHAT: List[Dict[str, Any]] = [
      "description": "Strong for its size, with thinking."},
     {"name": "qwen3:8b", "ref": "Qwen/Qwen3-8B-GGUF:Q4_K_M", "size": "5.0 GB",
      "description": "Strong all-round model, with thinking."},
+    {"name": "gemma3:4b", "ref": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "size": "3.3 GB",
+     "description": "Reads pictures you attach in chats (installs its vision file too)."},
 ]
-CHAT_ALIASES = {"llama3.2": "llama3.2:3b", "llama3.1": "llama3.1:8b", "llama3": "llama3.1:8b", "qwen3": "qwen3:8b",
+CHAT_ALIASES = {"gemma3": "gemma3:4b", "gemma3:latest": "gemma3:4b", "llama3.2": "llama3.2:3b", "llama3.1": "llama3.1:8b", "llama3": "llama3.1:8b", "qwen3": "qwen3:8b",
                 "llama3.2:latest": "llama3.2:3b", "llama3.1:latest": "llama3.1:8b", "qwen3:latest": "qwen3:8b"}
 
 

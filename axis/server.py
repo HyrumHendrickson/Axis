@@ -23,6 +23,7 @@ Routes:
   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
   POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
+                                            (&mkdirs=1 makes the folder first when it is missing)
   POST   /api/files/<name>/mkdir?path=dir   make a folder
   DELETE /api/files/<name>?path=x           delete a file or folder
   GET    /api/skills                        list skills (built-in and custom)
@@ -31,6 +32,8 @@ Routes:
   PUT    /api/skills/<id>                   update a custom skill
   DELETE /api/skills/<id>                   delete a custom skill (and remove it from agents)
   POST   /api/chat                          stream a reply as newline-delimited JSON
+                                            (a user message may carry "images": [{place, path}] for
+                                            models that read pictures)
   GET    /api/chats                         saved chats (newest first, without messages)
   GET    /api/chats/<id>                    one saved chat with its messages
   PUT    /api/chats/<id>                    create or replace a saved chat
@@ -43,7 +46,8 @@ Routes:
   DELETE /api/images/models/<id>            remove an image model (its files are not touched)
   GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
-                                            ("preview": true also streams each step as a small picture)
+                                            ("preview": true also streams each step as a small picture;
+                                            "init_image": {place, path} and "strength" edit that picture)
   GET    /api/manage                        engines, installed models, what is running, and jobs
   POST   /api/manage/install                install a model {engine, name, choice?, role?, target?}
                                             (answers {choose: [...]} when the user must pick a file;
@@ -83,6 +87,9 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PREVIEW = 512 * 1024
+CHAT_IMAGE_TYPES = {".png", ".jpg", ".jpeg"}   # what both Ollama and llama.cpp read
+MAX_CHAT_IMAGE = 20 * 1024 * 1024
+CHAT_IMAGES_SENT = 4                            # only the newest pictures are sent again with each message
 HIDDEN = set(tools.HIDDEN_NAMES)
 _PAGE: Optional[bytes] = None
 
@@ -271,6 +278,53 @@ def file_preview(agent: "Place", rel: str) -> Dict[str, Any]:
             except UnicodeDecodeError:
                 return {**info, "kind": "binary"}
     return {**info, "kind": "text", "text": text, "truncated": truncated}
+
+
+def image_ref(ref: Any, label: str = "picture") -> "tuple[Place, Path]":
+    """A {place, path} reference to an image file inside an agent's folder or the shared folder."""
+    if not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not ref["path"].strip():
+        raise agents.AgentError(f"Choose a {label}.")
+    where = place(str(ref.get("place") or SHARED_NAME))
+    return where, file_target(where, ref["path"])
+
+
+def attach_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Swap each message's {place, path} image references for the files themselves.
+
+    Only the newest CHAT_IMAGES_SENT pictures are sent; older ones, and files that are
+    gone or cannot be read by the model servers, become a short note in the text.
+    """
+    budget = CHAT_IMAGES_SENT
+    out: List[Dict[str, Any]] = []
+    for m in reversed(messages):
+        refs = m.get("images")
+        if not refs:
+            out.append(m)
+            continue
+        kept: List[Path] = []
+        notes: List[str] = []
+        for ref in refs:
+            name = str(ref.get("path") or "")
+            if budget <= 0:
+                notes.append(f"[earlier picture: {name}]")
+                continue
+            try:
+                _, path = image_ref(ref)
+            except agents.AgentError:
+                notes.append(f"[picture no longer available: {name}]")
+                continue
+            if path.suffix.lower() not in CHAT_IMAGE_TYPES or path.stat().st_size > MAX_CHAT_IMAGE:
+                notes.append(f"[picture that could not be sent: {name}]")
+                continue
+            kept.append(path)
+            budget -= 1
+        msg = {k: v for k, v in m.items() if k != "images"}
+        if notes:
+            msg["content"] = (msg["content"] + "\n\n" + "\n".join(notes)).strip()
+        if kept:
+            msg["images"] = kept
+        out.append(msg)
+    return list(reversed(out))
 
 
 def delete_path(agent: "Place", rel: str) -> str:
@@ -466,7 +520,7 @@ class Handler(BaseHTTPRequestHandler):
             if n == 3 and method == "DELETE":
                 return self._json(200, {"deleted": delete_path(agent, param("path"))})
             if action == "upload" and method == "POST":
-                return self._json(201, self._upload(agent, param("path"), param("name")))
+                return self._json(201, self._upload(agent, param("path"), param("name"), make=param("mkdirs") == "1"))
             if action == "mkdir" and method == "POST":
                 return self._json(201, {"made": make_dir(agent, param("path"))})
             if action == "view" and method == "GET":
@@ -601,7 +655,7 @@ class Handler(BaseHTTPRequestHandler):
         with path.open("rb") as f:
             shutil.copyfileobj(f, self.wfile, 256 * 1024)
 
-    def _upload(self, agent: "Place", rel_dir: str, name: str) -> Dict[str, Any]:
+    def _upload(self, agent: "Place", rel_dir: str, name: str, make: bool = False) -> Dict[str, Any]:
         length = self._length()
         if length > MAX_UPLOAD:
             raise agents.AgentError(f"Files larger than {MAX_UPLOAD // (1024 * 1024)} MB cannot be uploaded.")
@@ -614,6 +668,8 @@ class Handler(BaseHTTPRequestHandler):
             folder = tools.resolve(ws, rel_dir, allow_root=True)
         except tools.ToolError as exc:
             raise agents.AgentError(str(exc)) from exc
+        if make and not folder.exists() and not any(part in HIDDEN for part in Path(rel_dir).parts):
+            folder.mkdir(parents=True)
         if not folder.is_dir():
             raise agents.AgentError(f"Folder '{rel_dir}' does not exist in {_owner(agent)}.")
         stem, dot, ext = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
@@ -657,6 +713,12 @@ class Handler(BaseHTTPRequestHandler):
             raise agents.AgentError("Request body must be a JSON object.")
         where = place(str(body.get("place") or SHARED_NAME))
         source = "images tab" if isinstance(where, SharedPlace) else "images tab (agent folder)"
+        init_image, init_name = None, ""
+        if body.get("init_image") is not None:
+            src_place, init_image = image_ref(body["init_image"], "picture to edit")
+            images.check_init_image(init_image)
+            init_name = f"{src_place.name}:{init_image.relative_to(src_place.workspace.resolve()).as_posix()}"
+            source = "image edit"
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -673,7 +735,7 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             record = images.generate(body, where.workspace, source=source, on_event=emit,
-                                     preview=body.get("preview") is True)
+                                     preview=body.get("preview") is True, init_image=init_image, init_name=init_name)
             emit({"image": {**record, "place": where.name}})
             emit({"done": True})
         except ClientGone:
@@ -690,7 +752,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
         agent = agents.load(body["agent"]) if body.get("agent") else None
-        messages = agents.build_messages(agent, body.get("messages"))
+        messages = attach_images(agents.build_messages(agent, body.get("messages")))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")

@@ -733,6 +733,59 @@ class TestServer(Base):
         self.assertEqual(ev[0], {"model": "llama3.2:3b"})
         self.assertEqual("".join(e.get("t", "") for e in ev).strip(), "echo: hello")
         self.assertEqual(ev[-1], {"done": True})
+
+    def test_chat_with_pictures(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 32
+        base = self.url + "/api/files/_shared/upload?path=chat-images&mkdirs=1&name="
+        code, body = request(base + "a.png", "POST")    # an empty upload makes the folder
+        self.assertEqual(code, 201, body)
+        req = urllib.request.Request(base + "pic.png", data=png, method="POST", headers={"Content-Type": "application/octet-stream"})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req) as resp:
+            path = json.loads(resp.read())["path"]
+        self.assertEqual(path, "chat-images/pic.png")
+        pic = {"place": "_shared", "path": path}
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [
+            {"role": "user", "content": "what is this?", "images": [pic]}]})[1])
+        self.assertEqual(ev[-1], {"done": True}, ev)
+        last = LAST_REQUEST["messages"][-1]
+        self.assertEqual(last["images"], [base64.b64encode(png).decode()])
+        # A message with only a picture is allowed; missing and unreadable pictures become notes.
+        (Path(self.home) / "shared" / "chat-images" / "x.gif").write_bytes(b"GIF89a")
+        ev = chat_events(request(self.url + "/api/chat", "POST", {"messages": [
+            {"role": "user", "content": "", "images": [pic, {"place": "_shared", "path": "chat-images/gone.png"},
+                                                       {"place": "_shared", "path": "chat-images/x.gif"}]}]})[1])
+        self.assertEqual(ev[-1], {"done": True}, ev)
+        last = LAST_REQUEST["messages"][-1]
+        self.assertEqual(len(last["images"]), 1)
+        self.assertIn("no longer available: chat-images/gone.png", last["content"])
+        self.assertIn("could not be sent: chat-images/x.gif", last["content"])
+        bad = request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "x", "images": [{"path": ""}]}]})
+        self.assertEqual(bad[0], 400)
+        too_many = request(self.url + "/api/chat", "POST", {"messages": [{"role": "user", "content": "x", "images": [pic] * 5}]})
+        self.assertEqual(too_many[0], 400)
+
+    def test_only_newest_pictures_are_sent(self):
+        shared = Path(self.home) / "shared"
+        (shared / "p").mkdir(parents=True)
+        history = []
+        for i in range(3):
+            for j in range(2):
+                (shared / "p" / f"{i}{j}.png").write_bytes(b"\x89PNG\r\n\x1a\n%d%d" % (i, j))
+            history += [{"role": "user", "content": f"q{i}", "images": [{"place": "_shared", "path": f"p/{i}{j}.png"} for j in range(2)]},
+                        {"role": "assistant", "content": "ok"}]
+        msgs = server.attach_images(agents.build_messages(None, history[:-1]))
+        self.assertEqual([len(m.get("images") or []) for m in msgs if m["role"] == "user"], [0, 2, 2])
+        self.assertIn("[earlier picture: p/00.png]", msgs[0]["content"])
+        wired = backend.wire_messages("openai", msgs)
+        parts = wired[-1]["content"]
+        self.assertEqual(parts[0], {"type": "text", "text": "q2"})
+        self.assertTrue(parts[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(backend.wire_messages("ollama", msgs)[-1]["content"], "q2")
+        # An agent's standing instructions are added without losing the pictures.
+        a = agents.create({"name": "seer", "config": ["Be brief."]})
+        built = agents.build_messages(a, history[-2:-1])
+        self.assertEqual(built[-1]["images"], history[-2]["images"])
+        self.assertIn("Be brief.", built[-1]["content"])
         self.assertNotIn("tools", LAST_REQUEST)
 
     def test_chat_agent_with_tools_writes_into_its_folder(self):
@@ -1291,6 +1344,73 @@ class TestImages(Base):
             self.assertTrue(all(p["id"] == "0-0" for p in prog))
             self.assertIn({"id": "0-0", "progress": {"step": 4, "steps": 4}}, prog)
             self.assertEqual(any("preview" in p for p in prog), preview)
+
+    def test_image_size_and_fit(self):
+        d = Path(self.home)
+        png = d / "a.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (1000).to_bytes(4, "big") + (500).to_bytes(4, "big") + b"\0" * 20)
+        self.assertEqual(images.image_size(png), (1000, 500))
+        jpg = d / "a.jpg"
+        jpg.write_bytes(b"\xff\xd8\xff\xe0\0\x10" + b"J" * 14 + b"\xff\xc0\0\x11\x08" + (300).to_bytes(2, "big")
+                        + (640).to_bytes(2, "big") + b"\0" * 12)
+        self.assertEqual(images.image_size(jpg), (640, 300))
+        gif = d / "a.gif"
+        gif.write_bytes(b"GIF89a" + (20).to_bytes(2, "little") + (10).to_bytes(2, "little"))
+        self.assertEqual(images.image_size(gif), (20, 10))
+        junk = d / "a.bin"
+        junk.write_bytes(b"nothing")
+        self.assertIsNone(images.image_size(junk))
+        self.assertEqual(images.fit_size(1000, 500, 512 * 512), (704, 384))
+        self.assertEqual(images.fit_size(512, 512, 1024 * 1024), (1024, 1024))
+        self.assertEqual(images.fit_size(8000, 100, 1024 * 1024), (2048, 64))   # capped and never below 64
+
+    def test_edit_picture(self):
+        self.add_model()
+        shared = Path(self.home) / "shared"
+        (shared / "uploads").mkdir(parents=True)
+        src = shared / "uploads" / "cat.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (800).to_bytes(4, "big") + (400).to_bytes(4, "big") + b"\0" * 20)
+        rec = images.generate({"prompt": "a cat in snow", "strength": 0.4}, shared, init_image=src, init_name="_shared:uploads/cat.png")
+        written = (shared / rec["path"]).read_bytes().decode(errors="replace")
+        self.assertIn("--init-img " + str(src), written)
+        self.assertIn("--strength 0.4", written)
+        self.assertEqual((rec["width"], rec["height"]), (512, 256))     # the source's shape at about 384 x 384
+        self.assertEqual((rec["strength"], rec["edited_from"]), (0.4, "_shared:uploads/cat.png"))
+        self.assertNotIn("init_image", rec)
+        self.assertEqual(images.gallery(shared)[0]["edited_from"], "_shared:uploads/cat.png")
+        rec = images.generate({"prompt": "x", "width": 320, "height": 320}, shared, init_image=src)
+        self.assertEqual((rec["width"], rec["strength"]), (320, images.DEFAULT_STRENGTH))   # a size given is used
+        with self.assertRaises(images.ImageError):
+            images.generate({"prompt": "x", "strength": 2}, shared, init_image=src)
+        with self.assertRaises(images.ImageError):
+            images.generate({"prompt": "x"}, shared, init_image=shared / "uploads" / "nope.png")
+        (shared / "uploads" / "a.txt").write_text("hi")
+        with self.assertRaisesRegex(images.ImageError, "cannot be edited"):
+            images.generate({"prompt": "x"}, shared, init_image=shared / "uploads" / "a.txt")
+        # Through the server, by {place, path}.
+        url = self.axis_server(None)
+        events = chat_events(request(url + "/api/images/generate", "POST", {"prompt": "a dog", "init_image": {"place": "_shared", "path": "uploads/cat.png"}})[1])
+        image = next(e["image"] for e in events if "image" in e)
+        self.assertEqual((image["edited_from"], image["source"]), ("_shared:uploads/cat.png", "image edit"))
+        code, _ = request(url + "/api/images/generate", "POST", {"prompt": "a dog", "init_image": {"place": "_shared", "path": "../escape.png"}})
+        self.assertEqual(code, 400)
+
+    def test_edit_through_sd_server(self):
+        src = Path(self.home) / "s.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\nsource")
+        params = {"prompt": "p", "negative_prompt": "", "width": 64, "height": 64, "steps": 2, "cfg_scale": 1.0,
+                  "seed": 1, "sampler": "", "init_image": str(src), "strength": 0.5}
+        sent = {}
+
+        def fake(url, body=None, timeout=30.0):
+            if body is not None and url.endswith("/img_gen"):
+                sent.update(body)
+                return {"id": "job1"}
+            return {"status": "completed", "result": {"images": [{"b64_json": base64.b64encode(b"\x89PNGdone").decode()}]}}
+        with mock.patch.object(images, "_server_json", fake):
+            images._generate_with_server("http://x", params, Path(self.home) / "out.png", lambda e: None)
+        self.assertEqual(sent["strength"], 0.5)
+        self.assertEqual(sent["init_image"], "data:image/png;base64," + base64.b64encode(src.read_bytes()).decode())
 
     def test_cancel_kills_sd_cli(self):
         self.add_model()

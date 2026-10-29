@@ -9,10 +9,16 @@ Two kinds of server are supported:
 Axis looks at every server it knows about at once: the default addresses (or the
 one given with --url / AXIS_URL), plus each llama-server that Axis started itself
 on the Models page. A chat goes to whichever server has the chosen model loaded.
+
+Pictures: a message may carry "images", a list of image files (pathlib.Path). They
+are sent as base64 in each server's own format: an "images" list on the message for
+Ollama, and image_url parts of the content for llama.cpp (which needs the model's
+mmproj file loaded, see manager.llama_start).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -20,6 +26,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 DEFAULT_URLS = ("http://127.0.0.1:11434", "http://127.0.0.1:8080")
@@ -312,10 +319,61 @@ def _parse_args(raw: Any) -> Any:
     return raw
 
 
+class ImagesUnsupported(BackendError):
+    """The model (or the way it was started) cannot read pictures."""
+
+
+IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+              ".gif": "image/gif", ".bmp": "image/bmp"}
+
+
+def _b64(path: Path, cache: Dict[str, str]) -> str:
+    key = str(path)
+    if key not in cache:
+        try:
+            cache[key] = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            raise BackendError(f"Could not read the picture {path.name}: {exc.strerror or exc}") from exc
+    return cache[key]
+
+
+def wire_messages(kind: str, messages: list) -> list:
+    """Messages in the server's format, with any attached pictures encoded."""
+    if not any(isinstance(m, dict) and m.get("images") for m in messages):
+        return messages
+    cache: Dict[str, str] = {}
+    out = []
+    for m in messages:
+        files = m.get("images") if isinstance(m, dict) else None
+        if not files:
+            out.append(m)
+            continue
+        rest = {k: v for k, v in m.items() if k != "images"}
+        if kind == "ollama":
+            rest["images"] = [_b64(Path(f), cache) for f in files]
+        else:
+            parts: List[Dict[str, Any]] = [{"type": "text", "text": rest.get("content") or ""}]
+            for f in files:
+                mime = IMAGE_MIME.get(Path(f).suffix.lower(), "image/png")
+                parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{_b64(Path(f), cache)}"}})
+            rest["content"] = parts
+        out.append(rest)
+    return out
+
+
+def _images_message(model: str, kind: str) -> str:
+    text = (f"{model} cannot read pictures. Choose a model that can (the Models page lists \"vision\" among "
+            "its capabilities), such as gemma3, qwen2.5vl or llava.")
+    if kind != "ollama":
+        text += (" A llama.cpp model also needs its vision file (mmproj): install the model again on the Models "
+                 "page so Axis downloads it, then stop and start the model.")
+    return text
+
+
 def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
                    temperature: Optional[float]) -> Iterator[str]:
     # keep_alive -1 keeps the model loaded until the user stops it (ollama stop <model>).
-    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True, "keep_alive": -1}
+    body: Dict[str, Any] = {"model": model, "messages": wire_messages("ollama", messages), "stream": True, "keep_alive": -1}
     options: Dict[str, Any] = {}
     if NUM_CTX > 0:
         options["num_ctx"] = NUM_CTX
@@ -379,7 +437,7 @@ def _openai_stats(chunk: dict, turn: Turn) -> None:
 
 def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
                    temperature: Optional[float]) -> Iterator[str]:
-    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    body: Dict[str, Any] = {"model": model, "messages": wire_messages("openai", messages), "stream": True}
     if temperature is not None:
         body["temperature"] = temperature
     if tools:
@@ -435,6 +493,10 @@ def complete(
                 on_token(text)
     except urllib.error.HTTPError as exc:
         message = _http_error_message(exc)
+        low = message.lower()
+        if any(isinstance(m, dict) and m.get("images") for m in messages) and \
+                ("image" in low or "vision" in low or "mmproj" in low or "multimodal" in low):
+            raise ImagesUnsupported(_images_message(model, backend.kind) + f"\n({message})") from exc
         if tools and exc.code in (400, 500, 501) and "tool" in message.lower():
             raise ToolsUnsupported(message) from exc
         raise BackendError(f"Server error ({exc.code}): {message}") from exc

@@ -231,30 +231,55 @@ def delete(name: str) -> None:
 # ----------------------------------------------------------------- prompts
 
 
-def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]:
+MAX_MESSAGE_IMAGES = 4
+IMAGE_CHARS = 1000  # what one picture counts for against the history budget
+
+
+def _image_refs(item: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The pictures a user message carries, as {place, path}; resolved to files by the server."""
+    refs = item.get("images")
+    if refs is None or item.get("role") != "user":
+        return []
+    if not isinstance(refs, list) or len(refs) > MAX_MESSAGE_IMAGES:
+        raise AgentError(f"A message can carry at most {MAX_MESSAGE_IMAGES} pictures.")
+    out = []
+    for ref in refs:
+        if not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not ref["path"].strip():
+            raise AgentError("Each picture needs a path.")
+        out.append({"place": str(ref.get("place") or ""), "path": ref["path"]})
+    return out
+
+
+def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]:
     """Turn a chat history into the messages sent to the model.
 
     For an agent, the system message is its system prompt plus enabled skills,
     and its config instructions are appended to the newest user message.
+    A user message may carry "images" ({place, path} references), which are kept.
     """
     if not isinstance(history, list) or not history:
         raise AgentError("The conversation is empty.")
-    messages: List[Dict[str, str]] = []
+    messages: List[Dict[str, Any]] = []
     for item in history[-200:]:
         if not isinstance(item, dict) or item.get("role") not in ("user", "assistant"):
             raise AgentError("Each message needs a role of 'user' or 'assistant'.")
         content = item.get("content")
         if not isinstance(content, str):
             raise AgentError("Each message needs text content.")
-        messages.append({"role": item["role"], "content": content})
-    if messages[-1]["role"] != "user" or not messages[-1]["content"].strip():
+        msg: Dict[str, Any] = {"role": item["role"], "content": content}
+        refs = _image_refs(item)
+        if refs:
+            msg["images"] = refs
+        messages.append(msg)
+    last = messages[-1]
+    if last["role"] != "user" or not (last["content"].strip() or last.get("images")):
         raise AgentError("The last message must be a non-empty user message.")
 
     # Keep the newest messages that fit the budget so the model's context window
     # is not overflowed (Ollama silently drops the oldest text, including instructions).
     kept, used = [], 0
     for m in reversed(messages):
-        used += len(m["content"])
+        used += len(m["content"]) + IMAGE_CHARS * len(m.get("images") or [])
         if kept and used > HISTORY_CHARS:
             break
         kept.append(m)
@@ -287,7 +312,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, str]]
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
         messages[-1] = {
-            "role": "user",
+            **messages[-1],
             "content": f"{messages[-1]['content']}\n\n---\nFollow these instructions:\n{rules}",
         }
     return [{"role": "system", "content": system}] + messages

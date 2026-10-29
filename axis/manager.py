@@ -454,9 +454,28 @@ def scan_llama() -> List[Dict[str, Any]]:
         rel = f.relative_to(root).as_posix()
         top = rel.split("/")[0]
         repo = top.replace("__", "/", 1) if "__" in top and "/" in rel else ""
+        mmproj = find_mmproj(f)
         out.append({"id": rel, "name": _display_name(f), "file": str(f), "size": size, "parts": len(parts),
-                    "repo": repo, "missing_parts": m is not None and len(parts) != int(m.group(2))})
+                    "repo": repo, "missing_parts": m is not None and len(parts) != int(m.group(2)),
+                    "mmproj": str(mmproj) if mmproj else None, "vision": mmproj is not None})
     return out
+
+
+def _mmproj_files(folder: Path) -> List[Path]:
+    try:
+        return [p for p in folder.glob("*.gguf") if "mmproj" in p.name.lower() and p.is_file()]
+    except OSError:
+        return []
+
+
+def find_mmproj(model_file: Path) -> Optional[Path]:
+    """The vision projector next to a chat model (installed with it from the same repository folder).
+
+    A folder inside ~/Axis/models/llm holds one repository, so an mmproj there belongs to its models.
+    The user can also drop one in by hand. f16 is preferred when there are several.
+    """
+    found = _mmproj_files(model_file.parent)
+    return min(found, key=lambda p: hub.mmproj_rank(p.name)) if found else None
 
 
 def _parts(first: Path) -> List[Path]:
@@ -516,6 +535,8 @@ def llama_start(model_id: str, job: jobs.Job) -> Dict[str, Any]:
                "-c", str(settings["llama_ctx"]), "--alias", alias]
         if jinja:
             cmd.append("--jinja")  # needed for tool calls on older builds; the default on newer ones
+        if model.get("mmproj") and "--mmproj" not in settings["llama_args"]:
+            cmd += ["--mmproj", model["mmproj"]]  # lets the model read pictures in chats
         cmd += images.split_args(settings["llama_args"])
         job.progress(phase=f"Loading {model['name']}")
         try:
@@ -587,21 +608,35 @@ def llama_delete(model_id: str, job: jobs.Job) -> Dict[str, Any]:
             except OSError as exc:
                 raise ManageError(f"Could not delete {p.name}: {exc.strerror or exc}. If it is in use, stop it "
                                   "and try again.") from exc
+    # The vision file goes once no other model from the same repository folder is left to use it.
+    others = [p for p in first.parent.glob("*.gguf") if "mmproj" not in p.name.lower()]
+    if not others and inside(first.parent, root) and first.parent != root:
+        for p in _mmproj_files(first.parent):
+            try:
+                p.unlink()
+            except OSError:
+                pass
     hub.prune_empty(first.parent, root)
     return {"model": model["name"]}
 
 
-def llama_install(ref: hub.Ref, files: List[Dict[str, Any]], job: jobs.Job) -> Dict[str, Any]:
+def llama_install(ref: hub.Ref, files: List[Dict[str, Any]], job: jobs.Job,
+                  mmproj: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Download a chat model (all parts) and, for a model that reads pictures, its vision file (mmproj)."""
     engines.ensure("llama", llama_binary, job)
     root = llm_root()
     root.mkdir(parents=True, exist_ok=True)
+    wanted = files + ([mmproj] if mmproj else [])
     try:
-        paths = hub.download_all(ref, files, root, job)
+        paths = hub.download_all(ref, wanted, root, job)
     except jobs.Cancelled:
-        hub.cleanup_partial(root, ref.repo, files)
+        hub.cleanup_partial(root, ref.repo, wanted)
         raise
     rel = paths[0].relative_to(root).as_posix()
-    return {"model": _display_name(paths[0]), "id": rel}
+    out = {"model": _display_name(paths[0]), "id": rel}
+    if mmproj:
+        out["vision"] = True
+    return out
 
 
 # ------------------------------------------------------------- image models
@@ -890,8 +925,10 @@ def install(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
         except hub.NeedChoice as need:
             return {"choose": need.options, "message": str(need), "name": name}
         label = PurePosixPath(chosen[0]["path"]).name
-        job = jobs.submit("install", "llamacpp", f"{ref.repo}/{chosen[0]['path']}", f"Installing {label}",
-                          lambda j: llama_install(ref, chosen, j))
+        mmproj = hub.pick_mmproj(files, chosen[0]["path"])
+        job = jobs.submit("install", "llamacpp", f"{ref.repo}/{chosen[0]['path']}", f"Installing {label}"
+                          + (" and its vision file" if mmproj else ""),
+                          lambda j: llama_install(ref, chosen, j, mmproj))
         return {"job": job.public()}
 
     role = _text(body, "role", "Role") or "checkpoint"

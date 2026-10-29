@@ -367,6 +367,14 @@ class TestNames(Base):
             hub.pick_gguf(f("model.safetensors"), ref)
         self.assertEqual(hub.pick_gguf(files, ref, choice="m-Q8_0.gguf")[0]["path"], "m-Q8_0.gguf")
 
+    def test_pick_mmproj(self):
+        f = lambda *names: [{"path": n, "size": 10, "sha256": None} for n in names]  # noqa: E731
+        files = f("m-Q4_K_M.gguf", "mmproj-m-Q8_0.gguf", "mmproj-m-f16.gguf", "mmproj-m-bf16.gguf", "sub/mmproj-other-f16.gguf")
+        self.assertEqual(hub.pick_mmproj(files, "m-Q4_K_M.gguf")["path"], "mmproj-m-f16.gguf")
+        self.assertEqual(hub.pick_mmproj(files, "sub/x.gguf")["path"], "sub/mmproj-other-f16.gguf")
+        self.assertIsNone(hub.pick_mmproj(f("m-Q4_K_M.gguf"), "m-Q4_K_M.gguf"))
+        self.assertEqual(hub.pick_mmproj(f("mmproj-q8_0.gguf", "mmproj-F32.gguf"), "m.gguf")["path"], "mmproj-q8_0.gguf")
+
     def test_pick_image_file(self):
         files = [{"path": p, "size": 1, "sha256": None} for p in
                  ("v1-5.safetensors", "unet/diffusion_pytorch_model.safetensors", "README.md")]
@@ -561,6 +569,28 @@ class TestLlamaCpp(Base):
         self.assertEqual(procs.running("llama"), [])
         self.assertEqual(request(url + "/api/manage")[1]["llamacpp"]["models"], [])
         self.assertFalse((Path(self.home) / "models" / "llm" / "bartowski__Tiny-GGUF").exists())
+
+    def test_vision_model(self):
+        data = b"GGUF" + os.urandom(3000)
+        self.hub({"ggml-org/Eye-GGUF": {"Eye-Q4_K_M.gguf": data, "mmproj-Eye-f16.gguf": b"GGUFproj", "mmproj-Eye-Q8_0.gguf": b"GGUFq8"}})
+        url = self.axis(self.ollama().url)
+        code, r = request(url + "/api/manage/install", "POST", {"engine": "llamacpp", "name": "ggml-org/Eye-GGUF"})
+        self.assertEqual(code, 202, r)
+        self.assertIn("vision file", r["job"]["label"])
+        job = wait_job(r["job"]["id"])
+        self.assertEqual(job.state, "done", job.error)
+        (m,) = request(url + "/api/manage")[1]["llamacpp"]["models"]
+        self.assertTrue(m["vision"])
+        self.assertTrue(m["mmproj"].endswith("mmproj-Eye-f16.gguf"))
+        folder = Path(self.home) / "models" / "llm" / "ggml-org__Eye-GGUF"
+        self.assertFalse((folder / "mmproj-Eye-Q8_0.gguf").exists())          # only the one that is used
+        code, r = request(url + "/api/manage/start", "POST", {"engine": "llamacpp", "model": m["id"]})
+        self.assertEqual(wait_job(r["job"]["id"]).state, "done")
+        args = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual(args[args.index("--mmproj") + 1], m["mmproj"])
+        code, r = request(url + "/api/manage/delete", "POST", {"engine": "llamacpp", "model": m["id"]})
+        self.assertEqual(wait_job(r["job"]["id"]).state, "done")
+        self.assertFalse(folder.exists())                                      # the vision file went with it
 
     def test_start_failure_shows_log(self):
         root = Path(self.home) / "models" / "llm"
