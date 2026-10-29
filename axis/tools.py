@@ -105,6 +105,48 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
             "required": ["path"],
         },
     },
+    "run_rust": {
+        "description": "Compile and run Rust code with the agent's folder as the working directory and return what it prints. "
+        "On Windows, Axis can install the Microsoft C++ Build Tools needed by the MSVC linker.",
+        "parameters": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "Complete Rust program to compile and run"}},
+            "required": ["code"],
+        },
+    },
+    "run_rust_file": {
+        "description": "Compile and run a Rust .rs file already in the agent's folder and return what it prints.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "The .rs file to compile and run, relative to your folder"},
+            },
+            "required": ["path"],
+        },
+    },
+    "run_terminal": {
+        "description": "Run code in the computer's terminal language and return what it prints. The default is bash or sh "
+        "on macOS and Linux, and cmd on Windows; use shell for powershell or another installed shell.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Complete shell program or commands to run"},
+                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh, or cmd"},
+            },
+            "required": ["code"],
+        },
+    },
+    "run_terminal_file": {
+        "description": "Run a shell program file already in the agent's folder and return what it prints.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "The shell program to run, relative to your folder"},
+                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh, or cmd"},
+            },
+            "required": ["path"],
+        },
+    },
 }
 
 
@@ -521,6 +563,8 @@ def run_python(where: Where, args: Dict[str, Any]) -> str:
 
 
 MAX_SCRIPT = 1024 * 1024
+RUST_TIMEOUT = 60
+TERMINAL_TIMEOUT = 60
 
 
 def run_file(where: Where, rel: Any) -> Dict[str, Any]:
@@ -550,6 +594,195 @@ def run_python_file(where: Where, args: Dict[str, Any]) -> str:
     return f"Ran {result['path']}.\n" + _report(result)
 
 
+def _run_env(where: Where) -> Dict[str, str]:
+    """Build the environment for a program started by an agent."""
+    p = places(where)
+    env = dict(os.environ)
+    if p.shared is not None:
+        p.shared.mkdir(parents=True, exist_ok=True)
+        env[SHARED_ENV] = str(p.shared.resolve())
+    # Art Craft owns the portable Rust installation. Import it lazily so ordinary
+    # file and Python actions do not initialize the engine/download modules.
+    try:
+        from . import artcraft
+        env.update(artcraft.rust_build_env())
+    except (ImportError, OSError):
+        pass
+    return env
+
+
+def _run_kwargs() -> Dict[str, Any]:
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
+
+
+def _temp_dir(folder: Path) -> Tuple[Path, Path]:
+    """Make a private build folder below the working folder."""
+    folder.mkdir(parents=True, exist_ok=True)
+    base = folder / ".axis-tmp"
+    with _TMP_LOCK:
+        base.mkdir(exist_ok=True)
+        return base, Path(tempfile.mkdtemp(prefix="run-", dir=str(base)))
+
+
+def _finish_temp(base: Path, temp: Path) -> None:
+    with _TMP_LOCK:
+        shutil.rmtree(temp, ignore_errors=True)
+        try:
+            base.rmdir()
+        except OSError:
+            pass
+
+
+def _rustc(env: Dict[str, str]) -> str:
+    path = shutil.which("rustc", path=env.get("PATH"))
+    if path:
+        return path
+    raise ToolError("Rust is not installed. Open Art Craft and click Install Rust, then try again.")
+
+
+def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "program.rs") -> Dict[str, Any]:
+    if not isinstance(code, str) or not code.strip():
+        raise ToolError("code must be a non-empty Rust program.")
+    folder = Path(cwd or places(where).personal).resolve()
+    base, temp = _temp_dir(folder)
+    env = _run_env(where)
+    source = temp / script
+    binary = temp / ("program.exe" if os.name == "nt" else "program")
+    try:
+        source.write_text(code, encoding="utf-8")
+        if os.name == "nt":
+            from . import artcraft
+            try:
+                artcraft.ensure_cpp_tools()
+            except artcraft.ArtCraftError as exc:
+                raise ToolError(str(exc)) from exc
+            env = _run_env(where)
+        compiler = _rustc(env)
+        compile_result = _run_capped([compiler, "--edition", "2021", str(source), "-o", str(binary)], "",
+                                     str(folder), env, RUST_TIMEOUT, _run_kwargs())
+        if compile_result["timed_out"] or compile_result["exit"] != 0:
+            return compile_result
+        return _run_capped([str(binary)], "", str(folder), env, RUST_TIMEOUT, _run_kwargs())
+    finally:
+        _finish_temp(base, temp)
+
+
+def run_rust(where: Where, args: Dict[str, Any]) -> str:
+    return _report(_rust_code(where, _require(args, "code")))
+
+
+def run_rust_file_result(where: Where, rel: Any) -> Dict[str, Any]:
+    root, path, prefix = locate(where, rel)
+    if not path.is_file():
+        raise ToolError(f"{rel} is not a file in your folder.")
+    if path.suffix.lower() != ".rs":
+        raise ToolError(f"{rel} is not a Rust file (.rs).")
+    if path.stat().st_size > MAX_SCRIPT:
+        raise ToolError(f"{rel} is too large to run (limit {MAX_SCRIPT // 1024} KB).")
+    data = path.read_bytes()
+    if b"\0" in data[:4096]:
+        raise ToolError(f"{rel} is not a text file.")
+    code = data.decode("utf-8", errors="replace")
+    if code.startswith("\ufeff"):
+        code = code[1:]
+    result = _rust_code(where, code, cwd=path.parent, script=path.name)
+    return {**result, "path": _show(root, path, prefix)}
+
+
+def run_rust_file(where: Where, args: Dict[str, Any]) -> str:
+    result = run_rust_file_result(where, _require(args, "path"))
+    return f"Ran {result['path']}.\n" + _report(result)
+
+
+def _shell_name(value: Any) -> str:
+    name = str(value or "auto").strip().lower()
+    aliases = {"powershell.exe": "powershell", "pwsh.exe": "pwsh", "cmd.exe": "cmd"}
+    return aliases.get(name, name)
+
+
+def _shell_executable(name: Any, env: Dict[str, str]) -> Tuple[str, str]:
+    requested = _shell_name(name)
+    if requested in ("", "auto"):
+        try:
+            from . import terminal
+            requested = terminal.default_shell_name()
+        except ImportError:
+            requested = "cmd" if os.name == "nt" else "bash"
+    choices = {"bash": "bash", "sh": "sh", "cmd": "cmd", "powershell": "powershell", "pwsh": "pwsh"}
+    if requested not in choices:
+        raise ToolError("Unknown shell. Use auto, bash, sh, powershell, pwsh, or cmd.")
+    program = choices[requested]
+    if requested == "cmd":
+        program = env.get("COMSPEC") or "cmd.exe"
+    else:
+        program = shutil.which(program, path=env.get("PATH")) or ""
+    if not program:
+        raise ToolError(f"The {requested} shell is not installed on this computer.")
+    return program, requested
+
+
+def _shell_command(program: str, shell: str, script: Path) -> List[str]:
+    if shell in ("bash", "sh"):
+        return [program, str(script)]
+    if shell in ("powershell", "pwsh"):
+        return [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+    if shell == "cmd":
+        return [program, "/D", "/Q", "/C", f'call "{script}"']
+    raise ToolError("Unknown shell.")
+
+
+def _terminal_code(where: Where, code: str, shell: Any = "auto", cwd: Optional[Path] = None,
+                  suffix: str = ".sh") -> Dict[str, Any]:
+    if not isinstance(code, str) or not code.strip():
+        raise ToolError("code must be a non-empty terminal program.")
+    folder = Path(cwd or places(where).personal).resolve()
+    env = _run_env(where)
+    program, selected = _shell_executable(shell, env)
+    if selected == "cmd":
+        suffix = ".cmd"
+    elif selected in ("powershell", "pwsh"):
+        suffix = ".ps1"
+    base, temp = _temp_dir(folder)
+    script = temp / ("program" + suffix)
+    try:
+        with script.open("w", encoding="utf-8", newline="\r\n" if selected == "cmd" else "\n") as stream:
+            stream.write(code)
+        return _run_capped(_shell_command(program, selected, script), "", str(folder), env,
+                           TERMINAL_TIMEOUT, _run_kwargs())
+    finally:
+        _finish_temp(base, temp)
+
+
+def run_terminal(where: Where, args: Dict[str, Any]) -> str:
+    return _report(_terminal_code(where, _require(args, "code"), args.get("shell", "auto")))
+
+
+def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto") -> Dict[str, Any]:
+    root, path, prefix = locate(where, rel)
+    if not path.is_file():
+        raise ToolError(f"{rel} is not a file in your folder.")
+    if path.stat().st_size > MAX_SCRIPT:
+        raise ToolError(f"{rel} is too large to run (limit {MAX_SCRIPT // 1024} KB).")
+    data = path.read_bytes()
+    if b"\0" in data[:4096]:
+        raise ToolError(f"{rel} is not a text file.")
+    code = data.decode("utf-8", errors="replace")
+    selected = shell
+    if _shell_name(selected) == "auto":
+        ext = path.suffix.lower()
+        selected = {".ps1": "powershell", ".bat": "cmd", ".cmd": "cmd", ".sh": "bash", ".bash": "bash",
+                    ".zsh": "sh", ".fish": "sh"}.get(ext, "auto")
+    result = _terminal_code(where, code, selected, cwd=path.parent, suffix=path.suffix or ".sh")
+    return {**result, "path": _show(root, path, prefix)}
+
+
+def run_terminal_file(where: Where, args: Dict[str, Any]) -> str:
+    result = run_terminal_file_result(where, _require(args, "path"), args.get("shell", "auto"))
+    return f"Ran {result['path']}.\n" + _report(result)
+
+
 def fix_escaped_code(code: str) -> str:
     """Small models sometimes send code with literal \\n instead of line breaks."""
     if "\n" in code or "\\n" not in code:
@@ -574,6 +807,11 @@ TOOL_ALIASES = {
     "run_file": "run_python_file", "run_script": "run_python_file", "run_python_script": "run_python_file",
     "execute_file": "run_python_file", "execute_python_file": "run_python_file", "python_file": "run_python_file",
     "run_py": "run_python_file", "exec_file": "run_python_file",
+    "rust": "run_rust", "run_rust_code": "run_rust", "execute_rust": "run_rust",
+    "run_rs": "run_rust_file", "rust_file": "run_rust_file", "execute_rust_file": "run_rust_file",
+    "shell": "run_terminal", "terminal": "run_terminal", "run_shell": "run_terminal", "run_command": "run_terminal",
+    "execute_command": "run_terminal", "run_terminal_code": "run_terminal",
+    "shell_file": "run_terminal_file", "terminal_file": "run_terminal_file", "run_script_file": "run_terminal_file",
     "ls": "list_files", "list_dir": "list_files", "list_directory": "list_files", "listdir": "list_files",
     "list_folder": "list_files", "list": "list_files",
     "cat": "read_file", "open_file": "read_file", "view_file": "read_file", "get_file": "read_file",
@@ -612,6 +850,7 @@ ARG_ALIASES = {
     "prompt": ("prompt", "description", "image_prompt", "text", "query", "positive_prompt"),
     "negative_prompt": ("negative_prompt", "negative", "neg_prompt", "avoid"),
     "steps": ("steps", "num_steps", "sampling_steps", "num_inference_steps"),
+    "shell": ("shell", "terminal", "interpreter", "language"),
 }
 
 
@@ -642,6 +881,14 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
         target = next((out[k] for k in ARG_ALIASES["path"] if isinstance(out.get(k), str)), None)
         if target and target.strip().lower().endswith(".py"):
             return "run_python_file", {"path": target}
+    if name == "run_rust" and "code" not in out and "run_rust_file" in allowed:
+        target = next((out[k] for k in ARG_ALIASES["path"] if isinstance(out.get(k), str)), None)
+        if target and target.strip().lower().endswith(".rs"):
+            return "run_rust_file", {"path": target}
+    if name == "run_terminal" and "code" not in out and "run_terminal_file" in allowed:
+        target = next((out[k] for k in ARG_ALIASES["path"] if isinstance(out.get(k), str)), None)
+        if target:
+            return "run_terminal_file", {"path": target, **({"shell": out["shell"]} if "shell" in out else {})}
     if name == "run_python" and isinstance(out.get("code"), str):
         out["code"] = fix_escaped_code(out["code"])
     return name, out
@@ -668,6 +915,7 @@ def generate_image(ws: Where, args: Dict[str, Any],
 
 
 FILE_TOOLS = ("list_files", "read_file", "write_file", "make_folder", "delete_file")
+EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file")
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "list_files": list_files,
     "read_file": read_file,
@@ -676,6 +924,10 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "delete_file": delete_file,
     "run_python": run_python,
     "run_python_file": run_python_file,
+    "run_rust": run_rust,
+    "run_rust_file": run_rust_file,
+    "run_terminal": run_terminal,
+    "run_terminal_file": run_terminal_file,
     "generate_image": generate_image,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }

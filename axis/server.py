@@ -29,7 +29,7 @@ Routes:
   POST   /api/files/<name>/rename?path=x&to=name   rename a file or folder in place (never replaces anything)
   POST   /api/files/<name>/move?path=x&to=dir   move a file or folder into another folder of the same place
   PUT    /api/files/<name>/save?path=file   replace a text file with the request body (UTF-8 text)
-  POST   /api/files/<name>/run?path=file    run a .py file (guarded like Run Python) and return its output
+  POST   /api/files/<name>/run?path=file    run a Python, Rust, or terminal program and return its output
   DELETE /api/files/<name>?path=x           delete a file or folder
   GET    /api/skills                        list skills (built-in and custom)
   POST   /api/skills                        create a custom skill
@@ -44,7 +44,7 @@ Routes:
                                             that terminal's recent output; "workspace": {place, path, file}
                                             shows the agent the Workspace folder the user is looking at)
   GET    /api/terminal                      open terminals
-  POST   /api/terminal                      open a terminal {place?, path?} in that folder (default: shared)
+  POST   /api/terminal                      open a terminal {place?, path?, shell?} in that folder (default: shared)
   GET    /api/terminal/<id>?since=n         output from offset n {text, next, reset, alive, exit}
   POST   /api/terminal/<id>/input           type into the terminal {text}
   POST   /api/terminal/<id>/interrupt       stop the running command (Ctrl+C)
@@ -548,14 +548,25 @@ def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
 
 
 def run_script(agent: "Place", rel: str) -> Dict[str, Any]:
-    """Run a .py file from the folder the way an agent's run_python_file does (guarded, time-limited)."""
+    """Run a Workspace program with the action matching its file type."""
     shared = None if isinstance(agent, SharedPlace) else agents.shared_folder(agent)
     started = time.monotonic()
     try:
-        result = tools.run_file(tools.Places(agent.workspace, shared), rel)
+        where = tools.Places(agent.workspace, shared)
+        path = tools.locate(where, rel)[1]
+        ext = path.suffix.lower()
+        if ext in (".py", ".pyw"):
+            result = tools.run_file(where, rel)
+        elif ext == ".rs":
+            result = tools.run_rust_file_result(where, rel)
+        elif ext in (".sh", ".bash", ".ps1", ".bat", ".cmd", ".zsh", ".fish"):
+            result = tools.run_terminal_file_result(where, rel)
+        else:
+            raise agents.AgentError("Only Python, Rust, bash/sh, PowerShell, and cmd program files can be run here.")
     except tools.ToolError as exc:
         raise agents.AgentError(str(exc)) from exc
-    return {**result, "path": rel, "seconds": round(time.monotonic() - started, 2), "timeout": tools.PYTHON_TIMEOUT}
+    return {**result, "path": rel, "seconds": round(time.monotonic() - started, 2),
+            "timeout": tools.PYTHON_TIMEOUT if ext in (".py", ".pyw") else tools.RUST_TIMEOUT if ext == ".rs" else tools.TERMINAL_TIMEOUT}
 
 
 def folder_path(agent: "Place", rel: str) -> Path:
@@ -860,7 +871,7 @@ class Handler(BaseHTTPRequestHandler):
                 rel = str(body.get("path") or "")
                 folder = folder_path(where, rel)
                 label = rel.rsplit("/", 1)[-1] if rel else ("shared" if isinstance(where, SharedPlace) else where.name)
-                return self._json(201, terminal.start(folder, label).public())
+                return self._json(201, terminal.start(folder, label, str(body.get("shell") or "")).public())
             if n >= 3:
                 session = terminal.get(parts[2])
                 if n == 3 and method == "GET":

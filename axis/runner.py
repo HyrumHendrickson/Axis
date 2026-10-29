@@ -150,8 +150,8 @@ IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
 
 # Actions that read or change this computer's files. After one of them succeeds, the remembered results of
 # earlier ones may be out of date, so they are forgotten (see Session.run).
-LOCAL_TOOLS = set(tools.FILE_TOOLS) | {"run_python", "run_python_file", "generate_image"}
-CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", "run_python", "run_python_file", "generate_image"}
+LOCAL_TOOLS = set(tools.FILE_TOOLS) | set(tools.EXECUTION_TOOLS) | {"generate_image"}
+CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image"}
 
 
 class Session:

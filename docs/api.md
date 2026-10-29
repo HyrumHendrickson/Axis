@@ -58,7 +58,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `POST` | `/api/files/<name>/rename?path=x&to=name` | rename a file or folder in place; `to` is a plain name, not a path. Never replaces anything. Returns `{renamed: new path}` |
 | `POST` | `/api/files/<name>/move?path=x&to=dir` | move a file or folder into another folder of the same place |
 | `PUT` | `/api/files/<name>/save?path=file` | replace a text file with the request body (UTF-8 text) |
-| `POST` | `/api/files/<name>/run?path=file` | run a .py file (guarded like Run Python) and return its output |
+| `POST` | `/api/files/<name>/run?path=file` | run a Python, Rust, or terminal program selected by extension (`.py`, `.rs`, `.sh`, `.ps1`, `.bat`, and related files) and return its output |
 | `DELETE` | `/api/files/<name>?path=x` | delete a file or folder |
 
 ## Skills
@@ -88,7 +88,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | Method | Path | What it does |
 |--------|------|--------------|
 | `GET` | `/api/terminal` | open terminals |
-| `POST` | `/api/terminal` | open a terminal {place?, path?} in that folder (default: shared) |
+| `POST` | `/api/terminal` | open a terminal {place?, path?, shell?} in that folder (default: shared); Windows accepts `cmd`, `powershell`, or `pwsh` |
 | `GET` | `/api/terminal/<id>?since=n` | output from offset n {text, next, reset, alive, exit} |
 | `POST` | `/api/terminal/<id>/input` | type into the terminal {text} |
 | `POST` | `/api/terminal/<id>/interrupt` | stop the running command (Ctrl+C) |

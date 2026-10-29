@@ -35,11 +35,12 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import engines, jobs
+from . import __version__, engines, jobs
 from .paths import inside, remove_tree
 
 REPO_OWNER = "storytold"
@@ -74,6 +75,8 @@ RUSTUP_TRIPLES = {
     ("macos", "x64"): "x86_64-apple-darwin", ("macos", "arm64"): "aarch64-apple-darwin",
 }
 RUSTUP_TIMEOUT = 45 * 60      # seconds rustup may take to fetch the toolchain
+CPP_TOOLS_TIMEOUT = 45 * 60
+CPP_TOOLS_URL = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
 BAD_START = re.compile(r"GLIBC|error while loading shared libraries|cannot execute binary|bad CPU type", re.I)
 
 _LOCK = threading.Lock()      # the record file
@@ -162,6 +165,96 @@ def rust_env() -> Dict[str, str]:
     old = os.environ.get("PATH", "")
     return {"RUSTUP_HOME": str(rust_home() / "rustup"), "CARGO_HOME": str(rust_home() / "cargo"),
             "PATH": bin_dir + (os.pathsep + old if old else "")}
+
+
+def _vcvars_env() -> Dict[str, str]:
+    """Return the MSVC build environment, or {} when C++ Build Tools are absent."""
+    if os.name != "nt":
+        return {}
+    base = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or ""
+    candidates = [Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"] if base else []
+    candidates += [Path(os.environ.get("ProgramFiles", "")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"]
+    install = ""
+    for vswhere in candidates:
+        if not vswhere.is_file():
+            continue
+        try:
+            r = subprocess.run([str(vswhere), "-latest", "-products", "*", "-requires",
+                                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=20,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            install = r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if install:
+            break
+    if not install:
+        if shutil.which("cl") and shutil.which("link"):
+            return dict(os.environ)
+        return {}
+    vcvars = Path(install) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+    if not vcvars.is_file():
+        return {}
+    try:
+        r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+                            f'"{vcvars}" x64 && set'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    env = {}
+    for line in r.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            if key and "\x00" not in key:
+                env[key] = value
+    return env if env.get("PATH") and env.get("VCToolsInstallDir") else {}
+
+
+def rust_build_env() -> Dict[str, str]:
+    """Environment for Rust builds, including MSVC variables when Windows has them."""
+    env = rust_env()
+    if os.name == "nt":
+        vc = _vcvars_env()
+        if vc:
+            rust_path, vc_path = env.get("PATH", ""), vc.get("PATH", "")
+            env.update(vc)
+            if rust_path and vc_path:
+                env["PATH"] = rust_path + os.pathsep + vc_path
+    return env
+
+
+def _install_cpp_tools() -> None:
+    """Install the Windows C++ workload needed by Rust's MSVC target when absent."""
+    if os.name != "nt" or _vcvars_env():
+        return
+    downloads = engines.root() / "_downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    installer = downloads / "vs_BuildTools.exe"
+    try:
+        req = urllib.request.Request(CPP_TOOLS_URL, headers={"User-Agent": f"axis/{__version__}"})
+        with urllib.request.urlopen(req, timeout=60) as source, installer.open("wb") as target:
+            shutil.copyfileobj(source, target, 1024 * 1024)
+        install_path = engines.root() / "msvc"
+        args = [str(installer), "--quiet", "--wait", "--norestart", "--nocache", "--installPath", str(install_path),
+                "--add", "Microsoft.VisualStudio.Workload.VCTools", "--includeRecommended"]
+        r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=CPP_TOOLS_TIMEOUT,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode not in (0, 3010):
+            output = r.stdout.decode("utf-8", errors="replace")[-600:]
+            raise ArtCraftError(f"Microsoft C++ Build Tools stopped with exit code {r.returncode}.\n{output}")
+    except (urllib.error.URLError, OSError, subprocess.SubprocessError) as exc:
+        raise ArtCraftError(f"Could not download or install Microsoft C++ Build Tools ({exc}).") from exc
+    finally:
+        installer.unlink(missing_ok=True)
+    if not _vcvars_env():
+        raise ArtCraftError("Microsoft C++ Build Tools were installed, but the Rust linker is still unavailable. Restart Axis and try again.")
+
+
+def ensure_cpp_tools() -> None:
+    """Download the Windows C++ workload when a Rust build needs it."""
+    _install_cpp_tools()
 
 
 # ----------------------------------------------------------------- choosing the download
@@ -544,6 +637,7 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
             version = r.stdout.decode("utf-8", errors="replace").strip()
             if r.returncode != 0:
                 raise ArtCraftError("Rust was installed but does not run on this computer.\n" + version[-300:])
+            _install_cpp_tools()
         except BaseException:
             remove_tree(home)
             raise

@@ -389,7 +389,7 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 @media (hover: none) { .fb-act { opacity: 1; pointer-events: auto; } }
 .fb-row.editing { cursor: default; background: var(--accent-soft); }
 .name-edit-in { min-width: 0; width: 100%; border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; background: var(--surface); font: inherit; }
-/* the bottom panel: terminals, and the output of a Python file that was run */
+/* the bottom panel: terminals, and the output of a Workspace program */
 .dock { flex: none; position: relative; border-top: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
 .dock.open { height: var(--dock-h); }
 .dock-grip { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; z-index: 5; touch-action: none; }
@@ -570,7 +570,7 @@ const S = {
   editing: null,                // { agent, path, dirty } while a Workspace file is being edited
   msgEdit: null,                // { target, chatId, index, text } while one of your earlier messages is being edited
   wsDrag: null,                 // { agent, path, isDir } while a Workspace file or folder is being dragged
-  runOut: null,                 // the Python file run from Workspace: { place, path, running, result | error }
+  runOut: null,                 // the Workspace program run: { place, path, running, result | error }
   term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", history: [], hpos: -1, draft: "" },   // terminals (Terminal tab and the Workspace's bottom panel)
   ide: { side: false, agent: "", dock: false, tab: "terminal", dockH: 260 },   // Workspace: agent panel, bottom panel (terminals and run output)
   nameEdit: null,               // { mode: "new" | "rename", ... } while a file or folder name is being typed in the Workspace list
@@ -1197,6 +1197,10 @@ function composerHint(target, agent, model) {
 const STEP_TEXT = {
   run_python: ["Running Python", "Ran Python"],
   run_python_file: ["Running", "Ran"],
+  run_rust: ["Compiling and running Rust", "Compiled and ran Rust"],
+  run_rust_file: ["Compiling and running", "Compiled and ran"],
+  run_terminal: ["Running terminal code", "Ran terminal code"],
+  run_terminal_file: ["Running", "Ran"],
   list_files: ["Listing files", "Listed files"],
   read_file: ["Reading", "Read"],
   write_file: ["Writing", "Wrote"],
@@ -1244,8 +1248,8 @@ function stepView(p, agent, wasOpen) {
     const link = (label, to, isFile) => h("button", { class: "link", style: "margin-top:8px", onclick: () => openInWorkspace(agent, to, isFile) }, label);
     if ((p.name === "write_file" || p.name === "read_file") && path) body.append(link("Open in Workspace", path, true));
     else if (p.name === "make_folder" && path) body.append(link("Open folder in Workspace", path, false));
-    else if (p.name === "run_python_file" && path) body.append(link("Open in Workspace", path, true));
-    else if (p.name === "run_python" || p.name === "list_files") body.append(link("Browse this agent\u2019s files", "", false));
+    else if (["run_python_file", "run_rust_file", "run_terminal_file"].includes(p.name) && path) body.append(link("Open in Workspace", path, true));
+    else if (["run_python", "run_rust", "run_terminal", "list_files"].includes(p.name)) body.append(link("Browse this agent\u2019s files", "", false));
     else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Workspace", imagePath(p), true));
   }
   const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
@@ -1668,7 +1672,7 @@ function renderEditor() {
   const custom = pickList(false);
   const skillPicker = h("div", {},
     h("div", { class: "subhead" }, "Actions"),
-    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, search the web, read Wikipedia or make pictures. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
+    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, run Rust, run terminal code, search the web, read Wikipedia or make pictures. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
     pickList(true),
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
@@ -2049,7 +2053,7 @@ function dockGrip() {
   return grip;
 }
 
-// The bottom panel: a tab for each terminal, and one for the output of a Python file that was run.
+// The bottom panel: a tab for each terminal, and one for the output of a Workspace program.
 function drawDock() {
   const dock = $("dock");
   if (!dock) return;
@@ -2069,7 +2073,7 @@ function drawDock() {
     h("button", { class: "label", role: "tab", "aria-selected": onOutput ? "true" : "false", title: out.path, onclick: choose("output") }, "Output"),
     h("button", { class: "x", title: "Close the output", "aria-label": "Close the output", onclick: () => { S.runOut = null; if (D.tab === "output") D.tab = "terminal"; drawDock(); } }, "\u00d7")));
   const tools = !open ? null : onOutput ? [
-    h("button", { class: "btn small", disabled: !out || out.running, onclick: () => runPython(out.place, out.path) }, "Run again"),
+    h("button", { class: "btn small", disabled: !out || out.running, onclick: () => runProgram(out.place, out.path) }, "Run again"),
   ] : [
     h("button", { class: "btn small", title: "Open another terminal in this folder", onclick: () => openTerminal(S.workspace.agent, S.workspace.dir) }, "New terminal"),
     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
@@ -2343,6 +2347,7 @@ function markCurrent() {
 }
 
 const PYTHON_FILE_RE = /\.pyw?$/i;
+const RUNNABLE_FILE_RE = /\.(?:pyw?|rs|sh|bash|ps1|bat|cmd|zsh|fish)$/i;
 
 async function showFile() {
   const f = S.workspace, view = $("fb-view");
@@ -2360,10 +2365,11 @@ async function showFile() {
   const raw = filesUrl(d.agent, "raw", d.path);
   const ext = (d.name.match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
   const isPython = PYTHON_FILE_RE.test(d.name);
+  const isRunnable = RUNNABLE_FILE_RE.test(d.name);
   const editable = d.kind === "text" && !d.truncated;
   const body = h("div", {});
   const actions = h("div", { class: "fb-actions" },
-    isPython ? h("button", { class: "btn small primary", title: "Run this file and show what it prints", onclick: () => runPython(d.agent, d.path) }, "Run") : null,
+    isRunnable ? h("button", { class: "btn small primary", title: "Run this file and show what it prints", onclick: () => runProgram(d.agent, d.path) }, "Run") : null,
     editable ? h("button", { class: "btn small", title: "Change this file here", onclick: startEdit }, "Edit") : null,
     h("button", { class: "btn small", title: "Give this file a new name", onclick: () => startRename({ path: d.path, name: d.name, type: "file" }) }, "Rename"),
     h("a", { class: "btn small", href: raw + "&download=1", download: d.name }, "Download"),
@@ -2417,7 +2423,7 @@ async function showFile() {
       }
     }
     fill(actions, saveBtn,
-      isPython ? h("button", { class: "btn small", title: "Save, then run the file", onclick: async () => { if (await save()) runPython(d.agent, d.path); } }, "Save and run") : null,
+      isRunnable ? h("button", { class: "btn small", title: "Save, then run the file", onclick: async () => { if (await save()) runProgram(d.agent, d.path); } }, "Save and run") : null,
       h("button", { class: "btn small", onclick: () => {
         if (ed.dirty && !confirm("Discard your unsaved changes?")) return;
         S.editing = null; showFile();
@@ -2458,7 +2464,7 @@ async function showFile() {
   if (S.workspace.autoEdit === d.path) { S.workspace.autoEdit = ""; if (editable) startEdit(); }   // a file just made with New file
 }
 
-/* Running a Python file from Workspace. The output opens in the bottom panel, beside the terminals. */
+/* Running a program from Workspace. The output opens in the bottom panel, beside the terminals. */
 function outputBody() {
   const r = S.runOut;
   const name = r.path.split("/").pop();
@@ -2475,10 +2481,10 @@ function outputBody() {
     if (x.stderr) body.append(h("div", { class: "step-label" }, "Errors"), h("pre", { class: "err" }, x.stderr));
     if (!x.stdout && !x.stderr) body.append(h("p", { class: "hint" }, "The program printed nothing."));
   }
-  body.append(h("p", { class: "hint" }, "The file runs in its own folder with the same limits as an agent\u2019s Run Python: it may only change files in this folder and stops after a minute. For anything else, use the terminal."));
+  body.append(h("p", { class: "hint" }, "Python, Rust, and shell files run in their own folder and stop after a minute. They use your permissions and are not a security sandbox."));
   return body;
 }
-async function runPython(placeName, path) {
+async function runProgram(placeName, path) {
   if (S.runOut && S.runOut.running) return;
   const job = S.runOut = { place: placeName, path, running: true, started: Date.now() };
   S.ide.tab = "output"; S.ide.dock = true; saveIde();
@@ -2522,7 +2528,7 @@ function renderAgents() {
 }
 
 /* -------------------------------------------------------------- terminal
-   Shells run by Axis (bash, or cmd on Windows) through pipes: commands and line-based programs work,
+   Shells run by Axis (bash, sh, cmd, or PowerShell) through pipes: commands and line-based programs work,
    full-screen programs do not. You type straight into the output, like in an ordinary terminal: the
    page keeps the line being typed and sends it when you press Enter. The same terminal is shown in the
    Terminal tab and in the Workspace's bottom panel. An agent panel lets a chosen agent see the newest output. */
@@ -4270,7 +4276,7 @@ function renderArt() {
   // Rust
   const rj = failedOrRunning(latest("rust")), r = a.rust;
   body.push(h("div", { class: "skill-group" }, h("h3", {}, "Rust"),
-    artCard("Rust", `A portable Rust, installed with rustup into Axis\u2019s own folder. Axis never changes your PATH. The apps do not need Rust to run, but any app opened from here finds this Rust on its PATH.${a.platform.os === "windows" ? " Building programs with Rust on Windows also needs Microsoft\u2019s C++ Build Tools." : ""}`,
+    artCard("Rust", `A portable Rust, installed with rustup into Axis\u2019s own folder. Axis never changes your PATH. The apps do not need Rust to run, but any app opened from here finds this Rust on its PATH.${a.platform.os === "windows" ? " Axis downloads Microsoft\u2019s C++ Build Tools when a Rust build needs the MSVC linker." : ""}`,
       r.installed ? (r.check && r.check.update ? "Update available" : "Installed") : "Not installed", rj,
       r.installed ? artButtons("rust", "Rust", r.version || "", null, r.check)
         : r.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", "rust") }, "Install Rust")]
@@ -4572,7 +4578,7 @@ function renderSkills() {
         h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
         custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent act: files, Python, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder. Edit changes what a skill tells the model; Reset to default undoes it."),
+        h("p", { class: "hint" }, "These let an agent act: files, Python, Rust, terminal code, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder. Edit changes what a skill tells the model; Reset to default undoes it."),
         builtin.map(skillCard)))));
 }
 

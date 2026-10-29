@@ -54,12 +54,38 @@ def clean(text: str) -> str:
     return "\n".join(lines).replace("\x07", "")
 
 
-def _shell() -> Dict[str, Any]:
-    """The command to start and whether Axis must echo typed input into the output."""
+def default_shell_name() -> str:
+    """The shell used by an automatic terminal action on this computer."""
     if os.name == "nt":
-        comspec = os.environ.get("COMSPEC") or "cmd.exe"
-        # cmd prints its prompt and each command it reads, so typed input is not echoed again.
-        return {"argv": [comspec, "/D", "/K", "chcp 65001>nul"], "name": "cmd", "echo": False}
+        return "cmd"
+    for candidate in (os.environ.get("SHELL", ""), "/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash",
+                      "/opt/homebrew/bin/bash", shutil.which("bash") or ""):
+        if candidate and Path(candidate).name == "bash" and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return "bash"
+    return Path(shutil.which("sh") or "/bin/sh").name
+
+
+def _shell(requested: str = "") -> Dict[str, Any]:
+    """The command to start and whether Axis must echo typed input into the output."""
+    requested = str(requested or "auto").strip().lower()
+    if requested == "auto":
+        requested = default_shell_name()
+    if os.name == "nt":
+        if requested == "cmd":
+            comspec = os.environ.get("COMSPEC") or "cmd.exe"
+            # cmd prints its prompt and each command it reads, so typed input is not echoed again.
+            return {"argv": [comspec, "/D", "/K", "chcp 65001>nul"], "name": "cmd", "echo": False}
+        if requested in ("powershell", "pwsh"):
+            exe = shutil.which(requested) or (shutil.which("powershell") if requested == "pwsh" else shutil.which("pwsh"))
+            if not exe:
+                raise TerminalError(f"The {requested} shell is not installed on this computer.")
+            return {"argv": [exe, "-NoLogo", "-NoProfile", "-NoExit"], "name": requested, "echo": True}
+        raise TerminalError("Windows terminals use cmd, powershell, or pwsh.")
+    if requested not in ("bash", "sh"):
+        exe = shutil.which(requested)
+        if not exe:
+            raise TerminalError(f"The {requested} shell is not installed on this computer.")
+        return {"argv": [exe, "-i"], "name": requested, "echo": True}
     # bash is preferred (also on macOS, where the login shell is zsh): run with -i it shows a prompt and loads
     # the user's aliases. --noediting stops its line editor, which would echo only the lines it reads itself:
     # Axis echoes what is typed instead, as it does for sh, so a program that reads input (python, read)
@@ -78,7 +104,7 @@ _NO_TTY = re.compile(r"^[\w./-]+: (?:cannot set terminal process group \(-?\d+\)
 
 
 class Session:
-    def __init__(self, sid: str, cwd: Path, title: str) -> None:
+    def __init__(self, sid: str, cwd: Path, title: str, shell: str = "") -> None:
         self.id = sid
         self.cwd = cwd
         self.title = title
@@ -87,9 +113,9 @@ class Session:
         self._text = ""
         self._base = 0                       # characters dropped from the front of the buffer
         self.exit_code: Optional[int] = None
-        shell = _shell()
-        self.shell = shell["name"]
-        self.echo = shell["echo"]
+        shell_info = _shell(shell)
+        self.shell = shell_info["name"]
+        self.echo = shell_info["echo"]
         env = dict(os.environ)
         env.update({"TERM": "dumb", "PAGER": "cat", "GIT_PAGER": "cat", "PYTHONUNBUFFERED": "1",
                     "PYTHONIOENCODING": "utf-8", "CLICOLOR": "0", "NO_COLOR": "1"})
@@ -101,7 +127,7 @@ class Session:
         else:
             kwargs["start_new_session"] = True
         try:
-            self.proc = subprocess.Popen(shell["argv"], cwd=str(cwd), env=env, stdin=subprocess.PIPE,
+            self.proc = subprocess.Popen(shell_info["argv"], cwd=str(cwd), env=env, stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, **kwargs)
         except OSError as exc:
             raise TerminalError(f"The shell could not be started: {exc.strerror or exc}") from exc
@@ -215,7 +241,7 @@ _lock = threading.Lock()
 _ids = itertools.count(1)
 
 
-def start(cwd: Path, title: str = "") -> Session:
+def start(cwd: Path, title: str = "", shell: str = "") -> Session:
     cwd = Path(cwd)
     if not cwd.is_dir():
         raise TerminalError(f"Folder '{cwd}' does not exist.")
@@ -223,7 +249,7 @@ def start(cwd: Path, title: str = "") -> Session:
         if len([s for s in _sessions.values() if s.alive]) >= MAX_SESSIONS:
             raise TerminalError(f"At most {MAX_SESSIONS} terminals can be open. Close one first.")
         sid = f"t{next(_ids)}"
-    session = Session(sid, cwd, title or cwd.name or str(cwd))
+    session = Session(sid, cwd, title or cwd.name or str(cwd), shell=shell)
     with _lock:
         _sessions[sid] = session
     return session

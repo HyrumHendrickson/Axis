@@ -1,7 +1,7 @@
 """The skill library shared by all agents.
 
 Built-in skills give an agent actions (tools): working with files in its own
-folder, running Python, searching the web and reading Wikipedia. The Shared
+folder, running programs, searching the web and reading Wikipedia. The Shared
 folder skill adds no tools of its own; it lets the file actions an agent already
 has also reach ~/Axis/shared, which every agent with that skill can use.
 Custom skills are named instructions written by the user; they are stored as
@@ -58,6 +58,26 @@ BUILTIN: List[Dict[str, Any]] = [
         "saved), call run_python_file with its path instead of copying its code. Print the results you need. "
         "Starting other programs is not allowed.",
         "tools": ["run_python", "run_python_file"],
+    },
+    {
+        "id": "run-rust",
+        "name": "Run Rust",
+        "description": "Compile and run Rust code, or run a .rs file already in the agent's folder, and return its output.",
+        "instructions": "When a task needs Rust, write a complete program and run it with run_rust, or run a Rust file "
+        "already in your folder with run_rust_file. Print the results you need. Rust is not a security sandbox; the "
+        "program runs with the user's permissions. On Windows, Axis installs the Microsoft C++ Build Tools when the "
+        "MSVC linker is needed.",
+        "tools": ["run_rust", "run_rust_file"],
+    },
+    {
+        "id": "run-terminal",
+        "name": "Run terminal code",
+        "description": "Run a program or shell code using the computer's terminal language and return its output.",
+        "instructions": "Use run_terminal for a short program written in the terminal's language, or run_terminal_file for "
+        "a program already in your folder. The default shell is bash or sh on macOS and Linux, and cmd on Windows; "
+        "set shell to powershell or cmd on Windows when needed. Terminal programs run with the user's permissions and "
+        "are not a security sandbox.",
+        "tools": ["run_terminal", "run_terminal_file"],
     },
     {
         "id": "list-files",

@@ -267,7 +267,7 @@ def tool_msg(name, **args):
 class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
-        self.assertEqual(ids, ["run-python", "list-files", "read-files", "write-files", "delete-files",
+        self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "list-files", "read-files", "write-files", "delete-files",
                                "web-search", "wikipedia", "image-generation", "shared-folder"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
         self.assertEqual(s["id"], "plain-english")
@@ -2096,6 +2096,51 @@ class TestRunPythonFile(Base):
         self.assertIn("own folder for files", system)
 
 
+class TestProgramTools(Base):
+    def setUp(self):
+        super().setUp()
+        self.ws = Path(self.home) / "ws"
+        self.ws.mkdir()
+        self.all = list(tools.HANDLERS)
+
+    def test_terminal_code_and_file(self):
+        ok, out = tools.execute(self.ws, "run_terminal", {"code": "printf 'terminal-ok\\n'"}, self.all)
+        self.assertTrue(ok, out)
+        self.assertIn("terminal-ok", out)
+        (self.ws / "hello.sh").write_text("echo file-ok\n")
+        ok, out = tools.execute(self.ws, "run_terminal_file", {"path": "hello.sh"}, self.all)
+        self.assertTrue(ok, out)
+        self.assertIn("Ran hello.sh", out)
+        self.assertIn("file-ok", out)
+
+    def test_rust_code_and_file(self):
+        fake_bin = self.ws / "fake-bin"
+        fake_bin.mkdir()
+        rustc = fake_bin / "rustc"
+        rustc.write_text("#!/bin/sh\nout=\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi\n  shift\ndone\ncat > \"$out\" <<'EOF'\n#!/bin/sh\necho rust-ok\nEOF\nchmod +x \"$out\"\n")
+        rustc.chmod(0o755)
+        (self.ws / "hello.rs").write_text("fn main() {}\n")
+        with mock.patch.dict(os.environ, {"PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", "")}, clear=False):
+            ok, out = tools.execute(self.ws, "run_rust", {"code": "fn main() {}"}, self.all)
+            self.assertTrue(ok, out)
+            self.assertIn("rust-ok", out)
+            ok, out = tools.execute(self.ws, "run_rust_file", {"path": "hello.rs"}, self.all)
+        self.assertTrue(ok, out)
+        self.assertIn("Ran hello.rs", out)
+        self.assertFalse((self.ws / ".axis-tmp").exists())
+
+    def test_program_aliases_and_paths(self):
+        self.assertEqual(tools.normalize_call("rust", {"code": "fn main() {}"}, ["run_rust"])[0], "run_rust")
+        self.assertEqual(tools.normalize_call("run_rust", {"path": "a.rs"}, ["run_rust", "run_rust_file"]),
+                         ("run_rust_file", {"path": "a.rs"}))
+        self.assertEqual(tools.normalize_call("shell", {"script": "echo hi"}, ["run_terminal"]),
+                         ("run_terminal", {"code": "echo hi"}))
+        self.assertEqual(tools.normalize_call("run_terminal", {"path": "a.sh", "shell": "bash"},
+                                              ["run_terminal", "run_terminal_file"]),
+                         ("run_terminal_file", {"path": "a.sh", "shell": "bash"}))
+        self.assertFalse(tools.execute(self.ws, "run_rust_file", {"path": "no.txt"}, self.all)[0])
+
+
 class TestWorkspaceRoutes(Base):
     def setUp(self):
         super().setUp()
@@ -2139,6 +2184,11 @@ class TestWorkspaceRoutes(Base):
         self.assertEqual(request(self.base + "/run?path=sub", "POST")[0], 400)
         (self.ws / "x.txt").write_text("print(1)")
         self.assertEqual(request(self.base + "/run?path=x.txt", "POST")[0], 400)
+        (self.ws / "sub" / "hi.sh").write_text("echo shell-hi\n")
+        code, body = request(self.base + "/run?path=sub/hi.sh", "POST")
+        body = json.loads(body)
+        self.assertEqual(code, 200, body)
+        self.assertEqual((body["exit"], body["stdout"].strip(), body["timed_out"]), (0, "shell-hi", False))
 
     def test_terminal(self):
         if os.name == "nt":

@@ -4,7 +4,13 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.2.2] - 2026-10-29
+
 ### Added
+- **Run Rust skill.** Agents can compile and run Rust code or `.rs` files with `run_rust` and `run_rust_file`. Axis uses the portable Rust from Art Craft when available, and Windows Rust setup downloads Microsoft's C++ Build Tools when the MSVC linker needs them.
+- **Run terminal code skill.** Agents can run terminal-language code or shell files with `run_terminal` and `run_terminal_file`; bash or sh is used on macOS and Linux, and cmd, PowerShell, or pwsh can be selected on Windows.
+- **Workspace program runner.** The Workspace **Run** button now runs Python, Rust, bash/sh, PowerShell, and cmd files and displays their output in the bottom panel.
+
 - **Art Craft: Update and Delete.** The tab checks once when it opens (and on **Check for updates**) and marks each installed app, and Rust, as **Update available** or up to date. **Update** installs the newer version beside the old one, copies settings folders kept beside the old program, then removes the old version. **Delete** removes an app or Rust. API: `POST /api/artcraft/check`, `/update`, `/remove`.
 
 ## [4.2.1] - 2026-10-29
