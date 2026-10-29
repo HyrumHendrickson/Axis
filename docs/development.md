@@ -38,6 +38,7 @@ On Windows use `py`. The suite starts fake Ollama, llama.cpp, stable-diffusion.c
 | `tests/test_engines.py` | Installing engines from (fake) GitHub releases, and image models by name |
 | `tests/test_ocr.py` | Tesseract, the PyTorch environment, and OCR models |
 | `tests/test_updates.py` | The update check |
+| `tests/test_hardening.py` | Safety and robustness fixes: deleting read-only folders, uploads, `fetch_page`, Run Python limits, downloads |
 
 The page has no automated tests. After changing `axis/web/index.html`, check that its script parses (with Node.js installed):
 

@@ -12,11 +12,13 @@ http://127.0.0.1:8888) to use that instead; its JSON format must be enabled.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,7 +28,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import __version__
 
 USER_AGENT = f"Axis/{__version__} (https://github.com/HyrumHendrickson/Axis)"
-TIMEOUT = 15
+TIMEOUT = 15            # seconds to wait for each answer from a site
+TOTAL_TIMEOUT = 45      # seconds for a whole page: a site that trickles bytes cannot hold a reply forever
 MAX_DOWNLOAD = 3 * 1024 * 1024
 
 MAX_RESULTS = 10
@@ -154,6 +157,21 @@ def _window(text: str, start: int, limit: int, more_hint: str) -> str:
     return prefix + piece + suffix
 
 
+def _blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
+    """True for an address that is not on the public internet.
+
+    is_global also rules out the shared range 100.64.0.0/10 (carrier-grade NAT, used by Tailscale), which
+    is_private does not. An IPv4 address written inside an IPv6 one (::ffff:127.0.0.1) is judged as IPv4.
+    """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (not ip.is_global or ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified)
+
+
+_LOCAL_REFUSED = "Links to this computer or the local network cannot be opened."
+
+
 def _check_public(url: str) -> None:
     """Refuse links to this computer or the local network."""
     parts = urllib.parse.urlsplit(url)
@@ -164,9 +182,60 @@ def _check_public(url: str) -> None:
     except socket.gaierror:
         raise WebError(f"Could not find the site {parts.hostname}.")
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            raise WebError("Links to this computer or the local network cannot be opened.")
+        if _blocked(ipaddress.ip_address(info[4][0].split("%")[0])):
+            raise WebError(_LOCAL_REFUSED)
+
+
+def _connect_public(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """Open a connection, checking the address that is actually connected to.
+
+    _check_public looks a name up once and the connection looks it up again; a site that answers the first
+    lookup with a public address and the second with 127.0.0.1 (DNS rebinding) would reach this computer.
+    Checking here, on the address used, closes that gap.
+    """
+    host, port = address
+    error: Optional[OSError] = None
+    for family, kind, proto, _, sockaddr in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+        if _blocked(ipaddress.ip_address(sockaddr[0].split("%")[0])):
+            raise WebError(_LOCAL_REFUSED)
+        sock = socket.socket(family, kind, proto)
+        try:
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            sock.close()
+            error = exc
+    raise error or OSError("The site has no address.")
+
+
+class _PublicHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_public
+
+
+class _PublicHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_public
+
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        # Through a proxy the connection goes to the proxy, which is allowed to be on a private network.
+        proxied = req.selector.lower().startswith(("http://", "https://"))
+        return self.do_open(http.client.HTTPConnection if proxied else _PublicHTTPConnection, req)
+
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        proxied = bool(getattr(req, "_tunnel_host", None))
+        return self.do_open(http.client.HTTPSConnection if proxied else _PublicHTTPSConnection, req,
+                            context=self._context)
 
 
 class _PublicRedirects(urllib.request.HTTPRedirectHandler):
@@ -175,7 +244,23 @@ class _PublicRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_PUBLIC_OPENER = urllib.request.build_opener(_PublicRedirects)
+_PUBLIC_OPENER = urllib.request.build_opener(_PublicRedirects, _PublicHTTPHandler, _PublicHTTPSHandler)
+
+
+def _read_limited(resp) -> bytes:
+    """Read at most MAX_DOWNLOAD + 1 bytes, giving up if the whole answer takes longer than TOTAL_TIMEOUT."""
+    deadline = time.monotonic() + TOTAL_TIMEOUT
+    buf = bytearray()
+    while len(buf) <= MAX_DOWNLOAD:
+        want = min(64 * 1024, MAX_DOWNLOAD + 1 - len(buf))
+        # read1 returns what has arrived; read(n) would wait for all n bytes, and the deadline could not act.
+        chunk = resp.read1(want) if hasattr(resp, "read1") else resp.read(want)
+        if not chunk:
+            break
+        buf += chunk
+        if time.monotonic() > deadline:
+            raise WebError(f"The site sent its answer too slowly (more than {TOTAL_TIMEOUT} seconds).")
+    return bytes(buf)
 
 
 def _http(url: str, data: Optional[bytes] = None, public_only: bool = False,
@@ -191,7 +276,7 @@ def _http(url: str, data: Optional[bytes] = None, public_only: bool = False,
     try:
         with opener.open(req, timeout=TIMEOUT) as resp:
             ctype = resp.headers.get("Content-Type", "")
-            raw = resp.read(MAX_DOWNLOAD + 1)
+            raw = _read_limited(resp)
             status = resp.status
             charset = resp.headers.get_content_charset() or "utf-8"
     except urllib.error.HTTPError as exc:

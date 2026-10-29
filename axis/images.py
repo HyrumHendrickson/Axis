@@ -978,6 +978,8 @@ def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit, preview_file: Op
         raise
     finally:
         timer.cancel()
+        if proc.stdout is not None:
+            proc.stdout.close()   # an open pipe keeps its handle (and, on Windows, the files it touched) locked
     if code != 0:
         if expired.is_set():
             raise ImageError(f"Stopped: the picture took longer than {int(TIMEOUT)} seconds.")

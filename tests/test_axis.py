@@ -1591,6 +1591,7 @@ class TestCli(Base):
                 mock.patch("subprocess.Popen") as popen, redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["uninstall", "-y"]), 0)
         cmd = popen.call_args[0][0]
+        self.addCleanup(shutil.rmtree, Path(cmd[1]).parent, True)   # the helper's private folder
         self.assertTrue(cmd[1].endswith("axis_uninstall_helper.py"))
         self.assertEqual(cmd[2], str(os.getpid()))
         self.assertIn("finish uninstalling", out.getvalue())

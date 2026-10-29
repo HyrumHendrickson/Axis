@@ -16,6 +16,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -27,6 +29,8 @@ SHARED_ENV = "AXIS_SHARED_DIR"
 MAX_OUTPUT = 8000
 MAX_READ = 16000
 PYTHON_TIMEOUT = 60
+MAX_CAPTURE = 1024 * 1024   # bytes of output kept from agent code, per stream; the rest is read and thrown away
+_TMP_LOCK = threading.Lock()
 # Axis bookkeeping files that agents and the Workspace tab do not show.
 HIDDEN_NAMES = {".axis-tmp", images.INDEX_NAME}
 
@@ -392,8 +396,12 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = 
     ws = p.personal
     ws.mkdir(parents=True, exist_ok=True)
     root = ws.resolve()
-    tmp = ws / ".axis-tmp"
-    tmp.mkdir(exist_ok=True)
+    # Each run gets its own scratch folder inside .axis-tmp, so a run that finishes cannot delete the
+    # scratch files of another one that is still going (several chats can use the same agent at once).
+    with _TMP_LOCK:
+        base = ws / ".axis-tmp"
+        base.mkdir(exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(dir=str(base)))
     env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON") and k not in (SHARED_ENV, "AXIS_ROOT", "AXIS_SCRIPT")}
     if p.shared is not None:
         p.shared.mkdir(parents=True, exist_ok=True)
@@ -406,27 +414,90 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = 
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    proc = None
+    result = None
     try:
         for exe in dict.fromkeys([python_executable(), sys.executable]):
             try:
-                proc = subprocess.run(
-                    [exe, "-c", BOOTSTRAP], input=code, cwd=str(cwd or ws), env=env,
-                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=PYTHON_TIMEOUT, **kwargs,
-                )
+                result = _run_capped([exe, "-c", BOOTSTRAP], code, str(cwd or ws), env, PYTHON_TIMEOUT, kwargs)
                 break
             except OSError:  # this interpreter cannot be started; try the next one
                 continue
-    except subprocess.TimeoutExpired as exc:
-        out = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        err = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return {"exit": None, "stdout": out, "stderr": err, "timed_out": True}
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    if proc is None:
+        with _TMP_LOCK:
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                base.rmdir()   # only succeeds when no other run is using it
+            except OSError:
+                pass
+    if result is None:
         raise ToolError("Python could not be started on this computer.")
-    return {"exit": proc.returncode, "stdout": proc.stdout or "", "stderr": proc.stderr or "", "timed_out": False}
+    return result
+
+
+def _run_capped(cmd: List[str], code: str, cwd: str, env: Dict[str, str], timeout: float,
+                kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Run cmd with code on its standard input. Returns {exit, stdout, stderr, timed_out}.
+
+    Only the first MAX_CAPTURE bytes of each output stream are kept. The rest is still read, so the
+    program is never blocked, but it is not stored: code that prints without end cannot fill Axis's memory.
+    """
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            cwd=cwd, env=env, **kwargs)
+    kept = {"out": bytearray(), "err": bytearray()}
+    cut = {"out": False, "err": False}
+
+    def drain(stream, key: str) -> None:
+        try:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                room = MAX_CAPTURE - len(kept[key])
+                if room > 0:
+                    kept[key] += chunk[:room]
+                if len(chunk) > room:
+                    cut[key] = True
+        except (OSError, ValueError):
+            pass
+        finally:
+            stream.close()
+
+    def feed() -> None:
+        try:
+            proc.stdin.write(code.encode("utf-8"))
+        except OSError:  # the program ended without reading its code
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    threads = [threading.Thread(target=drain, args=(proc.stdout, "out"), daemon=True),
+               threading.Thread(target=drain, args=(proc.stderr, "err"), daemon=True),
+               threading.Thread(target=feed, daemon=True)]
+    for t in threads:
+        t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        proc.wait()
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    for t in threads:
+        t.join(5)
+
+    def text(key: str) -> str:
+        out = bytes(kept[key]).decode("utf-8", "replace").replace("\r\n", "\n")
+        return out + (f"\n... (output cut off after {MAX_CAPTURE // 1024} KB)" if cut[key] else "")
+
+    return {"exit": None if timed_out else proc.returncode, "stdout": text("out"), "stderr": text("err"),
+            "timed_out": timed_out}
 
 
 def _report(result: Dict[str, Any]) -> str:

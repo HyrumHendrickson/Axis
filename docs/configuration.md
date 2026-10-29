@@ -50,7 +50,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build auto\|cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. `--check` only reports whether a newer version is available. |
-| `axis quit` | Stop every running copy of Axis and every model: each model loaded in Ollama is unloaded (Ollama itself keeps running), and llama-server and sd-server are stopped. |
+| `axis quit` | Stop every running copy of Axis and every model: each model loaded in Ollama is unloaded (Ollama itself keeps running), and llama-server and sd-server are stopped. A copy that does not stop when asked is ended only if it was started by this version of Axis; for an older copy, close its window or terminal. |
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
 
@@ -64,7 +64,7 @@ If `axis update` fails, reinstall manually:
 pipx install --force https://github.com/HyrumHendrickson/Axis/archive/refs/heads/main.zip
 ```
 
-`axis uninstall --yes` removes the program and keeps your data; add `--delete-data` to remove the data folder too. On Windows the removal completes a few seconds after the command returns; details are written to `axis-uninstall.log` in your temp folder. You can also remove Axis with `pipx uninstall axis-agent-manager`.
+`axis uninstall --yes` removes the program and keeps your data; add `--delete-data` to remove the data folder too. On Windows the removal completes a few seconds after the command returns; details are written to `axis-uninstall.log` in a new `axis-uninstall-…` folder inside your temp folder (the command prints the exact path). You can also remove Axis with `pipx uninstall axis-agent-manager`.
 
 ## Options
 

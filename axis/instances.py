@@ -90,8 +90,9 @@ def find(ports: Iterable[int]) -> List[Dict[str, Any]]:
             continue
         info = ping(port, timeout=0.5)
         if info is not None:
-            pid = info.get("pid")
-            found[port] = {"port": port, "pid": int(pid) if isinstance(pid, int) else 0, "file": None}
+            # Whatever answers on a port can claim any process id, so a claimed id is never used to end a
+            # process: only ids that Axis wrote to its own folder are. Without one, Axis is asked to quit.
+            found[port] = {"port": port, "pid": 0, "file": None}
     for e in found.values():
         if e["pid"] == os.getpid():
             e["pid"] = 0  # never wait for, or end, the process asking
@@ -117,7 +118,9 @@ def quit_all(ports: Iterable[int], timeout: float = 45.0, say=print) -> int:
         if waiting:
             time.sleep(0.3)
     for e in waiting:  # did not stop by itself; end it (on POSIX, SIGTERM still runs its cleanup first)
-        if e["pid"]:
+        if not e["pid"]:
+            say(f"Axis on port {e['port']} did not stop. Close its window or terminal to stop it.")
+        else:
             say(f"Axis on port {e['port']} did not stop in time; ending process {e['pid']}.")
             _kill_pid(e["pid"], timeout=15)
     for e in running:

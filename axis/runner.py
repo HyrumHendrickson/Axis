@@ -148,13 +148,18 @@ class HideToolBlocks:
 
 IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
 
+# Actions that read or change this computer's files. After one of them succeeds, the remembered results of
+# earlier ones may be out of date, so they are forgotten (see Session.run).
+LOCAL_TOOLS = set(tools.FILE_TOOLS) | {"run_python", "run_python_file", "generate_image"}
+CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", "run_python", "run_python_file", "generate_image"}
+
 
 class Session:
     def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None,
                  image_preview: bool = False):
         self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
         self.image_preview = image_preview
-        self.done: Dict[str, str] = {}  # call signature -> result
+        self.done: Dict[str, Tuple[str, str]] = {}  # call signature -> (tool, result)
         self.repeats = 0
 
     def _image_events(self, call_id: str) -> Callable[[Dict[str, Any]], None]:
@@ -178,7 +183,7 @@ class Session:
         self.emit({"tool": {"id": call_id, "name": name, "args": shown}})
         if sig in self.done:
             self.repeats += 1
-            ok, output = True, ("You already did exactly this. The result was:\n" + self.done[sig]
+            ok, output = True, ("You already did exactly this. The result was:\n" + self.done[sig][1]
                                 + "\nDo not repeat it. Use the result to continue or to answer the user.")
         elif not isinstance(args, dict):
             ok, output = False, "Error: the arguments were not valid JSON. Call the tool again with a JSON object."
@@ -186,7 +191,9 @@ class Session:
             ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared,
                                        on_image_event=self._image_events(call_id), image_preview=self.image_preview)
             if ok:
-                self.done[sig] = output
+                if name in CHANGING_TOOLS:   # the folder changed: listings and file contents seen before are stale
+                    self.done = {s: v for s, v in self.done.items() if v[0] not in LOCAL_TOOLS}
+                self.done[sig] = (name, output)
         self.emit({"tool_result": {"id": call_id, "ok": ok, "output": output}})
         return output
 

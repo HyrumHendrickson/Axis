@@ -19,9 +19,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import stat
-import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +27,7 @@ from typing import Any, Dict, List, Optional
 from . import chats as chat_lib
 from . import skills as skill_lib
 from . import tools as tool_lib
-from .paths import axis_home, shared_root
+from .paths import axis_home, remove_tree, shared_root
 
 DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -208,18 +205,7 @@ def delete(name: str) -> None:
     folder = agent.folder.resolve()
     if folder.parent != agents_root().resolve():
         raise AgentError("Refusing to delete a folder outside the Axis agents directory.")
-    def retry_writable(func, path, *_):
-        # Windows refuses to delete read-only files; make them writable and retry.
-        try:
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
-        except OSError:
-            pass
-
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(folder, onexc=retry_writable)
-    else:
-        shutil.rmtree(folder, onerror=retry_writable)
+    remove_tree(folder)
     if folder.exists():
         raise AgentError(
             "Some of the agent's files could not be deleted. Close any of its files that are open "

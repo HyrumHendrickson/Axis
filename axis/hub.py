@@ -175,12 +175,23 @@ def parse(text: str) -> Ref:
 # ------------------------------------------------------------------- HTTP
 
 
+def _origin(url: str) -> Tuple[str, str, int]:
+    """(scheme, host, port) of a link, so a move from https to http, or to another port, counts as another site."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        port = -1
+    return scheme, (parts.hostname or "").lower(), port
+
+
 class _Redirect(urllib.request.HTTPRedirectHandler):
-    """Follow redirects, but never send the access token to another host (the download CDN)."""
+    """Follow redirects, but never send the access token to another site (the download CDN), or over plain http."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).hostname != urllib.parse.urlsplit(req.full_url).hostname:
+        if new is not None and _origin(newurl) != _origin(req.full_url):
             for name in list(new.headers):
                 if name.lower() == "authorization":
                     del new.headers[name]

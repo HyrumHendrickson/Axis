@@ -77,7 +77,7 @@ def _powershell(script: str, env: dict) -> List[str]:
                        creationflags=_no_window(), timeout=60)
     if r.returncode != 0:
         raise ShortcutError((r.stderr or r.stdout).strip() or "PowerShell could not make the shortcut.")
-    return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    return [line.strip() for line in (r.stdout or "").splitlines() if line.strip()]
 
 
 def _windows_create(desktop: bool) -> List[str]:

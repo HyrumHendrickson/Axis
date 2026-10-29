@@ -251,10 +251,12 @@ def _github_api() -> str:
 
 def _open(url: str, timeout: float = 30.0, accept: str = "*/*"):
     headers = {"User-Agent": f"axis/{__version__}", "Accept": accept}
+    req = urllib.request.Request(url, headers=headers)
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if token and urllib.parse.urlsplit(url).netloc == urllib.parse.urlsplit(_github_api()).netloc:
-        headers["Authorization"] = f"Bearer {token}"
-    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+        # "Unredirected": sent to this address only, never on to wherever a redirect points.
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 def _read(url: str, accept: str = "*/*") -> str:
@@ -415,14 +417,30 @@ def _download(asset: Dict[str, Any], dest: Path, job: jobs.Job, base: int, total
     return got
 
 
+def _within(top: Path, path: Any) -> bool:
+    """True when path is top or lies inside it. (A plain startswith would accept the sibling top + "-evil".)"""
+    try:
+        return os.path.commonpath([str(top), os.path.normpath(path)]) == str(top)
+    except ValueError:  # different drives
+        return False
+
+
 def _unpack(archive: Path, dest: Path) -> None:
     """Unpack an archive into dest, refusing anything that would land outside it."""
     dest.mkdir(parents=True, exist_ok=True)
     top = dest.resolve()
     name = archive.name.lower()
+
+    def need_space(size: int) -> None:
+        free = shutil.disk_usage(dest).free
+        if size + DISK_MARGIN > free:
+            raise EngineError(f"Not enough disk space to unpack {archive.name}: it needs "
+                              f"{size // (1024 * 1024)} MB and {free // (1024 * 1024)} MB is free.")
+
     if name.endswith(".zip"):
         try:
             with zipfile.ZipFile(archive) as z:
+                need_space(sum(i.file_size for i in z.infolist()))
                 for info in z.infolist():
                     parts = PurePosixPath(info.filename.replace("\\", "/")).parts
                     if not parts or info.filename.startswith(("/", "\\")) or ".." in parts or ":" in parts[0]:
@@ -443,13 +461,14 @@ def _unpack(archive: Path, dest: Path) -> None:
     try:
         with tarfile.open(archive, "r:*") as t:
             members = t.getmembers()
+            need_space(sum(m.size for m in members if m.isfile()))
             for m in members:
                 parts = PurePosixPath(m.name).parts
                 if m.name.startswith("/") or ".." in parts or not (m.isfile() or m.isdir() or m.issym() or m.islnk()):
                     raise EngineError(f"{archive.name} contains an unsafe entry: {m.name}")
                 if m.issym() or m.islnk():
                     link = (top / PurePosixPath(m.name).parent / m.linkname) if m.issym() else top / m.linkname
-                    if not str(os.path.normpath(link)).startswith(str(top)):
+                    if not _within(top, link):
                         raise EngineError(f"{archive.name} contains a link that points outside it: {m.name}")
             if hasattr(tarfile, "data_filter"):
                 t.extractall(top, members=members, filter="data")

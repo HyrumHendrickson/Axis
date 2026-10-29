@@ -72,7 +72,7 @@ Notes:
 - File actions are confined to the agent's own folder (plus `shared/` with Shared folder). Paths using `..`, absolute paths, and links pointing outside are refused.
 - Run Python starts in the agent's folder (a Python file starts in its own folder) and blocks writing, renaming, or deleting elsewhere, and launching other programs. It uses the Python Axis was installed with. To make a package such as pandas available to agents, install it into that environment: `pipx inject axis-agent-manager pandas`.
 - This guard is not a security sandbox against code deliberately written to escape it. Review what an agent does when you give it Run Python.
-- Web search uses DuckDuckGo by default. If it rate-limits you, set `AXIS_SEARCH_URL` to a [SearXNG](https://docs.searxng.org/) server. `fetch_page` refuses links to your own machine and local network.
+- Web search uses DuckDuckGo by default. If it rate-limits you, set `AXIS_SEARCH_URL` to a [SearXNG](https://docs.searxng.org/) server. `fetch_page` refuses links to your own machine and local network (including private, link-local, and shared addresses such as Tailscale's `100.x.x.x`), checks the address it actually connects to, and gives up on a site that sends its answer too slowly.
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
 
@@ -201,7 +201,7 @@ Open **Workspace** in the sidebar to browse, change, and run what agents have ma
 - **Edit** opens any text file (`.txt`, `.py`, `.html`, `.md`, `.csv`, `.json`, and so on) in an editor. **Save** (or Ctrl+S) replaces the file; Tab indents (press Esc first to move on with Tab). Axis asks before discarding unsaved changes. Files larger than 512 KB can be downloaded but not edited here.
 - **Run** on a `.py` file runs it and opens its output (printed text, errors, and exit code) in a panel on the right; **Run again** repeats it. The file runs in its own folder with the same guard and one-minute limit as an agent's Run Python. While editing, **Save and run** does both.
 - Every folder has a terminal button, and **Open in Terminal** opens the current folder: both start a terminal in that folder.
-- **Upload** (or drag and drop) copies files into the current folder, up to 512 MB each. Existing files are never replaced; duplicates are saved as `data (2).csv`. Files dropped from your computer onto a folder in the list are uploaded into that folder.
+- **Upload** (or drag and drop) copies files into the current folder, up to 512 MB each. Existing files are never replaced, even when two uploads of the same name arrive at once; duplicates are saved as `data (2).csv`. On Windows, names that Windows reserves (such as `nul` or `con`) are refused. Files dropped from your computer onto a folder in the list are uploaded into that folder.
 - **Move by dragging.** Press and hold a file or folder in the list, drag it onto a folder, and let go to move it there. Drop it on **Up one folder**, or on a part of the folder path above the list, to move it upward. Moves stay inside the same agent's folder, never replace a file of the same name, and cannot put a folder inside itself.
 - **Download**, **Show in folder**, **Copy text**, **Delete**, **New folder**, and **Delete folder** are available. The list refreshes automatically.
 

@@ -365,8 +365,10 @@ def cmd_uninstall(args) -> int:
     if is_windows():
         # Windows cannot delete the files of a running program, so a helper
         # finishes the job after this command exits.
-        helper = Path(tempfile.gettempdir()) / "axis_uninstall_helper.py"
-        log = Path(tempfile.gettempdir()) / "axis-uninstall.log"
+        # A private folder, so the helper's name cannot be guessed or planted by another program.
+        work = Path(tempfile.mkdtemp(prefix="axis-uninstall-"))
+        helper = work / "axis_uninstall_helper.py"
+        log = work / "axis-uninstall.log"
         helper.write_text(WINDOWS_HELPER, encoding="utf-8")
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         subprocess.Popen([tools.python_executable(), str(helper), str(os.getpid()), str(log)] + cmd,

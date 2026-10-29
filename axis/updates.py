@@ -99,6 +99,8 @@ def fetch_tree(url: str = TREE_URL, timeout: float = CHECK_TIMEOUT) -> Tuple[str
              if isinstance(e, dict) and e.get("type") == "blob" and str(e.get("path", "")).startswith("axis/")}
     if not files or not data.get("sha"):
         raise ValueError("GitHub sent an empty file list.")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(data["sha"])):
+        raise ValueError("GitHub sent something that is not a commit.")   # it goes into a download address
     return str(data["sha"]), files
 
 

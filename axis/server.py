@@ -91,13 +91,14 @@ import sys
 import threading
 import time
 import urllib.parse
+import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
-from .paths import shared_root
+from .paths import remove_tree, shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
@@ -150,6 +151,28 @@ def place(name: str) -> Place:
 
 def _owner(agent: Place) -> str:
     return "the shared folder" if isinstance(agent, SharedPlace) else f"{agent.name}'s folder"
+
+
+MAX_NAME_BYTES = 200   # leaves room for " (2)" and a temporary prefix inside the 255-byte limit of most file systems
+_WINDOWS_DEVICES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+
+
+def bad_file_name(name: str, windows: Optional[bool] = None) -> Optional[str]:
+    """Why a file name cannot be used for an upload (None when it is fine).
+
+    On Windows a name such as nul.txt or con opens a device instead of making a file, and a name that
+    ends in a dot or a space is silently renamed, so those are refused there.
+    """
+    if not name or name in (".", "..") or any(c in name for c in '/\\:*?"<>|\0') or any(ord(c) < 32 for c in name):
+        return "That file name cannot be used."
+    if name in HIDDEN:
+        return "That file name cannot be used."
+    if len(name.encode("utf-8", "replace")) > MAX_NAME_BYTES:
+        return "That file name is too long."
+    if os.name == "nt" if windows is None else windows:
+        if name.split(".")[0].strip().lower() in _WINDOWS_DEVICES or name[-1] in ". ":
+            return "Windows cannot use that file name."
+    return None
 
 
 class ClientGone(Exception):
@@ -212,6 +235,12 @@ class AxisServer(ThreadingHTTPServer):
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
+
+    def handle_error(self, request, client_address) -> None:
+        """A browser that closes a connection is routine, not an error worth a traceback."""
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def _when(ts: float) -> str:
@@ -351,7 +380,9 @@ def delete_path(agent: "Place", rel: str) -> str:
     except tools.ToolError as exc:
         raise agents.AgentError(str(exc)) from exc
     if target.is_dir() and not target.is_symlink():
-        shutil.rmtree(target)
+        remove_tree(target)
+        if target.exists():
+            raise agents.AgentError(f"Some files in '{rel}' could not be deleted. Close any that are open in other programs.")
     elif target.exists() or target.is_symlink():
         target.unlink()
     else:
@@ -402,6 +433,23 @@ def move_path(agent: "Place", rel: str, to_dir: str) -> str:
     return target.relative_to(ws.resolve()).as_posix()
 
 
+def _reserve_name(folder: Path, name: str) -> Path:
+    """Create an empty file for a new upload and return it: report.txt, then report (2).txt, and so on.
+
+    The file is created exclusively, so two uploads of the same name (or a file that appears while this
+    runs) can never end up with the same path.
+    """
+    stem, dot, ext = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
+    n = 1
+    while True:
+        candidate = folder / (name if n == 1 else f"{stem} ({n}){dot}{ext}")
+        try:
+            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+            return candidate
+        except FileExistsError:
+            n += 1
+
+
 def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
     """Replace a text file in the folder with data (UTF-8). The file must exist already."""
     path = file_target(agent, rel)
@@ -413,13 +461,17 @@ def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
         old_start = f.read(65536)
     if b"\r\n" in old_start and b"\r\n" not in data:   # keep Windows line endings
         data = data.replace(b"\n", b"\r\n")
-    tmp = path.with_name(path.name + ".axis-save")
+    # A fresh, exclusively created temporary name: a link planted at a guessable name cannot redirect the write.
+    tmp = path.with_name(f".axis-save-{uuid.uuid4().hex}")
     try:
-        tmp.write_bytes(data)
+        with open(tmp, "xb") as f:
+            f.write(data)
         os.replace(tmp, path)
     finally:
-        if tmp.exists():
+        try:
             tmp.unlink()
+        except OSError:
+            pass
     st = path.stat()
     return {"path": path.relative_to(agent.workspace.resolve()).as_posix(), "size": st.st_size, "modified": _when(st.st_mtime)}
 
@@ -493,15 +545,19 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------ helpers
 
     def _send(self, code: int, body: bytes, content_type: str, extra: Optional[Dict[str, str]] = None) -> None:
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True   # the browser went away (or was refused mid-upload); nothing left to tell it
 
     def _json(self, code: int, payload: Any) -> None:
         self._send(code, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
@@ -563,7 +619,9 @@ class Handler(BaseHTTPRequestHandler):
         n = len(parts)
         if n == 0:
             if method == "GET":
-                return self._send(200, page(), "text/html; charset=utf-8")
+                # No other site may show Axis inside a frame and trick a click (clickjacking).
+                return self._send(200, page(), "text/html; charset=utf-8",
+                                  {"Content-Security-Policy": "frame-ancestors 'none'", "X-Frame-Options": "DENY"})
         elif parts[0] != "api":
             pass
         elif parts[1:] == ["ping"] and method == "GET":
@@ -813,8 +871,9 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_UPLOAD:
             raise agents.AgentError(f"Files larger than {MAX_UPLOAD // (1024 * 1024)} MB cannot be uploaded.")
         name = (name or "").strip()
-        if not name or name in (".", "..") or any(c in name for c in '/\\:*?"<>|\0') or name in HIDDEN:
-            raise agents.AgentError("That file name cannot be used.")
+        problem = bad_file_name(name)
+        if problem:
+            raise agents.AgentError(problem)
         ws = agent.workspace
         ws.mkdir(parents=True, exist_ok=True)
         try:
@@ -825,24 +884,29 @@ class Handler(BaseHTTPRequestHandler):
             folder.mkdir(parents=True)
         if not folder.is_dir():
             raise agents.AgentError(f"Folder '{rel_dir}' does not exist in {_owner(agent)}.")
-        stem, dot, ext = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
-        target, n = folder / name, 2
-        while target.exists():  # never overwrite: report.txt -> report (2).txt
-            target, n = folder / (f"{stem} ({n}){dot}{ext}"), n + 1
-        tmp = folder / (target.name + ".axis-upload")
+        target = _reserve_name(folder, name)   # claims the name atomically: nothing is ever overwritten
+        tmp = folder / f".axis-upload-{uuid.uuid4().hex}"
         remaining = length
         try:
-            with tmp.open("wb") as f:
+            with open(tmp, "xb") as f:
                 while remaining > 0:
                     chunk = self.rfile.read(min(remaining, 256 * 1024))
                     if not chunk:
                         raise agents.AgentError("The upload was interrupted.")
                     f.write(chunk)
                     remaining -= len(chunk)
-            os.replace(tmp, target)
+            os.replace(tmp, target)   # replaces only our own empty placeholder
+        except BaseException:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise
         finally:
-            if tmp.exists():
+            try:
                 tmp.unlink()
+            except OSError:
+                pass
         return {"path": target.relative_to(ws.resolve()).as_posix(), "size": length}
 
     def _status(self) -> None:
