@@ -25,6 +25,7 @@ Routes:
   POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
                                             (&mkdirs=1 makes the folder first when it is missing)
   POST   /api/files/<name>/mkdir?path=dir   make a folder
+  POST   /api/files/<name>/move?path=x&to=dir   move a file or folder into another folder of the same place
   PUT    /api/files/<name>/save?path=file   replace a text file with the request body (UTF-8 text)
   POST   /api/files/<name>/run?path=file    run a .py file (guarded like Run Python) and return its output
   DELETE /api/files/<name>?path=x           delete a file or folder
@@ -372,6 +373,35 @@ def make_dir(agent: "Place", rel: str) -> str:
     return target.relative_to(agent.workspace.resolve()).as_posix()
 
 
+def move_path(agent: "Place", rel: str, to_dir: str) -> str:
+    """Move a file or folder into another folder of the same agent (or the shared folder).
+
+    Both paths stay inside the folder. Nothing is ever overwritten, and a folder cannot be
+    moved into itself. Returns the new path.
+    """
+    ws = agent.workspace
+    try:
+        source = tools.resolve(ws, rel)
+        dest = tools.resolve(ws, to_dir, allow_root=True)
+    except tools.ToolError as exc:
+        raise agents.AgentError(str(exc)) from exc
+    if not (source.exists() or source.is_symlink()):
+        raise agents.AgentError(f"'{rel}' does not exist in {_owner(agent)}.")
+    if not dest.is_dir():
+        raise agents.AgentError(f"Folder '{to_dir}' does not exist in {_owner(agent)}.")
+    if any(part in HIDDEN for part in dest.relative_to(ws.resolve()).parts):
+        raise agents.AgentError("Files cannot be moved into that folder.")
+    if source.is_dir() and not source.is_symlink() and (dest == source or source in dest.parents):
+        raise agents.AgentError("A folder cannot be moved into itself.")
+    target = dest / source.name
+    if target == source:
+        return source.relative_to(ws.resolve()).as_posix()   # already there
+    if target.exists() or target.is_symlink():
+        raise agents.AgentError(f"'{source.name}' already exists in that folder.")
+    shutil.move(str(source), str(target))
+    return target.relative_to(ws.resolve()).as_posix()
+
+
 def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
     """Replace a text file in the folder with data (UTF-8). The file must exist already."""
     path = file_target(agent, rel)
@@ -599,6 +629,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, self._upload(agent, param("path"), param("name"), make=param("mkdirs") == "1"))
             if action == "mkdir" and method == "POST":
                 return self._json(201, {"made": make_dir(agent, param("path"))})
+            if action == "move" and method == "POST":
+                return self._json(200, {"moved": move_path(agent, param("path"), param("to"))})
             if action == "save" and method == "PUT":
                 length = self._length()
                 if length > MAX_SAVE:

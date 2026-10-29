@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement to Axis.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Axis stays local, account-free, and free of dependencies. Please read the [design principles](https://github.com/HyrumHendrickson/Axis/blob/main/docs/principles.md) before suggesting a feature.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what makes it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed solution
+      description: How might Axis help? Describe what you would see and click.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Fit
+      options:
+        - label: This works without a cloud service, an account, or a new Python dependency.
+          required: true

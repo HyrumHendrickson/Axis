@@ -963,6 +963,43 @@ class TestFileManagement(Base):
         self.assertTrue((Path(self.home) / "agents" / "a" / "agent.json").is_file())
         self.assertTrue(self.ws.is_dir())
 
+    def move(self, path, to):
+        q = urllib.parse.quote
+        return request(f"{self.base}/move?path={q(path)}&to={q(to)}", "POST", {})
+
+    def test_move_into_folder(self):
+        (self.ws / "pics").mkdir()
+        (self.ws / "cat.png").write_bytes(b"png")
+        status, body = self.move("cat.png", "pics")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["moved"], "pics/cat.png")
+        self.assertEqual((self.ws / "pics" / "cat.png").read_bytes(), b"png")
+        self.assertFalse((self.ws / "cat.png").exists())
+        # and back up to the top of the folder
+        self.assertEqual(json.loads(self.move("pics/cat.png", "")[1])["moved"], "cat.png")
+        # a folder moves with everything in it
+        (self.ws / "old" / "deep").mkdir(parents=True)
+        (self.ws / "old" / "deep" / "x.txt").write_text("x")
+        self.assertEqual(self.move("old", "pics")[0], 200)
+        self.assertEqual((self.ws / "pics" / "old" / "deep" / "x.txt").read_text(), "x")
+
+    def test_move_refuses_unsafe_moves(self):
+        (self.ws / "a" / "b").mkdir(parents=True)
+        (self.ws / "f.txt").write_text("one")
+        (self.ws / "a" / "f.txt").write_text("two")
+        self.assertEqual(self.move("f.txt", "a")[0], 400)              # never overwrites
+        self.assertEqual((self.ws / "a" / "f.txt").read_text(), "two")
+        self.assertEqual(self.move("a", "a/b")[0], 400)                # into itself
+        self.assertEqual(self.move("a", "a")[0], 400)
+        self.assertEqual(self.move("f.txt", "..")[0], 400)             # outside the folder
+        self.assertEqual(self.move("../agent.json", "a")[0], 400)
+        self.assertEqual(self.move("", "a")[0], 400)                   # the folder itself
+        self.assertEqual(self.move("missing.txt", "a")[0], 404)
+        self.assertEqual(self.move("f.txt", "nowhere")[0], 404)
+        self.assertEqual(self.move("f.txt", "a/f.txt")[0], 404)        # a file is not a folder
+        self.assertEqual(json.loads(self.move("a/f.txt", "a")[1])["moved"], "a/f.txt")   # already there
+        self.assertTrue((self.ws / "f.txt").is_file())
+
     def test_bad_content_length(self):
         conn = socket.create_connection(("127.0.0.1", int(self.url.rsplit(":", 1)[1])))
         host = self.url.split("//")[1]

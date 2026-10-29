@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in Axis does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thank you for reporting this. Please check [Troubleshooting](https://github.com/HyrumHendrickson/Axis/blob/main/docs/troubleshooting.md) first. Report security problems privately, as described in SECURITY.md, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Models
+        2. Install llama3.1:8b
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Axis version
+      description: The output of `axis --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+  - type: input
+    id: details
+    attributes:
+      label: System details
+      description: OS version, Python version (`python3 --version`), and the engine and model involved.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Messages or logs
+      description: Error messages from the page, the terminal running `axis`, or `axis.log` in your data folder. Remove anything private.
+      render: text
