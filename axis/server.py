@@ -48,8 +48,13 @@ Routes:
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
                                             ("preview": true also streams each step as a small picture;
                                             "init_image": {place, path} and "strength" edit that picture)
+  GET    /api/ocr                           Tesseract, the PyTorch environment, settings and OCR models
+  PUT    /api/ocr/settings                  Tesseract path, Python for PyTorch, device, PyTorch package index
+  POST   /api/ocr/run                       read the text in a picture {model, image: {place, path}, languages?, psm?},
+                                            streaming progress as newline-delimited JSON
   GET    /api/manage                        engines, installed models, what is running, and jobs
   POST   /api/manage/install                install a model {engine, name, choice?, role?, target?}
+                                            (engine "ocr" takes {kind: tesseract|easyocr|doctr, name})
                                             (answers {choose: [...]} when the user must pick a file;
                                             an image name such as z-image-turbo installs every file it needs)
   POST   /api/manage/start                  start a model {engine, model}
@@ -57,7 +62,8 @@ Routes:
   POST   /api/manage/delete                 delete a model and its files {engine, model, files?}
   POST   /api/manage/ollama/start           start the Ollama server
   POST   /api/manage/ollama/stop            stop the Ollama server (only if Axis started it)
-  POST   /api/manage/engines/install        install or update llama.cpp or stable-diffusion.cpp {engine, build?}
+  POST   /api/manage/engines/install        install or update llama.cpp, stable-diffusion.cpp, Tesseract or
+                                            PyTorch for OCR {engine: llama|sd|tesseract|pytorch, build?}
   POST   /api/manage/engines/remove         remove the copy Axis installed {engine}
   PUT    /api/manage/settings               llama-server path, context size, extra arguments
   POST   /api/manage/jobs/<id>/cancel       cancel an install or start
@@ -80,7 +86,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, procs, runner, skills, tools, updates
+from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, tools, updates
 from .paths import shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -445,7 +451,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
-                hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError) as exc:
+                hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
+                ocr.OcrError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -575,6 +582,14 @@ class Handler(BaseHTTPRequestHandler):
                     if manager.image_server_url(parts[3]):
                         manager.image_stop(parts[3])
                     return self._json(200, images.delete_model(parts[3], files=files))
+
+        elif n >= 2 and parts[1] == "ocr":
+            if n == 2 and method == "GET":
+                return self._json(200, ocr.status())
+            if parts[2:] == ["settings"] and method == "PUT":
+                return self._json(200, ocr.save_settings(self._body()))
+            if parts[2:] == ["run"] and method == "POST":
+                return self._ocr()
 
         elif n >= 2 and parts[1] == "manage":
             url = self.server.model_url
@@ -744,6 +759,40 @@ class Handler(BaseHTTPRequestHandler):
             message = str(exc) if isinstance(exc, images.ImageError) else f"Unexpected error: {exc}"
             try:
                 emit({"error": message})
+            except ClientGone:
+                return
+
+    def _ocr(self) -> None:
+        body = self._body()
+        if not isinstance(body, dict):
+            raise agents.AgentError("Request body must be a JSON object.")
+        src_place, path = image_ref(body.get("image"), "picture to read")
+        ocr.check_image(path)
+        source = f"{src_place.name}:{path.relative_to(src_place.workspace.resolve()).as_posix()}"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event: dict) -> None:
+            try:
+                self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError) as exc:
+                raise ClientGone() from exc   # stops a model run for this picture: the user pressed Cancel or left
+
+        try:
+            result = ocr.run(body, path, emit)
+            emit({"result": {**result, "source": source}})
+            emit({"done": True})
+        except ClientGone:
+            return
+        except Exception as exc:
+            known = isinstance(exc, (ocr.OcrError, agents.AgentError)) or getattr(exc, "user_facing", False)
+            try:
+                emit({"error": str(exc) if known else f"Unexpected error: {exc}"})
             except ClientGone:
                 return
 

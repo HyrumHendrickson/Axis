@@ -126,6 +126,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .msg-stats { color: var(--muted); font-size: 12px; }
 .msg-note { color: var(--muted); font-size: 12px; font-style: italic; }
 .nav-item.busy small { color: var(--panel-ink); }
+/* Models sub-tabs: shown under Models only while the Models page is open */
+.nav-sub { padding: 2px 0 6px 14px; margin-left: 10px; border-left: 1px solid var(--panel-line); }
+.nav-sub .nav-item { padding: 5px 10px; font-size: 14px; }
+.nav-sub .nav-item small { display: inline; margin-left: 6px; }
 .busy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--panel-ink); margin-right: 6px; animation: pulse 1.2s infinite; vertical-align: middle; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin: 0 6px; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--ok); }
@@ -369,6 +373,8 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .ig-strength { display: flex; gap: 8px; align-items: center; }
 .ig-strength input[type=range] { flex: 1; accent-color: var(--tan); }
 .ig-strength input[type=number] { width: 72px; }
+.ocr-text { width: 100%; min-height: 260px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--bg); font: 14px/1.55 var(--mono); white-space: pre-wrap; }
+.ocr-pic { display: block; max-width: 100%; max-height: 40vh; margin: 0 auto 12px; border-radius: 6px; }
 .chat-image { margin: 6px 0 10px; }
 .chat-image img { display: block; max-width: min(100%, 512px); border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; }
 .chat-image small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -433,8 +439,20 @@ const S = {
   galleryPlace: "_shared",      // whose images/ folder the gallery shows
   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
   manageError: "",              // the last error from a Models page action
-  install: { engine: "", name: "", role: "checkpoint", target: "", advanced: false, choose: null, message: "", error: "", sending: false },
+  install: null,                // the install form of the Models sub-tab that is open (one of installs)
+  installs: {
+    chat: { engine: "", name: "", role: "checkpoint", target: "", advanced: false, choose: null, message: "", error: "", sending: false },
+    image: { engine: "image", name: "", role: "checkpoint", target: "", advanced: false, choose: null, message: "", error: "", sending: false },
+    ocr: { engine: "ocr", kind: "tesseract", name: "", choose: null, message: "", error: "", sending: false },
+  },
+  modelsTab: "chat",            // Models sub-tab: chat | image | ocr | engines
+  ocr: null,                    // last /api/ocr result: Tesseract, the PyTorch environment and OCR models
+  ocrForm: { model: "", source: null, languages: "", psm: 3 },
+  ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
+  ocrResult: null,
+  ocrError: null,
 };
+S.install = S.installs.chat;
 
 /* ---------------------------------------------------------------- helpers */
 function h(tag, attrs, ...kids) {
@@ -663,6 +681,7 @@ async function loadSkills() {
 const skillById = (id) => S.skills.find((s) => s.id === id);
 
 function go(view) {
+  if (view.kind === "models" && view.focus) { S.modelsTab = { images: "image" }[view.focus] || view.focus; store("axis.modelsTab", S.modelsTab); }
   S.view = view;
   $("app").classList.remove("menu-open");
   renderNav(); renderMain();
@@ -677,9 +696,16 @@ function renderNav() {
     item("Direct chat", "Talk to the model with no agent", v.kind === "chat" && v.agent === DIRECT, () => go({ kind: "chat", agent: DIRECT }), !!S.streams[DIRECT]),
     item("Past chats", "Earlier conversations", v.kind === "history", () => go({ kind: "history" })),
     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
+    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Files", "Browse what your agents have made", v.kind === "files", () => go({ kind: "files" })),
     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
+    v.kind === "models" ? h("div", { class: "nav-sub", role: "group", "aria-label": "Models sections" },
+      MODEL_TABS.map(([key, label]) => {
+        const busy = runningJobs(S.manage).some((j) => jobTab(j) === key);
+        return h("button", { class: "nav-item" + (busy ? " busy" : ""), "aria-current": S.modelsTab === key ? "true" : "false",
+          onclick: () => openModelsTab(key) }, label, busy ? h("small", {}, h("span", { class: "busy-dot", "aria-hidden": "true" })) : null);
+      })) : null,
     h("h2", {}, "Agents", h("button", { class: "link", onclick: () => go({ kind: "edit", agent: null }) }, "New agent")),
     S.agents.length
       ? S.agents.map((a) => item(a.name, a.model || "Any model that is on",
@@ -733,6 +759,7 @@ function renderMain() {
   if (S.view.kind === "models") return renderModels();
   if (S.view.kind === "history") return renderHistory();
   if (S.view.kind === "images") return renderImages();
+  if (S.view.kind === "ocr") return renderOcr();
   renderChat();
 }
 
@@ -1537,9 +1564,9 @@ async function uploadPicture(placeName, dir, name, blob) {
 }
 
 // A picture from the computer, converted where needed and saved in dir. Returns { place, path }.
-async function savePicture(file, placeName, dir) {
+async function savePicture(file, placeName, dir, maxSide = MAX_PICTURE_SIDE) {
   if (!file.type.startsWith("image/") && !PICTURE_RE.test(file.name)) throw new Error(`${file.name} is not a picture.`);
-  const pic = await normalizePicture(file, file.name || "picture.png");
+  const pic = await normalizePicture(file, file.name || "picture.png", maxSide);
   return { place: placeName, path: await uploadPicture(placeName, dir, pic.name, pic.blob) };
 }
 
@@ -1903,7 +1930,7 @@ let manageTimer = null, manageLoading = null;
 function loadManage() {
   if (manageLoading) return manageLoading;
   manageLoading = api("/api/manage")
-    .then((d) => { const before = S.manage; S.manage = d; onManage(before, d); })
+    .then((d) => { const before = S.manage; S.manage = d; if (d.ocr) S.ocr = d.ocr; onManage(before, d); })
     .catch((e) => { if (!S.manage || !S.manage.llamacpp) S.manage = { error: e.message, jobs: [] }; })
     .finally(() => { manageLoading = null; scheduleManage(); });
   return manageLoading;
@@ -1918,7 +1945,8 @@ const jobSig = (d) => JSON.stringify(((d && d.jobs) || []).map((j) => [j.id, j.s
 function runSig(d) {
   if (!d || !d.llamacpp) return "";
   return JSON.stringify([d.ollama, d.llamacpp.binary, d.llamacpp.models.map((m) => [m.id, m.running, m.ready, !!m.crashed]),
-    d.image.running, Object.keys(d.image.crashed || {}), d.image.sd_server, d.engines]);
+    d.image.running, Object.keys(d.image.crashed || {}), d.image.sd_server, d.engines,
+    d.ocr && [d.ocr.running, d.ocr.tesseract.binary, !!d.ocr.pytorch.installed, d.ocr.models.map((x) => [x.id, x.running, !!x.crashed])]]);
 }
 function doneText(j) {
   const named = j.label.replace(/^(Installing|Starting|Stopping|Deleting) /, "");
@@ -1929,19 +1957,21 @@ function doneText(j) {
 const jobsSeen = new Set();   // finished jobs already acted on (a fast job can finish between two polls)
 function onManage(before, d) {
   const first = !before || !before.llamacpp;
-  let finished = false, imageDone = false;
+  let finished = false, imageDone = false, ocrDone = false;
   for (const j of d.jobs || []) {
     if (j.state === "running" || jobsSeen.has(j.id)) continue;
     jobsSeen.add(j.id);
     if (first) continue;   // finished before this page opened: nothing to announce
     finished = true;
     if (j.engine === "image" || j.engine === "engine") imageDone = true;
+    if (j.engine === "ocr" || (j.engine === "engine" && OCR_ENGINES.includes(j.target))) ocrDone = true;
     if (j.state === "done") toast(doneText(j));
     else if (j.state === "failed") toast(j.label + " failed. Details are on the Models page.");
   }
   if (finished) {
     loadModels();
     if (imageDone) loadImages().then(() => { autoRenderModels(); if (S.view.kind === "images") renderImages(); });
+    if (ocrDone) loadOcr().then(() => { if (S.view.kind === "ocr" && !S.ocrJob) renderOcr(); });
     refreshStatus();
   }
   if (jobSig(before) !== jobSig(d)) renderNav();
@@ -2001,7 +2031,7 @@ async function cancelJob(j) {
 async function dismissJob(j) {
   try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}`, { method: "DELETE" }); } catch (e) { toast(e.message); }
   if (S.manage) S.manage.jobs = (S.manage.jobs || []).filter((x) => x.id !== j.id);
-  renderModels();
+  renderNav(); renderModels();
 }
 function jobView(j) {
   return h("div", { class: "job " + j.state, "data-job": j.id },
@@ -2216,8 +2246,8 @@ function installPanel(m) {
   }[I.engine];
   const pickName = (name) => { I.name = name; I.choose = null; I.error = ""; renderModels(); const el = $("install-name"); if (el) el.focus(); };
   const chips = simple ? catalogChips(cat.image, pickName) : I.engine === "image" ? null : catalogChips(cat.chat, pickName);
-  const seg = h("div", { class: "seg", role: "group", "aria-label": "What to install" },
-    [["ollama", "Chat model, Ollama"], ["llamacpp", "Chat model, llama.cpp"], ["image", "Image model"]].map(([k, label]) =>
+  const seg = I.engine === "image" ? null : h("div", { class: "seg", role: "group", "aria-label": "What to install" },
+    [["ollama", "Ollama"], ["llamacpp", "llama.cpp"]].map(([k, label]) =>
       h("button", { type: "button", "aria-pressed": I.engine === k ? "true" : "false",
         onclick: () => { I.engine = k; I.choose = null; I.error = ""; renderModels(); } }, label)));
   const input = h("input", { type: "text", id: "install-name", value: I.name, placeholder: info.ph, "aria-label": "Model name",
@@ -2231,7 +2261,7 @@ function installPanel(m) {
     imgModels.map((x) => { const o = h("option", { value: x.id }, (component ? "Add to " : "Replace in ") + x.name); o.selected = x.id === I.target; return o; }));
   if (!component && !imgModels.some((x) => x.id === I.target)) I.target = "";
   return h("div", { class: "install" },
-    h("div", { class: "section-head" }, h("h3", {}, "Install a model")),
+    h("div", { class: "section-head" }, h("h3", {}, I.engine === "image" ? "Install an image model" : "Install a chat model")),
     seg,
     I.engine === "image" && !simple ? h("div", { class: "install-row", style: "margin-bottom:8px" }, role,
       component && !imgModels.length ? h("span", { class: "hint", style: "margin:0" }, "Install a diffusion model first; then add its parts to it.") : target) : null,
@@ -2287,7 +2317,7 @@ function engineSettings(m) {
     h("p", { class: "hint" }, m.hf_token ? "A Hugging Face access token is set, so gated models you have accepted can be installed."
       : ["Gated Hugging Face models need an access token: create one at ", extLink("https://huggingface.co/settings/tokens", "huggingface.co/settings/tokens"), ", set HF_TOKEN to it, and restart Axis."]),
     h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
-  return h("div", { class: "skill-group" }, h("h3", {}, "Engine settings"), form);
+  return h("div", { class: "skill-group" }, h("h3", {}, "Chat engine settings"), form);
 }
 
 function keepPlace(draw) {
@@ -2300,9 +2330,35 @@ function keepPlace(draw) {
   if (id) { const el = $(id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) try { el.setSelectionRange(sel[0], sel[1]); } catch { /* not a text field */ } } }
 }
 
+/* --- the Models page and its sub-tabs (listed in the sidebar under Models while this page is open) */
+const MODEL_TABS = [["chat", "Chat models"], ["image", "Image models"], ["ocr", "OCR models"], ["engines", "Engine settings"]];
+const OCR_ENGINES = ["tesseract", "pytorch"];
+function jobTab(j) {
+  if (j.engine === "ollama" || j.engine === "llamacpp") return "chat";
+  if (j.engine === "image") return "image";
+  if (j.engine === "ocr") return "ocr";
+  return "engines";   // llama.cpp, stable-diffusion.cpp, Tesseract and PyTorch installs
+}
+function openModelsTab(key) {
+  S.modelsTab = key; store("axis.modelsTab", key);
+  S.manageError = "";
+  $("app").classList.remove("menu-open");
+  renderNav(); renderModels();
+  const sc = $("models-scroll"); if (sc) sc.scrollTop = 0;
+}
+function activity(m, tab) {
+  // Engine installs started from a model tab are shown there too.
+  const engineFor = { chat: ["llama"], image: ["sd"], ocr: OCR_ENGINES, engines: null }[tab];
+  const list = (m.jobs || []).filter((j) => jobTab(j) === tab || (j.engine === "engine" && engineFor && engineFor.includes(j.target)));
+  return list.length ? h("div", { class: "skill-group" }, h("h3", {}, "Activity"), list.map(jobView)) : null;
+}
+
 function renderModels() {
-  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Models"),
-    h("button", { class: "btn small", onclick: () => { loadModels(); loadManage(); loadImages().then(() => renderModels()); } }, "Refresh"));
+  const tab = MODEL_TABS.some(([k]) => k === S.modelsTab) ? S.modelsTab : "chat";
+  S.install = S.installs[tab] || S.installs.chat;
+  const title = MODEL_TABS.find(([k]) => k === tab)[1];
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, title),
+    h("button", { class: "btn small", onclick: () => { loadModels(); loadManage(); loadOcr(); loadImages().then(() => renderModels()); } }, "Refresh"));
   const d = S.models, m = S.manage;
   if (!m || !m.llamacpp) loadManage();
   if (!d) loadModels();
@@ -2313,24 +2369,189 @@ function renderModels() {
   const body = [];
   if (S.manageError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.manageError, " ",
     h("button", { class: "link", onclick: () => { S.manageError = ""; renderModels(); } }, "Dismiss")));
-  body.push(installPanel(m));
-  const jobs = m.jobs || [];
-  if (jobs.length) body.push(h("div", { class: "skill-group" }, h("h3", {}, "Activity"), jobs.map(jobView)));
-
-  const cards = chatCards(d, m);
-  const running = cards.filter((c) => c.on);
-  const total = (d.models || []).filter((x) => x.running).reduce((a, x) => a + (x.memory || 0), 0);
-  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Chat models"),
-    engineLines(m),
-    running.length && total ? h("p", { class: "summary-line" }, `${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}.`) : null,
-    (d.errors || []).map((e) => h("p", { class: "model-note" }, e)),
-    cards.length ? cards.map((c) => c.el)
-      : h("p", { class: "hint" }, "No chat models are installed yet. Install one above, for example llama3.1:8b.")));
-  body.push(imageModelsSection());
-  body.push(engineSettings(m));
+  if (tab === "chat") {
+    if (S.install.engine === "image" || !S.install.engine) S.install.engine = (m.ollama.running || m.ollama.binary) ? "ollama" : "llamacpp";
+    body.push(installPanel(m), activity(m, tab));
+    const cards = chatCards(d, m);
+    const running = cards.filter((c) => c.on);
+    const total = (d.models || []).filter((x) => x.running).reduce((a, x) => a + (x.memory || 0), 0);
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Installed chat models"),
+      engineLines(m),
+      running.length && total ? h("p", { class: "summary-line" }, `${size(total)} in use by ${running.length} model${running.length === 1 ? "" : "s"}.`) : null,
+      (d.errors || []).map((e) => h("p", { class: "model-note" }, e)),
+      cards.length ? cards.map((c) => c.el)
+        : h("p", { class: "hint" }, "No chat models are installed yet. Install one above, for example llama3.1:8b.")));
+  } else if (tab === "image") {
+    S.install.engine = "image";
+    body.push(installPanel(m), activity(m, tab), imageModelsSection());
+  } else if (tab === "ocr") {
+    body.push(ocrInstallPanel(m), activity(m, tab), ocrModelsSection(m));
+  } else {
+    body.push(activity(m, tab), engineOverview(m), engineSettings(m),
+      h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")),
+      ocrSettingsCard(m));
+  }
   keepPlace(() => fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body))));
-  if (S.view.focus === "images" && S.images) { const el = $("image-models"); if (el) el.scrollIntoView(); S.view.focus = null; }
   scheduleManage();
+}
+
+/* Every engine on one list, so each can be installed or updated from Engine settings. */
+function engineOverview(m) {
+  return h("div", { class: "skill-group" }, h("h3", {}, "Engines"),
+    h("p", { class: "hint" }, "The programs that run models. Axis installs and updates these itself; nothing is installed system-wide except Tesseract, which uses its own installer."),
+    engineLines(m), engineLine(m, "sd"), ocrEngineLines(m));
+}
+
+/* --- OCR models */
+const OCR_KINDS = [["tesseract", "Tesseract language"], ["easyocr", "EasyOCR (PyTorch)"], ["doctr", "docTR (PyTorch)"]];
+function ocrInstallPanel(m) {
+  const I = S.install, o = m.ocr;
+  if (!o) return h("p", { class: "hint" }, "Reading OCR details\u2026");
+  const torchMissing = !o.pytorch.installed;
+  const info = {
+    tesseract: { ph: "eng",
+      hint: ["A Tesseract language code, like eng, lat or grc; several at once with +, like eng+lat. Add :best for the larger, more accurate model (eng:best). The list is at ",
+        extLink("https://github.com/tesseract-ocr/tessdata_fast", "tessdata_fast"), ". Full names such as latin work too."],
+      warn: !o.tesseract.binary ? "Tesseract itself is not installed yet. Install it below; the language files can be downloaded first." : null },
+    easyocr: { ph: "en",
+      hint: ["One or more EasyOCR language codes separated by commas, like en or en,fr. Some languages only combine with English (ch_sim,en). The list is at ",
+        extLink("https://www.jaided.ai/easyocr/", "jaided.ai/easyocr"), "."],
+      warn: torchMissing ? "The PyTorch environment for OCR is not installed yet. Axis installs it first (CPU only, about 1 GB), as part of this install." : null },
+    doctr: { ph: "fast_base+crnn_vgg16_bn",
+      hint: ["A text detector and a text recognizer joined with +. docTR reads printed documents well, mainly in Latin-script languages. Leave a part out to use docTR\u2019s default for it. ",
+        extLink("https://mindee.github.io/doctr/", "docTR models")],
+      warn: torchMissing ? "The PyTorch environment for OCR is not installed yet. Axis installs it first (CPU only, about 1 GB), as part of this install." : null },
+  }[I.kind];
+  const pick = (name) => { I.name = name; I.error = ""; renderModels(); const el = $("install-name"); if (el) el.focus(); };
+  const chips = (o.catalog[I.kind] || []).map((c) => ({ ...c, description: c.title }));
+  const input = h("input", { type: "text", id: "install-name", value: I.name, placeholder: info.ph, "aria-label": "Model name",
+    autocomplete: "off", spellcheck: "false", oninput: (e) => { I.name = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") submitOcrInstall(); } });
+  return h("div", { class: "install" },
+    h("div", { class: "section-head" }, h("h3", {}, "Install an OCR model")),
+    h("div", { class: "seg", role: "group", "aria-label": "What to install" }, OCR_KINDS.map(([k, label]) =>
+      h("button", { type: "button", "aria-pressed": I.kind === k ? "true" : "false", onclick: () => { I.kind = k; I.name = ""; I.error = ""; renderModels(); } }, label))),
+    h("div", { class: "install-row" }, input,
+      h("button", { class: "btn primary", disabled: I.sending, onclick: () => submitOcrInstall() }, I.sending ? "Starting\u2026" : "Install")),
+    catalogChips(chips, pick),
+    h("p", { class: "hint", style: "margin:8px 0 0" }, info.hint),
+    info.warn ? h("p", { class: "model-note" }, info.warn) : null,
+    I.error ? h("p", { class: "form-error", role: "alert", style: "margin:10px 0 0;white-space:pre-wrap" }, I.error) : null);
+}
+async function submitOcrInstall() {
+  const I = S.install;
+  I.error = "";
+  if (!I.name.trim() && I.kind !== "doctr") { I.error = "Type the name of the model to install."; return renderModels(); }
+  I.sending = true; renderModels();
+  try { await api("/api/manage/install", { method: "POST", body: { engine: "ocr", kind: I.kind, name: I.name } }); I.name = ""; }
+  catch (e) { I.error = e.message; }
+  I.sending = false;
+  await loadManage();
+  renderNav(); renderModels();
+}
+const ocrBuild = {};
+function ocrEngineLines(m) {
+  const o = m.ocr;
+  if (!o) return null;
+  const t = o.tesseract, p = o.pytorch;
+  const tJob = busyJob("engine", "tesseract"), pJob = busyJob("engine", "pytorch");
+  const tLine = h("div", { class: "engine-line" }, h("span", { class: "dot " + (t.works ? "ok" : tJob ? "warn" : "") }),
+    t.binary ? h("span", {}, `Tesseract ${t.version || ""}: `, h("code", {}, t.binary), t.axis ? h("small", { class: "hint" }, " (installed by Axis)") : null)
+      : h("span", {}, "Tesseract is not installed. ", t.plan.note),
+    tJob || (t.binary && t.plan.how !== "installer") || !t.plan.how ? null
+      : h("button", { class: "btn small" + (t.binary ? "" : " primary"), onclick: () => manageAction("engines/install", { engine: "tesseract" }) },
+          t.binary ? "Update Tesseract" : "Install Tesseract"));
+  const builds = p.builds || [];
+  if (!ocrBuild.pytorch) ocrBuild.pytorch = p.installed ? p.installed.build : p.default_build;
+  const pick = builds.length > 1 ? h("select", { "aria-label": "PyTorch build", "data-free": "1", onchange: (e) => { ocrBuild.pytorch = e.target.value; } },
+    ["auto"].concat(builds).map((b) => { const op = h("option", { value: b }, p.build_labels[b] || b); op.selected = ocrBuild.pytorch === b; return op; })) : null;
+  const inst = p.installed;
+  const pLine = h("div", { class: "engine-line" }, h("span", { class: "dot " + (inst ? "ok" : pJob ? "warn" : "") }),
+    inst ? h("span", {}, `PyTorch ${inst.torch || ""} for OCR`, h("small", { class: "hint" },
+        ` (${p.build_labels[inst.build] || inst.build}${inst.cuda ? ", NVIDIA GPU found" : inst.mps ? ", Apple GPU found" : ""}; `
+        + (Object.entries(inst.packages || {}).map(([k, v]) => `${{ easyocr: "EasyOCR", doctr: "docTR" }[k] || k} ${v}`).join(", ") || "no OCR packages yet") + ")"))
+      : h("span", {}, "The PyTorch environment for OCR is not installed. Axis installs it with your first EasyOCR or docTR model, or install it now."),
+    pJob ? null : [pick, h("button", { class: "btn small" + (inst ? "" : " primary"),
+      onclick: () => manageAction("engines/install", { engine: "pytorch", build: ocrBuild.pytorch }) }, inst ? "Update" : "Install PyTorch"),
+      inst ? h("button", { class: "btn small danger", onclick: () => confirmRow(pLine, "Remove the PyTorch environment for OCR? EasyOCR and docTR models stay on disk but cannot run until it is installed again.",
+        () => manageAction("engines/remove", { engine: "pytorch" })) }, "Remove") : null]);
+  return [tLine, tJob ? busyView(tJob) : null, pLine, pJob ? busyView(pJob) : null];
+}
+const OCR_ENGINE_TEXT = { tesseract: "Tesseract", easyocr: "EasyOCR", doctr: "docTR" };
+function ocrModelCard(x, o) {
+  const rows = [];
+  const add = (label, value, note) => { if (value === null || value === undefined || value === "") return;
+    rows.push(h("div", { class: "kv" }, h("dt", {}, label), h("dd", {}, String(value), note ? h("small", {}, note) : null))); };
+  if (x.engine === "tesseract") {
+    add("Language", x.model);
+    add("Model", { fast: "Fast (tessdata_fast)", best: "Best (tessdata_best)", copied: "Copied from Tesseract\u2019s own folder" }[x.variant] || (x.source === "tesseract" ? "Came with Tesseract" : null));
+    add("Runs", "For each picture; nothing to start");
+  } else {
+    add(x.engine === "easyocr" ? "Languages" : "Detector + recognizer", x.model);
+    add("Runs", x.running ? "Kept in memory" : "Loaded for each picture, unless started");
+  }
+  add("Size on disk", x.size ? size(x.size) : null);
+  add("Folder", x.path);
+  if (x.installed) add("Installed", when(x.installed));
+  const row = h("div", { class: "model-actions" });
+  const job = busyJob("ocr", x.id);
+  const isOn = !!(x.running && x.ready);
+  const readBtn = h("button", { class: "btn small", disabled: !x.usable, title: x.usable ? null : "Its engine is not installed",
+    onclick: () => { S.ocrForm.model = x.id; S.ocrForm.languages = ""; saveOcrForm(); go({ kind: "ocr" }); } }, "Read text with this model");
+  if (job) fill(row, busyView(job));
+  else fill(row,
+    x.startable ? (isOn ? h("button", { class: "btn small", onclick: () => manageAction("stop", { engine: "ocr", model: x.id }) }, "Stop")
+      : h("button", { class: "btn small primary", disabled: !x.usable, title: "Keep it in memory so each picture is read at once. Stops any other OCR model that is on.",
+          onclick: () => manageAction("start", { engine: "ocr", model: x.id }) }, "Start")) : null,
+    readBtn,
+    x.deletable ? h("button", { class: "btn small danger", onclick: () => confirmRow(row,
+      `Delete ${x.name}?${x.size ? ` Its files (${size(x.size)}) are removed from disk.` : ""} You can install it again later.`,
+      () => manageAction("delete", { engine: "ocr", model: x.id })) }, "Delete") : null);
+  const notes = [];
+  if (!x.usable && x.engine === "tesseract") notes.push("Tesseract itself is not installed, so this language cannot be used yet.");
+  if (!x.usable && x.engine !== "tesseract") notes.push(`${OCR_ENGINE_TEXT[x.engine]} is not installed in the PyTorch environment. Delete this model and install it again.`);
+  if (x.also_system) notes.push("Tesseract has its own copy of this language too; deleting this one keeps that.");
+  if (x.adopted) notes.push("Started by an earlier Axis session. Stop it here when you no longer need it.");
+  return h("div", { class: "model-card" },
+    h("h4", {}, x.name, h("span", { class: "chip" }, OCR_ENGINE_TEXT[x.engine]), x.startable ? (isOn ? h("span", { class: "chip on" }, "On") : h("span", { class: "chip" }, "Off")) : null),
+    h("dl", { class: "kv-grid" }, rows),
+    notes.map((n) => h("p", { class: "model-note" }, n)),
+    x.crashed ? h("div", {}, h("p", { class: "model-note", style: "color:var(--bad)" }, "It stopped unexpectedly. Its last messages:"), h("pre", { class: "log" }, x.crashed)) : null,
+    row);
+}
+function ocrModelsSection(m) {
+  const o = m.ocr;
+  if (!o) return null;
+  return h("div", { class: "skill-group" }, h("h3", {}, "Installed OCR models"),
+    h("p", { class: "hint" }, "Tesseract is quick and light and reads many languages, including Latin and ancient Greek. EasyOCR and docTR are PyTorch models: slower without a graphics card, but often better on photos, screenshots and unusual layouts. A PyTorch model that is on stays in memory so pictures are read at once."),
+    ocrEngineLines(m),
+    o.models.length ? o.models.map((x) => ocrModelCard(x, o)) : h("p", { class: "hint" }, "No OCR models yet. Install one above, for example eng."));
+}
+function ocrSettingsCard(m) {
+  const o = m.ocr;
+  if (!o) return null;
+  const st = o.settings;
+  const err = h("p", { class: "form-error", role: "alert", hidden: true });
+  const tess = h("input", { type: "text", value: st.tesseract, placeholder: o.tesseract.binary || "tesseract", "aria-label": "Tesseract path" });
+  const py = h("input", { type: "text", value: st.python, placeholder: o.pytorch.base_python, "aria-label": "Python for the PyTorch environment" });
+  const index = h("input", { type: "text", value: st.torch_index, placeholder: "default for the build", "aria-label": "PyTorch package index" });
+  const device = h("select", { "aria-label": "Device" }, [["auto", "Graphics card when there is one"], ["cpu", "CPU only"]].map(([v, t]) => {
+    const op = h("option", { value: v }, t); op.selected = st.device === v; return op; }));
+  const form = h("form", { class: "model-card", oninput: () => { form.dataset.dirty = "1"; }, onchange: () => { form.dataset.dirty = "1"; }, onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    try { S.ocr = await api("/api/ocr/settings", { method: "PUT", body: { tesseract: tess.value, python: py.value, torch_index: index.value, device: device.value } });
+      toast("Saved"); await loadManage(); renderModels(); }
+    catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  } }, h("h4", {}, "OCR"), err,
+    h("div", { class: "field" }, h("label", {}, "Tesseract path"), h("p", { class: "hint" }, "Leave empty to find Tesseract on your PATH or where its installer puts it (or set AXIS_TESSERACT)."), tess),
+    h("div", { class: "field" }, h("label", {}, "Device for PyTorch models"), h("p", { class: "hint" }, "Applies the next time a model starts or reads a picture."), device),
+    h("div", { class: "field" }, h("label", {}, "Python for the PyTorch environment"),
+      h("p", { class: "hint" }, ["The Python the environment is made from, in ", h("code", {}, o.pytorch.root), ". Leave empty to use the one Axis runs with. Changes apply when the environment is installed again."]), py),
+    h("div", { class: "field" }, h("label", {}, "PyTorch package index"),
+      h("p", { class: "hint" }, ["Where pip gets PyTorch. Leave empty for the default of the build you choose (the CPU-only index, or a CUDA index). See ",
+        extLink("https://pytorch.org/get-started/locally/", "pytorch.org"), " for others, such as an older CUDA version."]), index),
+    h("p", { class: "hint" }, ["OCR models are kept in ", h("code", {}, o.root), "."]),
+    h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
+  return h("div", { class: "skill-group" }, h("h3", {}, "OCR engine settings"), form);
 }
 
 /* ---------------------------------------------------------------- images */
@@ -2838,13 +3059,206 @@ function imageModelsSection() {
   }
   const slot = h("div", {});
   return h("div", { class: "skill-group", id: "image-models" },
-    h("div", { class: "section-head" }, h("h3", {}, "Image models"),
+    h("div", { class: "section-head" }, h("h3", {}, "Installed image models"),
       h("button", { class: "btn small", onclick: () => fill(slot, imageModelEditor(null, renderModels)) }, "Add files I already have")),
     h("p", { class: "hint" }, "Stable Diffusion models run with stable-diffusion.cpp. Install one above by name, or add files you already have. When a model is on, it stays in memory in sd-server and pictures start at once; otherwise each picture runs sd-cli, which loads the model and exits, using no memory between pictures."),
     S.manage && S.manage.engines ? engineLine(S.manage, "sd") : null,
     slot,
     st.models.length ? st.models.map((m) => imageModelCard(m, st)) : h("p", { class: "hint" }, "No image models yet."),
-    imageSettingsCard(st));
+    h("p", { class: "hint", style: "margin-top:12px" }, "The sd-cli and sd-server paths, the working folder and the default image model are under ",
+      h("button", { class: "link", onclick: () => openModelsTab("engines") }, "Engine settings"), "."));
+}
+
+/* ------------------------------------------------------------------ OCR */
+// Reads the text in a picture with an OCR model (Models page, OCR models).
+const OCR_RE = /\.(png|jpe?g|bmp|tiff?|webp)$/i;      // what every OCR engine reads; others are converted first
+const OCR_MAX_SIDE = 6000;                             // keep small print legible
+let ocrLoading = null;
+function loadOcr() {
+  if (ocrLoading) return ocrLoading;
+  ocrLoading = api("/api/ocr").then((d) => { S.ocr = d; }).catch((e) => { if (!S.ocr) S.ocr = { error: e.message, models: [] }; })
+    .finally(() => { ocrLoading = null; });
+  return ocrLoading;
+}
+function saveOcrForm() { const { model, source, languages, psm } = S.ocrForm; store("axis.ocrForm", { model, source, languages, psm }); }
+const ocrModel = (id) => ((S.ocr && S.ocr.models) || []).find((x) => x.id === id) || null;
+function ocrFormModel() {
+  const usable = ((S.ocr && S.ocr.models) || []).filter((x) => x.usable);
+  const f = S.ocrForm;
+  if (!usable.some((x) => x.id === f.model)) f.model = (usable.find((x) => x.id === "tesseract:eng") || usable[0] || {}).id || "";
+  return ocrModel(f.model);
+}
+function setOcrSource(ref) {
+  S.ocrForm.source = ref; S.ocrResult = null; S.ocrError = null; saveOcrForm();
+  if (S.view.kind === "ocr") renderOcr();
+}
+async function uploadOcrSource(file) {
+  if (!file) return;
+  toast(`Uploading ${file.name || "picture"}\u2026`);
+  try { setOcrSource(await savePicture(file, SHARED, "uploads", OCR_MAX_SIDE)); }
+  catch (e) { toast(e.message); }
+}
+async function ocrReadable(ref) {
+  if (OCR_RE.test(ref.path)) return ref;
+  const res = await fetch(filesUrl(ref.place, "raw", ref.path));
+  if (!res.ok) throw new Error(`Could not open ${ref.path}.`);
+  const pic = await normalizePicture(await res.blob(), ref.path.split("/").pop(), OCR_MAX_SIDE);
+  return { place: SHARED, path: await uploadPicture(SHARED, "uploads", pic.name, pic.blob) };
+}
+// Screenshots pasted anywhere on the OCR page (outside text boxes) become the picture to read.
+document.addEventListener("paste", (e) => {
+  if (S.view.kind !== "ocr" || S.ocrJob) return;
+  const t = e.target;
+  if (t && /^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
+  const file = [...((e.clipboardData && e.clipboardData.files) || [])].find((f) => f.type.startsWith("image/"));
+  if (file) { e.preventDefault(); uploadOcrSource(new File([file], file.name && file.name !== "image.png" ? file.name : "pasted.png", { type: file.type })); }
+});
+
+function renderOcr() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "OCR"));
+  if (!S.ocr) {
+    loadOcr().then(() => { if (S.view.kind === "ocr") renderOcr(); });
+    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
+  }
+  const o = S.ocr;
+  if (o.error || !o.ready) {
+    bar.append(h("button", { class: "btn small", onclick: () => { S.ocr = null; renderOcr(); } }, "Check again"));
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "gate" },
+      h("h3", {}, "Set up OCR"),
+      h("p", {}, "Axis reads the text in pictures with Tesseract, or with PyTorch OCR models (EasyOCR and docTR). Install one on the Models page."),
+      o.error ? h("p", { class: "form-error" }, o.error) : h("ol", {},
+        h("li", {}, o.tesseract && o.tesseract.binary ? ["Tesseract found: ", h("code", {}, o.tesseract.binary)]
+          : "Tesseract is not installed. Install it under OCR models, or choose a PyTorch model instead."),
+        h("li", {}, "Under OCR models, install a language such as eng (English), lat (Latin) or grc (ancient Greek), or an EasyOCR or docTR model.")),
+      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Open OCR models")))));
+  }
+  const f = S.ocrForm, job = S.ocrJob;
+  const model = ocrFormModel();
+  const usable = o.models.filter((x) => x.usable);
+  const modelSel = h("select", { "aria-label": "OCR model", disabled: !!job, onchange: (e) => { f.model = e.target.value; f.languages = ""; saveOcrForm(); renderOcr(); } },
+    ["tesseract", "easyocr", "doctr"].map((eng) => {
+      const list = usable.filter((x) => x.engine === eng);
+      return list.length ? h("optgroup", { label: OCR_ENGINE_TEXT[eng] }, list.map((x) => {
+        const op = h("option", { value: x.id }, x.model + (x.running ? " (on)" : "")); op.selected = x.id === f.model; return op; })) : null;
+    }));
+  const tess = model && model.engine === "tesseract";
+  const langs = h("input", { type: "text", value: f.languages || (model ? model.model : ""), disabled: !!job, "aria-label": "Languages",
+    spellcheck: "false", oninput: (e) => { f.languages = e.target.value; saveOcrForm(); } });
+  const installedLangs = usable.filter((x) => x.engine === "tesseract").map((x) => x.model);
+  const psm = h("select", { "aria-label": "Page layout", disabled: !!job, onchange: (e) => { f.psm = Number(e.target.value); saveOcrForm(); } },
+    (o.psm || []).map((p) => { const op = h("option", { value: String(p.value) }, p.label); op.selected = Number(f.psm || 3) === p.value; return op; }));
+
+  const src = f.source;
+  const filePick = h("input", { type: "file", accept: "image/*", hidden: true, onchange: (e) => { uploadOcrSource(e.target.files[0]); e.target.value = ""; } });
+  const buttons = () => [
+    h("button", { class: "btn small", disabled: !!job, onclick: () => filePick.click() }, "Upload"),
+    h("button", { class: "btn small", disabled: !!job, onclick: async () => {
+      const r = await pickPicture("Choose a picture to read", src ? src.place : SHARED);
+      if (!r) return;
+      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose from Files"),
+    src ? h("button", { class: "btn small", disabled: !!job, onclick: () => setOcrSource(null) }, "Clear") : null];
+  let shown = null;
+  if (src) {
+    const img = h("img", { src: imageUrl(src.place, src.path), alt: "Picture to read" });
+    img.addEventListener("error", () => fill(box, h("p", { class: "form-error" }, `${src.path} is no longer there. Choose another picture.`),
+      h("div", { class: "fb-actions" }, ...buttons())), { once: true });
+    shown = [img, h("p", {}, `${placeLabel(src.place)} / ${src.path}`)];
+  }
+  const box = h("div", { class: "ig-source",
+    ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
+    ondragleave: (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove("drop"); },
+    ondrop: (e) => { e.preventDefault(); box.classList.remove("drop"); if (!job) uploadOcrSource(e.dataTransfer.files[0]); } },
+    shown || h("p", {}, "Drop a picture here, paste a screenshot, upload one, or choose one from Files."),
+    h("div", { class: "fb-actions" }, ...buttons()), filePick);
+
+  const form = h("div", { class: "ig-form" },
+    h("div", { class: "field" }, h("label", { class: "lbl" }, "Picture"), box),
+    h("div", { class: "field" }, h("label", { class: "lbl" }, "Model"), modelSel,
+      model && model.engine !== "tesseract" ? h("p", { class: "hint", style: "margin:4px 0 0" }, model.running
+        ? "On: kept in memory, so the text is read at once."
+        : ["Off: it is loaded for each picture, which takes longer. ", h("button", { class: "link", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Start it"), " to keep it in memory."]) : null),
+    tess ? h("div", { class: "field" }, h("label", { class: "lbl" }, "Languages"), langs,
+      h("p", { class: "hint", style: "margin:4px 0 0" }, `Combine installed languages with +, like eng+lat. Installed: ${installedLangs.join(", ")}.`)) : null,
+    tess ? h("div", { class: "field" }, h("label", { class: "lbl" }, "Page layout"), psm) : null,
+    h("div", { class: "ig-go" },
+      job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
+        : h("button", { class: "btn primary", disabled: !model || !src, onclick: runOcr }, "Read text")),
+    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in shared/uploads."));
+  const main = h("div", { class: "ig-main" }, h("div", { id: "ocr-stage" }));
+  fill($("main"), bar, h("div", { class: "ig" }, form, main));
+  drawOcr();
+}
+
+function drawOcr() {
+  const box = $("ocr-stage"); if (!box) return;
+  const job = S.ocrJob, r = S.ocrResult;
+  if (job) return fill(box, h("div", { class: "ig-stage", role: "status" },
+    h("div", { class: "typing" }, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+      h("span", { class: "typing-label" }, job.phase || "Starting"),
+      h("span", { class: "elapsed", "data-since": String(job.started) }, elapsedText(job.started))),
+    h("div", { class: "ig-progress indef" }, h("i"))));
+  if (S.ocrError) return fill(box, h("div", { class: "ig-stage" }, h("p", { class: "form-error", style: "white-space:pre-wrap;margin:0" }, S.ocrError)));
+  if (!r) return fill(box, h("div", { class: "ig-stage" }, h("div", { class: "empty", style: "margin:6vh auto" },
+    h("h3", {}, "No text yet"), h("p", {}, "Choose a picture and click Read text. The text appears here, where you can correct, copy or save it."))));
+  const text = h("textarea", { class: "ocr-text", "aria-label": "Text found in the picture", spellcheck: "false", oninput: (e) => { r.text = e.target.value; } });
+  text.value = r.text || "";
+  const ref = parseSource(r.source);
+  const stem = ref ? ref.path.split("/").pop().replace(/\.[^.]+$/, "") : "ocr";
+  const meta = [r.name, r.words !== undefined && `${r.words} word${r.words === 1 ? "" : "s"}`,
+    typeof r.confidence === "number" && `confidence ${r.confidence}%`, r.device && r.device !== "cpu" && `on ${r.device.toUpperCase()}`,
+    r.seconds !== undefined && `${r.seconds} s`].filter(Boolean).join(" \u00b7 ");
+  fill(box, h("div", { class: "ig-stage" },
+    ref ? h("img", { class: "ocr-pic", src: imageUrl(ref.place, ref.path), alt: "The picture that was read" }) : null,
+    r.text ? text : h("p", { class: "hint" }, "No text was found. Try another page layout or model, or a sharper picture."),
+    h("p", { class: "ig-meta" }, meta),
+    r.text ? h("div", { class: "fb-actions", style: "margin:10px 0 0" },
+      h("button", { class: "btn small", onclick: () => copyText(r.text, "Text") }, "Copy"),
+      h("button", { class: "btn small", onclick: async () => {
+        try {
+          const path = await uploadPicture(SHARED, "ocr", stem + ".txt", new Blob([r.text], { type: "text/plain" }));
+          toast("Saved as shared/" + path); openInFiles(SHARED, path, true);
+        } catch (e) { toast(e.message); } } }, "Save to Files"),
+      h("button", { class: "btn small", onclick: () => download(stem + ".txt", r.text, "text/plain") }, "Download .txt")) : null));
+}
+
+async function runOcr() {
+  if (S.ocrJob) return;
+  const f = S.ocrForm, model = ocrModel(f.model);
+  if (!model || !f.source) return;
+  const job = S.ocrJob = { controller: new AbortController(), started: Date.now(), phase: "" };
+  S.ocrResult = null; S.ocrError = null;
+  renderNav(); if (S.view.kind === "ocr") renderOcr();
+  let result = null, error = null;
+  try {
+    const body = { model: f.model, image: f.source };
+    if (model.engine === "tesseract") Object.assign(body, { languages: (f.languages || model.model).trim(), psm: Number(f.psm || 3) });
+    const res = await fetch("/api/ocr/run", { method: "POST", signal: job.controller.signal,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.phase) { job.phase = ev.phase; if (S.view.kind === "ocr") drawOcr(); }
+        if (ev.result) result = ev.result;
+        if (ev.error) error = ev.error;
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") error = e.name === "TypeError" ? "Axis is not responding. Check that the Axis window is still open." : e.message;
+  }
+  S.ocrJob = null;
+  if (result) S.ocrResult = result;
+  else if (error) S.ocrError = error;
+  renderNav();
+  if (S.view.kind === "ocr") renderOcr();
+  else if (result || error) toast(error ? "Reading the text failed" : "Text ready on the OCR page");
 }
 
 /* ---------------------------------------------------------------- skills */
@@ -3003,7 +3417,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) repo
 window.addEventListener("beforeunload", (e) => {
   // Closing the window stops Axis, so warn before cutting off a reply, a picture or an install.
   if (!closesWithWindow || (S.status && S.status.axisDown)) return;
-  if (Object.keys(S.streams).length > 0 || !!S.imageJob || runningJobs(S.manage).length > 0) {
+  if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0) {
     e.preventDefault(); e.returnValue = "";
   }
 });
@@ -3019,6 +3433,10 @@ window.addEventListener("beforeunload", (e) => {
   const form = recall("axis.imageForm", null);
   if (form && typeof form === "object" && !Array.isArray(form)) Object.assign(S.imageForm, form);
   S.imagePreview = recall("axis.imagePreview", true) !== false;
+  const ocrForm = recall("axis.ocrForm", null);
+  if (ocrForm && typeof ocrForm === "object" && !Array.isArray(ocrForm)) Object.assign(S.ocrForm, ocrForm);
+  const tab = recall("axis.modelsTab", "chat");
+  if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
   const attached = recall("axis.attachments", {});
   if (attached && typeof attached === "object" && !Array.isArray(attached))
     for (const [k, v] of Object.entries(attached)) if (Array.isArray(v)) S.attachments[k] = v.filter((a) => a && typeof a.path === "string").slice(0, MAX_ATTACH);
@@ -3027,6 +3445,7 @@ window.addEventListener("beforeunload", (e) => {
   renderMain();
   loadModels();
   loadImages();
+  loadOcr();
   loadManage();
   refreshUpdate();
   setInterval(refreshStatus, 4000);

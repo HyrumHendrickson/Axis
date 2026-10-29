@@ -22,8 +22,9 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
 - **Edit a picture** on the Images tab: upload one or choose one from Files, describe the result, and set how much may change. It uses the image models you already have (image to image).
 - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
+- **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Files) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Files, or downloaded.
 - **Files** tab lets you browse, preview, upload to, and download from every agent's folder.
-- **Models** tab installs, starts, stops, and deletes chat and image models, and shows memory use, context size, and capabilities for each.
+- **Models** tab installs, starts, stops, and deletes chat, image, and OCR models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **OCR models**, **Engine settings**) appear under **Models** in the sidebar while the page is open.
 
 Axis manages models itself. Type a model name such as `llama3.1:8b` or `z-image-turbo` on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis installs llama.cpp and stable-diffusion.cpp for you the first time it starts, so nothing else is needed. Ollama is optional; Axis uses it when it is installed.
 
@@ -360,6 +361,9 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `OLLAMA_HOST` | Where Ollama listens, as Ollama itself uses it | `127.0.0.1:11434` |
 | `AXIS_NO_ENGINE_INSTALL` | `1` stops Axis installing llama.cpp and stable-diffusion.cpp on its first start | not set |
 | `AXIS_BROWSER` | Chromium-based browser for the Axis window (a path or program name), or `tab` for a normal browser tab | Chrome, then Edge, Brave, Chromium |
+| `AXIS_TESSERACT` | Path to the `tesseract` program | Found on PATH or where its installer puts it |
+| `AXIS_OCR_PYTHON` | Python the OCR environment for PyTorch models is made from | The Python Axis was installed with |
+| `AXIS_OCR_TIMEOUT` | Longest time reading one picture may take, in seconds | 900 |
 | `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |
 
 Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
@@ -529,6 +533,37 @@ Then click **Add files I already have** and enter the same files and settings:
 
 **Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `images/` in the agent's folder and shown in the chat.
 
+### OCR
+
+Axis reads the text in pictures with one of two kinds of engine:
+
+- **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
+- **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
+
+**Installing.** Open **Models**, then **OCR models**, choose **Tesseract language**, **EasyOCR**, or **docTR**, type a name, and click **Install**.
+
+| Choice | Type | Examples |
+|--------|------|----------|
+| Tesseract language | A language code from [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast); several at once with `+`; `:best` for the larger, more accurate model from tessdata_best. Full names such as `latin` work too. | `eng`, `eng+lat`, `grc`, `eng:best` |
+| EasyOCR | Language codes separated by commas. | `en`, `en,fr,de`, `ch_sim,en` |
+| docTR | A detector and a recognizer joined with `+`; leave one out for docTR's default. | `fast_base+crnn_vgg16_bn`, `db_resnet50+parseq` |
+
+Tesseract languages are downloaded from GitHub (checked against GitHub's file hashes when its API answers) into `Axis/models/ocr/tessdata`. Languages that came with Tesseract are listed too; Axis does not delete those.
+
+**Tesseract itself.** Axis uses a Tesseract it finds (the path under **Engine settings**, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
+
+| System | How |
+|--------|-----|
+| Windows | The installer published on [Tesseract's GitHub releases](https://github.com/tesseract-ocr/tesseract/releases), checked against its SHA-256 and run silently. Windows may ask for permission. |
+| macOS | `brew install tesseract` (needs [Homebrew](https://brew.sh)) |
+| Linux | Your package manager (`apt-get`, `dnf`, `pacman`, `zypper`, or `apk`); your desktop asks for your password. Without a desktop, Axis shows the command to run. |
+
+**The PyTorch environment.** EasyOCR and docTR need PyTorch, so Axis makes a separate Python environment for them in `Axis/engines/ocr-python` (Axis itself still uses only the standard library). It is installed with your first EasyOCR or docTR model, or with **Install PyTorch** on the OCR models page. By default it installs the CPU-only build of PyTorch (about 1 GB); choose **CUDA (NVIDIA GPU)** in the menu next to **Install** for the GPU build (several GB). EasyOCR and docTR are then installed into it as models need them. Under **Engine settings** you can choose the Python the environment is made from, the device (graphics card when there is one, or CPU only), and the PyTorch package index pip uses.
+
+**Start and Stop.** A PyTorch OCR model that is on stays in memory, so each picture is read at once; only one is on at a time. A model that is off is loaded for each picture, which takes longer but uses no memory in between. Tesseract runs for each picture and needs no starting.
+
+**OCR tab.** Drop, paste, upload, or choose a picture from Files, choose the model, and click **Read text**. For Tesseract, combine installed languages with `+` (`eng+lat`) and choose a page layout (automatic, one column, one block, one line, or scattered text). The result shows the word count, the mean confidence, and the time taken. Pictures you upload or paste are saved in `shared/uploads`; **Save to Files** saves the text in `shared/ocr`.
+
 ### Files
 
 Open **Files** in the sidebar to browse what agents have made.
@@ -548,12 +583,14 @@ Axis/                       in your home folder (override with AXIS_HOME)
 │       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
 ├── engine-settings.json    llama-server path, context size, extra arguments
-├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them
+├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, and ocr-python/ (PyTorch for OCR)
 ├── image-models/           image model definitions, one .json file each
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
+├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index
 ├── models/
 │   ├── llm/                GGUF chat models for llama.cpp, one folder per Hugging Face repository
-│   └── image/              Stable Diffusion files Axis downloaded
+│   ├── image/              Stable Diffusion files Axis downloaded
+│   └── ocr/                OCR models: tessdata/ (Tesseract languages), easyocr/ and doctr/ (PyTorch weights)
 ├── run/                    programs Axis started (to recover them after a crash)
 ├── shared/                 folder shared by agents with the Shared folder skill
 │   └── images/             pictures made in the Images tab
@@ -562,7 +599,7 @@ Axis/                       in your home folder (override with AXIS_HOME)
 
 ### Models tab
 
-Open **Models** to install, start, stop, and delete models.
+Open **Models** to install, start, stop, and delete models. While the page is open, its four sections are listed under **Models** in the sidebar: **Chat models** (Ollama and llama.cpp), **Image models**, **OCR models** (see [OCR](#ocr)), and **Engine settings** (every engine with **Install** or **Update**, plus the settings for llama.cpp, stable-diffusion.cpp, and OCR). Each section shows its own installs under **Activity**.
 
 **Install a model.** Choose what to install, type a name, and click **Install** (or press Enter). Progress, speed, and time left appear under **Activity**; you can switch pages, and a download can be cancelled.
 
@@ -621,6 +658,11 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 | Images: **Set up Stable Diffusion** | Install an image model by name on the Models page; Axis installs stable-diffusion.cpp with it. |
 | Image model shows **Files missing** | A path is wrong or relative paths start in an unexpected folder. Use full paths, or set the **Working folder**. |
 | Picture fails with `sd-cli failed` | Run the same command in a terminal. Out-of-memory errors usually need a smaller size, a smaller quantization, or `--offload-to-cpu` in Extra arguments. |
+| OCR: "Tesseract is not installed" | Click **Install Tesseract** under **Models**, **OCR models**, or set its path under **Engine settings**. |
+| OCR: "The Tesseract language ... is not installed" | Install it under **OCR models** (for example `lat`), then read the picture again. |
+| Installing PyTorch: "This Python cannot make environments" | On Debian or Ubuntu run `sudo apt install python3-venv`, or set another Python under **Engine settings**. |
+| Installing PyTorch: "pip found no PyTorch for this Python" | PyTorch supports recent 64-bit Python versions only. Set another Python under **Engine settings** and install the PyTorch environment again. |
+| A PyTorch OCR model runs out of memory | Set **Device** to **CPU only** under **Engine settings**, or stop other models. |
 | Chats disappeared | Use the same `AXIS_HOME`. Chats written by very old versions were stored per browser and port; use the same browser and default port once to migrate them. |
 
 ---
@@ -635,7 +677,7 @@ cd Axis
 pipx install --editable .
 ```
 
-Run the tests. They use fake Ollama, llama.cpp, stable-diffusion.cpp, Hugging Face, and GitHub servers, so no real model or network is needed:
+Run the tests. They use fake Ollama, llama.cpp, stable-diffusion.cpp, Tesseract, PyTorch, Hugging Face, and GitHub servers, so no real model or network is needed:
 
 ```bash
 python3 -m unittest discover -s tests -v      # Windows: py -m unittest discover -s tests -v
@@ -655,6 +697,8 @@ axis/
   agents.py       agent storage, folders, and message assembly
   chats.py        saved conversations
   images.py       image models, sd-cli and sd-server runners, and gallery
+  ocr.py          OCR: Tesseract and its languages, the PyTorch environment, EasyOCR and docTR models, reading text
+  ocr_worker.py   runs EasyOCR and docTR inside the PyTorch environment (one picture, or kept on as a local server)
   manager.py      installs, starts, stops, and deletes models (Ollama, llama.cpp, sd-server)
   engines.py      installs and updates llama.cpp and stable-diffusion.cpp from their GitHub releases
   catalog.py      model names (z-image-turbo, sd1.5, llama3.1:8b, ...) and the files each one needs
@@ -671,6 +715,7 @@ tests/
   test_axis.py    tests using fake model servers
   test_manage.py  tests for installing, starting, stopping, and deleting models
   test_engines.py tests for installing engines (fake GitHub) and image models by name
+  test_ocr.py     tests for OCR (fake GitHub, fake Tesseract, fake torch and EasyOCR)
 ```
 
 ## License

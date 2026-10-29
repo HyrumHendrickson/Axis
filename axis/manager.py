@@ -16,10 +16,16 @@ Image models
     it in memory so each picture starts immediately. "Stop" ends it. When no
     image model is on, pictures are made with ``sd-cli`` as before.
 
+OCR models
+  * Tesseract languages, and PyTorch OCR models (EasyOCR, docTR); see ocr.py.
+    Requests with engine "ocr" are passed on to it.
+
 Engines
   * llama.cpp and stable-diffusion.cpp are installed by Axis itself when they
     are missing (see engines.py): on the first start, from the Models page, and
     as the first step of installing or starting a model that needs them.
+  * Tesseract and the Python environment for PyTorch OCR models are installed
+    from the Models page (see ocr.py).
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import backend, catalog, engines, hub, images, jobs, procs
+from . import backend, catalog, engines, hub, images, jobs, ocr, procs
 from .paths import axis_home, image_root, inside, llm_root
 
 START_TIMEOUT = float(os.environ.get("AXIS_START_TIMEOUT", "900"))
@@ -868,8 +874,8 @@ def _have(path: Path) -> int:
 
 def _engine(body: Dict[str, Any]) -> str:
     engine = body.get("engine")
-    if engine not in ("ollama", "llamacpp", "image"):
-        raise ManageError("Choose Ollama, llama.cpp or Image.")
+    if engine not in ("ollama", "llamacpp", "image", "ocr"):
+        raise ManageError("Choose Ollama, llama.cpp, Image or OCR.")
     return engine
 
 
@@ -887,6 +893,8 @@ def install(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise ManageError("Request body must be a JSON object.")
     engine = _engine(body)
+    if engine == "ocr":
+        return ocr.install({"kind": _text(body, "kind", "Kind"), "name": _text(body, "name", "Name")})
     name = _text(body, "name", "Name")
     choice = _text(body, "choice", "File")
     if engine == "ollama":
@@ -956,6 +964,8 @@ def start(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
     model = _text(body, "model", "Model")
     if not model:
         raise ManageError("Choose a model to start.")
+    if engine == "ocr":
+        return ocr.start(model)
     if engine == "ollama":
         url = ollama_url(server_url)
         job = jobs.submit("start", "ollama", model, f"Starting {model}", lambda j: ollama_load(url, model, j),
@@ -979,6 +989,8 @@ def stop(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
     model = _text(body, "model", "Model")
     if not model:
         raise ManageError("Choose a model to stop.")
+    if engine == "ocr":
+        return ocr.stop(model)
     if engine == "ollama":
         url = ollama_url(server_url)
         job = jobs.submit("stop", "ollama", model, f"Stopping {model}", lambda j: ollama_unload(url, model, j),
@@ -1003,6 +1015,8 @@ def delete(body: Any, server_url: Optional[str]) -> Dict[str, Any]:
     model = _text(body, "model", "Model")
     if not model:
         raise ManageError("Choose a model to delete.")
+    if engine == "ocr":
+        return ocr.delete(model)
     if engine == "ollama":
         url = ollama_url(server_url)
         job = jobs.submit("delete", "ollama", model, f"Deleting {model}", lambda j: ollama_delete(url, model, j),
@@ -1070,6 +1084,7 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
                   "running": {"model": img.target, "url": img.url, "ready": img.ready, "adopted": img.adopted}
                   if img else None, "crashed": crashed_images},
         "engines": engines.status(ENGINE_FINDERS),
+        "ocr": ocr.status(),
         "catalog": catalog.public(),
         "hf_token": bool(hub.token()),
         "jobs": jobs.listing(),
@@ -1084,6 +1099,8 @@ def install_engine(body: Any) -> Dict[str, Any]:
         raise ManageError("Request body must be a JSON object.")
     engine = _text(body, "engine", "Engine")
     build = _text(body, "build", "Build") or None
+    if engine in ("tesseract", "pytorch"):
+        return {"job": ocr.submit_engine(engine, build).public()}
     job = engines.submit(engine, build)
     return {"job": job.public()}
 
@@ -1092,6 +1109,11 @@ def remove_engine(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise ManageError("Request body must be a JSON object.")
     engine = _text(body, "engine", "Engine")
+    if engine == "pytorch":
+        return ocr.remove_env()
+    if engine == "tesseract":
+        raise ManageError("Axis does not remove Tesseract. Uninstall it the way it was installed (Windows: Settings, "
+                          "Apps; macOS: brew uninstall tesseract; Linux: your package manager).")
     kind = {"llama": "llama", "sd": "image"}.get(engine)
     if kind and procs.running(kind):
         raise ManageError("Stop every model that uses it first.")

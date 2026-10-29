@@ -29,6 +29,11 @@ def image_root() -> Path:
     return models_root() / "image"
 
 
+def ocr_root() -> Path:
+    """OCR models: Tesseract languages (ocr/tessdata) and PyTorch OCR weights (ocr/easyocr, ocr/doctr)."""
+    return models_root() / "ocr"
+
+
 def inside(path: Path, root: Path) -> bool:
     """True when path is root or lies under it (after resolving links)."""
     try:
