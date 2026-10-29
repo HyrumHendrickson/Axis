@@ -4,6 +4,18 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-10-29
+
+### Added
+- **Art Craft tab.** One **Install** button for each of the 13 Craft apps (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft), which downloads the portable build from the app's latest GitHub release, checks its SHA-256, and unpacks it into `Axis/engines/artcraft`. The button becomes **Open** once the app is installed. Installs show progress and can be cancelled.
+- **Install Rust** installs a portable Rust with rustup into `Axis/engines/rust`, without changing the PATH. Apps opened from Axis find it on their PATH.
+- API: `GET /api/artcraft`, `POST /api/artcraft/install`, `POST /api/artcraft/open`.
+- `docs/user-guide.md` describes the tab.
+
+### Notes
+- The version goes from 4.1.2 to 4.2.1 as requested; there is no 4.2.0.
+- An installed app is never installed over, so its settings are never deleted. The macOS install path (copying the app out of the disk image) has not been run on a Mac.
+
 ## [4.1.2] - 2026-10-29
 
 ### Added

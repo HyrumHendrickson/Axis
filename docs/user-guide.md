@@ -199,6 +199,16 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
 
 **OCR tab.** Drop, paste, upload, or choose a picture from Workspace, choose the model, and click **Read text**. For Tesseract, combine installed languages with `+` (`eng+lat`) and choose a page layout (automatic, one column, one block, one line, or scattered text). The result shows the word count, the mean confidence, and the time taken. Pictures you upload or paste are saved in `shared/uploads`; **Save to Workspace** saves the text in `shared/ocr`.
 
+## Art Craft
+
+Open **Art Craft** in the sidebar to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
+
+- **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
+- **Open** starts the app. It keeps running if you quit Axis.
+- **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, rustup also adds itself to Apps & features, and building programs with Rust needs Microsoft's C++ Build Tools.
+- The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
+- An app that is already installed is never installed over, so its settings are safe. To remove an app, delete its folder in `Axis/engines/artcraft`.
+
 ## Workspace
 
 Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
@@ -268,7 +278,8 @@ Axis/                       in your home folder (override with AXIS_HOME)
 │       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
 ├── engine-settings.json    llama-server path, context size, extra arguments
-├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, and ocr-python/ (PyTorch for OCR)
+├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
+│                           artcraft/ (the Craft apps) and rust/ (portable Rust)
 ├── image-models/           image model definitions, one .json file each
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
 ├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index

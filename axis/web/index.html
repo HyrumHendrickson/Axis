@@ -609,6 +609,8 @@ const S = {
   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
   ocrResult: null,
   ocrError: null,
+  art: null,                    // last /api/artcraft result: the Craft apps, Rust, and their install jobs
+  artError: "",                 // the last error from an Art Craft button
 };
 S.install = S.installs.chat;
 
@@ -845,6 +847,7 @@ function go(view) {
   S.view = view;
   $("app").classList.remove("menu-open");
   renderNav(); renderMain();
+  if (view.kind === "art") loadArt();
 }
 
 function renderNav() {
@@ -860,6 +863,7 @@ function renderNav() {
       Object.keys(S.streams).some((k) => k !== DIRECT)),
     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
+    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
@@ -957,6 +961,7 @@ function renderMain() {
   if (S.view.kind === "history") return renderHistory();
   if (S.view.kind === "images") return renderImages();
   if (S.view.kind === "ocr") return renderOcr();
+  if (S.view.kind === "art") return renderArt();
   renderChat();
 }
 
@@ -4153,6 +4158,115 @@ function imageModelsSection() {
       h("button", { class: "link", onclick: () => openModelsTab("engines") }, "Engine settings"), "."));
 }
 
+/* ------------------------------------------------------------- Art Craft */
+// Installs the portable Craft apps (and a portable Rust) into Axis's own folder, and opens them.
+let artTimer = null, artLoading = null;
+function loadArt() {
+  if (artLoading) return artLoading;
+  artLoading = api("/api/artcraft")
+    .then((d) => { const before = S.art; S.art = d; onArt(before, d); })
+    .catch((e) => { if (!S.art || !S.art.apps) S.art = { error: e.message, apps: [], jobs: [] }; })
+    .finally(() => { artLoading = null; scheduleArt(); });
+  return artLoading;
+}
+function scheduleArt() {
+  clearTimeout(artTimer);
+  if (runningJobs(S.art).length > 0) artTimer = setTimeout(loadArt, 1000);   // only while something is installing
+}
+const artSig = (d) => JSON.stringify(d && d.apps ? [d.apps.map((a) => [a.id, a.installed, a.tag]), d.rust, jobSig(d)] : null);
+function onArt(before, d) {
+  let finished = false;
+  for (const j of d.jobs || []) {
+    if (j.state === "running" || jobsSeen.has(j.id)) continue;
+    jobsSeen.add(j.id);
+    if (!before) continue;   // finished before this page opened: nothing to announce
+    finished = true;
+    if (j.state === "done") toast(`Installed ${(j.result && j.result.model) || j.target}`);
+    else if (j.state === "failed") toast(j.label + " failed. Details are on the Art Craft page.");
+  }
+  if (artSig(before) !== artSig(d)) renderNav();
+  if (S.view.kind !== "art") return;
+  if (finished || artSig(before) !== artSig(d)) renderArt();
+  else updateJobProgress(d);
+}
+async function artAction(path, app, done) {
+  S.artError = "";
+  try { const r = await api("/api/artcraft/" + path, { method: "POST", body: { app } }); if (done) done(r); }
+  catch (e) { S.artError = e.message; }
+  await loadArt();
+  renderNav(); renderArt();
+}
+async function artJobAction(j, action) {
+  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}` + (action === "cancel" ? "/cancel" : ""), { method: action === "cancel" ? "POST" : "DELETE" }); }
+  catch (e) { S.artError = e.message; }
+  await loadArt();
+  renderNav(); renderArt();
+}
+function artJobBlock(j) {
+  if (j.state === "running") {
+    return h("div", { class: "job-inline", "data-job": j.id }, progressBar(j),
+      h("div", { class: "job-head" }, h("span", { class: "job-meta job-phase" }, jobMeta(j)),
+        j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => artJobAction(j, "cancel") }, "Cancel") : null));
+  }
+  if (j.state !== "failed") return null;
+  return h("div", { class: "job failed", "data-job": j.id },
+    h("div", { class: "job-head" }, h("strong", {}, j.label + " failed"),
+      h("button", { class: "btn small", onclick: () => artJobAction(j, "dismiss") }, "Dismiss")),
+    h("div", { class: "job-meta job-phase" }, jobMeta(j)));
+}
+function artCard(name, what, state, job, actions) {
+  return h("div", { class: "model-card" },
+    h("h4", {}, name, h("span", { class: "chip" + (state === "Installed" ? " on" : "") }, state)),
+    what ? h("p", { class: "hint", style: "margin:6px 0 0" }, what) : null,
+    job && job.state !== "running" ? artJobBlock(job) : null,
+    h("div", { class: "model-actions" }, job && job.state === "running" ? artJobBlock(job) : actions));
+}
+function renderArt() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Art Craft"),
+    h("button", { class: "btn small", onclick: () => loadArt().then(() => renderArt()) }, "Refresh"));
+  const a = S.art;
+  if (!a) {
+    loadArt().then(() => { if (S.view.kind === "art") renderArt(); });
+    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
+  }
+  if (a.error && !a.apps.length) {
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "form-error", role: "alert" }, a.error))));
+  }
+  const before = $("art-scroll"), top = before ? before.scrollTop : null;
+  const latest = (target) => (a.jobs || []).filter((j) => j.target === target).sort((x, y) => y.started - x.started)[0] || null;
+  const failedOrRunning = (j) => (j && (j.state === "running" || j.state === "failed")) ? j : null;
+  const body = [];
+  if (S.artError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.artError, " ",
+    h("button", { class: "link", onclick: () => { S.artError = ""; renderArt(); } }, "Dismiss")));
+  body.push(h("p", { class: "hint" },
+    "The Craft App Suite is a set of free, open-source creative apps from the ArtCraft team. Axis installs the portable build of each app into its own folder, ",
+    h("code", {}, a.root), ". Nothing is installed on your computer and no administrator rights are needed. ",
+    "Opened apps keep running when you quit Axis."));
+  if (!a.supported) body.push(h("p", { class: "model-note" }, `The Craft apps have no ready-made portable build for ${a.platform.os} on ${a.platform.arch}.`));
+
+  // Rust
+  const rj = failedOrRunning(latest("rust")), r = a.rust;
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Rust"),
+    artCard("Rust", `A portable Rust, installed with rustup into Axis\u2019s own folder. Axis never changes your PATH. The apps do not need Rust to run, but any app opened from here finds this Rust on its PATH.${a.platform.os === "windows" ? " Building programs with Rust on Windows also needs Microsoft\u2019s C++ Build Tools." : ""}`,
+      r.installed ? "Installed" : "Not installed", rj,
+      r.installed ? [h("span", { class: "hint", style: "margin:0" }, r.version || "")]
+        : r.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", "rust") }, "Install Rust")]
+        : [h("span", { class: "hint", style: "margin:0" }, "Rust has no installer for this computer.")])));
+
+  // The apps
+  const cards = a.apps.map((app) => {
+    const j = failedOrRunning(latest(app.id));
+    return artCard(app.name, app.what, app.installed ? "Installed" : "Not installed", j,
+      app.installed ? [h("button", { class: "btn primary", onclick: () => artAction("open", app.id, () => toast(`Opening ${app.name}\u2026`)) }, "Open"),
+        h("span", { class: "hint", style: "margin:0" }, app.version || app.tag || "")]
+        : a.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", app.id) }, `Install ${app.name}`)] : []);
+  });
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "The Craft apps"), cards));
+
+  fill($("main"), bar, h("div", { class: "editor", id: "art-scroll" }, h("div", { class: "form" }, body)));
+  const sc = $("art-scroll"); if (sc && top !== null) sc.scrollTop = top;
+}
+
 /* ------------------------------------------------------------------ OCR */
 // Reads the text in a picture with an OCR model (Models page, OCR models).
 const OCR_RE = /\.(png|jpe?g|bmp|tiff?|webp)$/i;      // what every OCR engine reads; others are converted first
@@ -4530,7 +4644,7 @@ window.addEventListener("beforeunload", (e) => {
   if (S.editing && S.editing.dirty) { e.preventDefault(); e.returnValue = ""; return; }   // unsaved changes in Workspace
   // Closing the window stops Axis, so warn before cutting off a reply, a picture or an install.
   if (!closesWithWindow || (S.status && S.status.axisDown)) return;
-  if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0) {
+  if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0 || runningJobs(S.art).length > 0) {
     e.preventDefault(); e.returnValue = "";
   }
 });

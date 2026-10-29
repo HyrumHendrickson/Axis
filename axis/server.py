@@ -83,6 +83,10 @@ Routes:
   PUT    /api/manage/settings               llama-server path, context size, extra arguments
   POST   /api/manage/jobs/<id>/cancel       cancel an install or start
   DELETE /api/manage/jobs/<id>              remove a finished job from the list
+  GET    /api/artcraft                      the Craft apps and Rust: what is installed, and their install jobs
+  POST   /api/artcraft/install              install an app, or Rust, in the background {app: photocraft|...|rust}
+                                            (cancel it, or clear it from the list, with the /api/manage/jobs routes)
+  POST   /api/artcraft/open                 start an installed app {app}; it keeps running if Axis stops
 """
 
 from __future__ import annotations
@@ -103,7 +107,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
 from .paths import remove_tree, shared_root
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -735,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
-                ocr.OcrError, terminal.TerminalError) as exc:
+                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -942,6 +946,14 @@ class Handler(BaseHTTPRequestHandler):
                 if n == 4 and method == "DELETE":
                     jobs.dismiss(parts[3])
                     return self._json(200, {"deleted": parts[3]})
+
+        elif n >= 2 and parts[1] == "artcraft":
+            if n == 2 and method == "GET":
+                return self._json(200, artcraft.status())
+            if parts[2:] == ["install"] and method == "POST":
+                return self._json(202, artcraft.install(self._body()))
+            if parts[2:] == ["open"] and method == "POST":
+                return self._json(200, artcraft.open_app(self._body()))
 
         elif n >= 2 and parts[1] == "skills":
             if n == 2 and method == "GET":

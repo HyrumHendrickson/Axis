@@ -40,6 +40,7 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.
 - **Workspace** tab is a light editor for every agent's folder: browse, preview, create, rename, edit, upload, download, and move files, and run Python files. A collapsible terminal sits underneath, and a collapsible chat on the side lets an agent see the folder you are in (and the terminal, while it is open).
 - **Terminal** is a shell on your computer, started in any agent's folder, in its own tab or in the Workspace. You type directly in it, like an ordinary terminal. An agent of your choice can see its output and help.
+- **Art Craft** tab installs the portable Craft apps (PhotoCraft, WordCraft and eleven more) and a portable Rust in one click each, then opens them.
 - **Models** tab installs, starts, stops, and deletes chat, image, and OCR models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **OCR models**, **Engine settings**) appear under **Models** in the sidebar while the page is open.
 - **Settings** (top right) switches between light, dark, and your system's appearance.
 

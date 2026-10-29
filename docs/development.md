@@ -36,6 +36,7 @@ On Windows use `py`. The suite starts fake Ollama, llama.cpp, stable-diffusion.c
 | `tests/test_axis.py` | Server routes, agents, skills, chats, tools, the runner, the CLI, the shortcut and app window, and Workspace files |
 | `tests/test_manage.py` | Installing, starting, stopping, and deleting models |
 | `tests/test_engines.py` | Installing engines from (fake) GitHub releases, and image models by name |
+| `tests/test_artcraft.py` | The Art Craft tab: installing and opening the Craft apps, portable Rust |
 | `tests/test_ocr.py` | Tesseract, the PyTorch environment, and OCR models |
 | `tests/test_updates.py` | The update check |
 | `tests/test_hardening.py` | Safety and robustness fixes: deleting read-only folders, uploads, `fetch_page`, Run Python limits, downloads |
@@ -69,6 +70,7 @@ axis/
   ocr_worker.py   runs PyTorch OCR inside its own environment
   manager.py      installs, starts, stops, and deletes models
   engines.py      installs llama.cpp and stable-diffusion.cpp from GitHub releases
+  artcraft.py     installs and opens the Craft apps, and installs portable Rust
   catalog.py      short model names and the files each needs
   hub.py          Hugging Face names and verified, resumable downloads
   jobs.py         long operations in the background, with progress

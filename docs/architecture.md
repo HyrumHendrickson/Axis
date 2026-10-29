@@ -22,6 +22,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
+  |     +-- artcraft.py                                  (Craft apps and Rust: install, open) |
   |     +-- procs.py                                     (programs Axis started)         |
   |     +-- terminal.py                                  (shells: Terminal, Workspace)   |
   |     +-- updates.py                                   (update check against GitHub)   |
@@ -64,6 +65,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 | Programs Axis started | `~/Axis/run/` | `procs.py`, `instances.py` |
 | Downloaded models | `~/Axis/models/` | `hub.py`, `manager.py`, `ocr.py` |
 | Engines | `~/Axis/engines/` | `engines.py`, `ocr.py` |
+| Craft apps and portable Rust | `~/Axis/engines/artcraft/`, `~/Axis/engines/rust/`, `~/Axis/engines/artcraft.json` | `artcraft.py` |
 | Interface preferences (theme, drafts, open chat) | the browser's local storage | `web/index.html` |
 
 `paths.py` is the single source for the data folder; it honours `AXIS_HOME`.

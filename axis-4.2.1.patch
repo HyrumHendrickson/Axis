@@ -1,0 +1,1612 @@
+From 3c42033bb98b1fc229f6407c062112ff0f51a60f Mon Sep 17 00:00:00 2001
+From: Hyrum Hendrickson <hyrum@example.invalid>
+Date: Thu, 29 Oct 2026 21:39:31 +0000
+Subject: [PATCH] Axis 4.2.1: Art Craft tab installs and opens the portable
+ Craft apps and Rust
+
+---
+ CHANGELOG.md           |  12 +
+ README.md              |   1 +
+ axis/VERSION           |   2 +-
+ axis/artcraft.py       | 603 ++++++++++++++++++++++++++++++++++++++++
+ axis/manager.py        |   2 +-
+ axis/server.py         |  16 +-
+ axis/web/index.html    | 116 +++++++-
+ docs/api.md            |  10 +
+ docs/architecture.md   |   2 +
+ docs/development.md    |   2 +
+ docs/user-guide.md     |  13 +-
+ tests/test_artcraft.py | 614 +++++++++++++++++++++++++++++++++++++++++
+ 12 files changed, 1387 insertions(+), 6 deletions(-)
+ create mode 100644 axis/artcraft.py
+ create mode 100644 tests/test_artcraft.py
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c3f95e6..62f4a1d 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,18 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++## [4.2.1] - 2026-10-29
++
++### Added
++- **Art Craft tab.** One **Install** button for each of the 13 Craft apps (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft), which downloads the portable build from the app's latest GitHub release, checks its SHA-256, and unpacks it into `Axis/engines/artcraft`. The button becomes **Open** once the app is installed. Installs show progress and can be cancelled.
++- **Install Rust** installs a portable Rust with rustup into `Axis/engines/rust`, without changing the PATH. Apps opened from Axis find it on their PATH.
++- API: `GET /api/artcraft`, `POST /api/artcraft/install`, `POST /api/artcraft/open`.
++- `docs/user-guide.md` describes the tab.
++
++### Notes
++- The version goes from 4.1.2 to 4.2.1 as requested; there is no 4.2.0.
++- An installed app is never installed over, so its settings are never deleted. The macOS install path (copying the app out of the disk image) has not been run on a Mac.
++
+ ## [4.1.2] - 2026-10-29
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index 25e505d..c531585 100644
+--- a/README.md
++++ b/README.md
+@@ -40,6 +40,7 @@ Axis runs a small web app on your computer and opens it in a window of its own.
+ - **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.
+ - **Workspace** tab is a light editor for every agent's folder: browse, preview, create, rename, edit, upload, download, and move files, and run Python files. A collapsible terminal sits underneath, and a collapsible chat on the side lets an agent see the folder you are in (and the terminal, while it is open).
+ - **Terminal** is a shell on your computer, started in any agent's folder, in its own tab or in the Workspace. You type directly in it, like an ordinary terminal. An agent of your choice can see its output and help.
++- **Art Craft** tab installs the portable Craft apps (PhotoCraft, WordCraft and eleven more) and a portable Rust in one click each, then opens them.
+ - **Models** tab installs, starts, stops, and deletes chat, image, and OCR models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **OCR models**, **Engine settings**) appear under **Models** in the sidebar while the page is open.
+ - **Settings** (top right) switches between light, dark, and your system's appearance.
+ 
+diff --git a/axis/VERSION b/axis/VERSION
+index 4d0dcda..fae6e3d 100644
+--- a/axis/VERSION
++++ b/axis/VERSION
+@@ -1 +1 @@
+-4.1.2
++4.2.1
+diff --git a/axis/artcraft.py b/axis/artcraft.py
+new file mode 100644
+index 0000000..6384aa6
+--- /dev/null
++++ b/axis/artcraft.py
+@@ -0,0 +1,603 @@
++"""Installs and opens the Craft App Suite, and a portable copy of Rust.
++
++The Craft App Suite is ArtCraft's set of free, open-source creative apps (PhotoCraft,
++VectorCraft, WordCraft and ten more). Each app publishes ready-built programs on its own
++GitHub page. Axis downloads the portable build for this computer from the app's latest
++release, checks it against the SHA-256 the release publishes, and unpacks it into its own
++folder. Nothing is installed system-wide and no administrator rights are needed.
++
++    Windows   the portable zip: unzip and run <app>.exe
++    Linux     the release tarball: bin/<app>
++    macOS     the .app inside the release .dmg, copied out (never into /Applications)
++
++Rust is installed with rustup into folders of its own, and Axis never edits the PATH:
++
++    ~/Axis/engines/artcraft.json              what is installed
++    ~/Axis/engines/artcraft/<app>/<folder>/   one app
++    ~/Axis/engines/rust/rustup/, cargo/       RUSTUP_HOME and CARGO_HOME
++
++The ready-built apps do not need Rust to run. It is installed because it was asked for, and
++an app opened from Axis is started with this Rust on its PATH.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import plistlib
++import queue
++import re
++import stat
++import subprocess
++import tempfile
++import threading
++import time
++import urllib.error
++import urllib.parse
++from pathlib import Path
++from typing import Any, Dict, List, Optional, Tuple
++
++from . import engines, jobs
++from .paths import inside, remove_tree
++
++REPO_OWNER = "storytold"
++
++# (id, name, what it is for). The id is the repository name and the start of every file name.
++APPS: List[Tuple[str, str, str]] = [
++    ("photocraft", "PhotoCraft", "Image editing: layers, masks, type and real PSD files"),
++    ("lightcraft", "LightCraft", "Photo library and raw development"),
++    ("filmcraft", "FilmCraft", "Video editing, color and sound"),
++    ("designcraft", "DesignCraft", "Page layout and publishing"),
++    ("vectorcraft", "VectorCraft", "Vector illustration"),
++    ("pdfcraft", "PdfCraft", "Reading, organizing and protecting PDFs"),
++    ("effectcraft", "EffectCraft", "Motion graphics and visual effects"),
++    ("wordcraft", "WordCraft", "Word processing and documents"),
++    ("deckcraft", "DeckCraft", "Presentations and slide decks"),
++    ("gridcraft", "GridCraft", "Spreadsheets and data"),
++    ("cadcraft", "CADCraft", "Computer-aided design"),
++    ("soundcraft", "SoundCraft", "Audio recording and editing"),
++    ("figcraft", "FigCraft", "Interface design and prototyping"),
++]
++APP_IDS = [a[0] for a in APPS]
++RUST = "rust"
++
++# The CPU names in the release file names, by operating system and by what Axis calls the CPU.
++_WINDOWS_ARCH = {"x64": "x64", "arm64": "arm64", "x86": "x86"}
++_LINUX_ARCH = {"x64": "x86_64", "arm64": "aarch64"}
++# rustup's name for each computer (the folder under /rustup/dist on static.rust-lang.org).
++RUSTUP_TRIPLES = {
++    ("windows", "x64"): "x86_64-pc-windows-msvc", ("windows", "arm64"): "aarch64-pc-windows-msvc",
++    ("windows", "x86"): "i686-pc-windows-msvc",
++    ("linux", "x64"): "x86_64-unknown-linux-gnu", ("linux", "arm64"): "aarch64-unknown-linux-gnu",
++    ("macos", "x64"): "x86_64-apple-darwin", ("macos", "arm64"): "aarch64-apple-darwin",
++}
++RUSTUP_TIMEOUT = 45 * 60      # seconds rustup may take to fetch the toolchain
++BAD_START = re.compile(r"GLIBC|error while loading shared libraries|cannot execute binary|bad CPU type", re.I)
++
++_LOCK = threading.Lock()      # the record file
++_INSTALL_LOCKS = {name: threading.Lock() for name in APP_IDS + [RUST]}
++
++
++class ArtCraftError(Exception):
++    """A problem installing or opening something that the user can act on."""
++
++    user_facing = True
++
++
++# ----------------------------------------------------------------- the record
++
++
++def root() -> Path:
++    return engines.root() / "artcraft"
++
++
++def rust_home() -> Path:
++    return engines.root() / RUST
++
++
++def _record_path() -> Path:
++    return engines.root() / "artcraft.json"
++
++
++def _load() -> Dict[str, Any]:
++    try:
++        data = json.loads(_record_path().read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError):
++        data = {}
++    return data if isinstance(data, dict) else {}
++
++
++def _save(data: Dict[str, Any]) -> None:
++    path = _record_path()
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_name(path.name + ".tmp")
++    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
++    os.replace(tmp, path)
++
++
++def _remember(key: str, record: Dict[str, Any]) -> None:
++    with _LOCK:
++        data = _load()
++        data[key] = record
++        _save(data)
++
++
++def _app_info(app_id: str) -> Optional[Dict[str, Any]]:
++    """What Axis installed for an app, or None when it is not there (or its files are gone)."""
++    info = _load().get(app_id)
++    if not isinstance(info, dict) or not isinstance(info.get("program"), str):
++        return None
++    program = engines.root() / info["program"]
++    if not program.exists() or not inside(program, root()):
++        return None
++    return {**info, "path": str(program)}
++
++
++def _rust_info() -> Optional[Dict[str, Any]]:
++    info = _load().get(RUST)
++    if not isinstance(info, dict) or not isinstance(info.get("cargo"), str):
++        return None
++    cargo = engines.root() / info["cargo"]
++    if not cargo.is_file() or not inside(cargo, rust_home()):
++        return None
++    return {**info, "path": str(cargo)}
++
++
++def rust_env() -> Dict[str, str]:
++    """The environment that makes the portable Rust the one a program finds. Empty when it is not installed."""
++    if _rust_info() is None:
++        return {}
++    bin_dir = str(rust_home() / "cargo" / "bin")
++    old = os.environ.get("PATH", "")
++    return {"RUSTUP_HOME": str(rust_home() / "rustup"), "CARGO_HOME": str(rust_home() / "cargo"),
++            "PATH": bin_dir + (os.pathsep + old if old else "")}
++
++
++# ----------------------------------------------------------------- choosing the download
++
++
++def _app(app_id: str) -> Tuple[str, str, str]:
++    for entry in APPS:
++        if entry[0] == app_id:
++            return entry
++    raise ArtCraftError(f"'{app_id}' is not one of the Craft apps.")
++
++
++def asset_pattern(app_id: str, plat: Tuple[str, str]) -> Optional[str]:
++    """A regular expression for the release file to download on this computer, or None."""
++    osname, arch = plat
++    start = "^" + re.escape(app_id) + r"-\d[^-]*-"
++    if osname == "windows" and arch in _WINDOWS_ARCH:
++        return start + "windows-" + _WINDOWS_ARCH[arch] + r"-portable\.zip$"
++    if osname == "linux" and arch in _LINUX_ARCH:
++        return start + "linux-" + _LINUX_ARCH[arch] + r"\.tar\.gz$"
++    if osname == "macos":
++        return start + r"macos-universal\.dmg$"
++    return None
++
++
++def supported(plat: Optional[Tuple[str, str]] = None) -> bool:
++    return asset_pattern(APP_IDS[0], plat or engines.this_platform()) is not None
++
++
++def _latest_api(repo: str) -> Dict[str, Any]:
++    data = json.loads(engines._read(f"{engines._github_api()}/repos/{repo}/releases/latest", "application/vnd.github+json"))
++    assets = []
++    for a in data.get("assets") or []:
++        if isinstance(a, dict) and a.get("name") and a.get("browser_download_url"):
++            digest = a.get("digest") if isinstance(a.get("digest"), str) else ""
++            assets.append({"name": a["name"], "url": a["browser_download_url"],
++                           "size": a.get("size") if isinstance(a.get("size"), int) else None,
++                           "sha256": digest[7:].lower() if digest.startswith("sha256:") else None})
++    return {"tag": str(data.get("tag_name") or ""), "assets": assets}
++
++
++def _latest_html(repo: str) -> Dict[str, Any]:
++    """The same answer read from the release pages, for when the GitHub API refuses (rate limits)."""
++    with engines._open(f"{engines._github()}/{repo}/releases/latest") as resp:
++        final = urllib.parse.urlsplit(resp.geturl()).path
++    m = re.search(r"/releases/tag/([^/]+)$", final)
++    if not m:
++        raise ArtCraftError(f"{repo} has no release yet.")
++    tag = urllib.parse.unquote(m.group(1))
++    html = engines._read(f"{engines._github()}/{repo}/releases/expanded_assets/{urllib.parse.quote(tag, safe='')}")
++    digests = {name: sha for name, sha in re.findall(r'digest for ([^"]+)"[^>]*?value="sha256:([0-9a-f]{64})"', html)}
++    assets, seen = [], set()
++    for href in re.findall(r'href="(/' + re.escape(repo) + r'/releases/download/[^"]+)"', html):
++        name = urllib.parse.unquote(href.rsplit("/", 1)[-1])
++        if name not in seen:
++            seen.add(name)
++            assets.append({"name": name, "url": engines._github() + href, "size": None, "sha256": digests.get(name)})
++    return {"tag": tag, "assets": assets}
++
++
++def latest_release(repo: str) -> Dict[str, Any]:
++    """The newest stable release of a repository: {"tag", "assets": [{name, url, size, sha256}]}."""
++    try:
++        return _latest_api(repo)
++    except urllib.error.HTTPError as exc:
++        if exc.code not in (403, 429):
++            raise ArtCraftError(f"GitHub answered with an error ({exc.code} {exc.reason}).") from exc
++    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
++        pass
++    try:
++        return _latest_html(repo)
++    except urllib.error.HTTPError as exc:
++        raise ArtCraftError(f"GitHub answered with an error ({exc.code} {exc.reason}). Try again later.") from exc
++    except (urllib.error.URLError, TimeoutError, OSError) as exc:
++        raise ArtCraftError(f"Could not reach github.com ({getattr(exc, 'reason', exc)}). "
++                            "Check your internet connection.") from exc
++
++
++def _published_sha(rel: Dict[str, Any], asset: Dict[str, Any]) -> Optional[str]:
++    """The checksum GitHub shows for a file, or the one in the release's SHA256SUMS.txt."""
++    if asset.get("sha256"):
++        return asset["sha256"]
++    sums = next((a for a in rel["assets"] if a["name"] == "SHA256SUMS.txt"), None)
++    if sums is None:
++        return None
++    try:
++        text = engines._read(sums["url"])
++    except (urllib.error.URLError, TimeoutError, OSError):
++        return None
++    for line in text.splitlines():
++        m = re.match(r"^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$", line)
++        if m and m.group(2) == asset["name"]:
++            return m.group(1).lower()
++    return None
++
++
++# ----------------------------------------------------------------- finding the program
++
++
++def _find_program(folder: Path, app_id: str, osname: str) -> Optional[Path]:
++    """The program to start: <app>.exe, bin/<app>, or the program inside the .app."""
++    if osname == "macos":
++        for bundle in sorted(folder.glob("*.app")):
++            try:
++                with (bundle / "Contents" / "Info.plist").open("rb") as f:
++                    name = plistlib.load(f).get("CFBundleExecutable")
++            except (OSError, ValueError, plistlib.InvalidFileException):
++                name = None
++            candidates = [bundle / "Contents" / "MacOS" / name] if name else []
++            candidates += sorted((bundle / "Contents" / "MacOS").glob("*"))
++            for p in candidates:
++                if p.is_file():
++                    return p
++        return None
++    exe = app_id + (".exe" if osname == "windows" else "")
++    hits = sorted((p for p in folder.rglob(exe) if p.is_file()), key=lambda p: len(p.parts))
++    return hits[0] if hits else None
++
++
++def _run_check(program: Path) -> str:
++    """Start the program with --version to see that it loads. Returns the version line it prints, or "".
++
++    A program that does not understand --version may open its window instead, so this waits only a
++    few seconds, ends it, and accepts any answer except the ones that mean it cannot run here.
++    """
++    kwargs: Dict[str, Any] = {}
++    if os.name == "nt":
++        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
++    try:
++        proc = subprocess.Popen([str(program), "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                                stdin=subprocess.DEVNULL, cwd=str(program.parent), **kwargs)
++    except OSError as exc:
++        raise ArtCraftError(f"{program.name} was downloaded but could not be started: {exc}") from exc
++    try:
++        out, _ = proc.communicate(timeout=15)
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        proc.communicate()
++        return ""
++    text = (out or b"").decode("utf-8", errors="replace").strip()
++    if proc.returncode in (-1073741515, 3221225781):   # 0xC0000135: a DLL is missing
++        raise ArtCraftError(f"{program.name} needs the Microsoft Visual C++ runtime. Install it from "
++                            "https://aka.ms/vs/17/release/vc_redist.x64.exe and try again.")
++    if proc.returncode != 0 and BAD_START.search(text):
++        raise ArtCraftError(f"{program.name} was downloaded but does not run on this computer.\n"
++                            + "\n".join(text.splitlines()[-6:]))
++    return next((l.strip()[:200] for l in text.splitlines() if "version" in l.lower() or re.search(r"\d+\.\d+", l)), "")
++
++
++# ----------------------------------------------------------------- installing an app
++
++
++def _apps_in(volume: Path) -> List[Path]:
++    """The .app folders at the top of a mounted disk image (or one folder down). Links are skipped:
++    the image's Applications shortcut leads to every app on this Mac."""
++    found: List[Path] = []
++    try:
++        entries = sorted(p for p in volume.iterdir() if p.is_dir() and not p.is_symlink())
++    except OSError:
++        return found
++    found += [p for p in entries if p.suffix == ".app"]
++    for folder in entries:
++        if folder.suffix != ".app":
++            try:
++                found += sorted(p for p in folder.iterdir() if p.suffix == ".app" and p.is_dir() and not p.is_symlink())
++            except OSError:
++                pass
++    return found
++
++
++def _copy_app_from_dmg(dmg: Path, dest: Path, job: jobs.Job) -> None:
++    """Copy the .app out of a disk image (macOS) without installing it anywhere else."""
++    job.progress(phase=f"Opening {dmg.name}")
++    mount = Path(tempfile.mkdtemp(prefix="axis-dmg-"))
++    try:
++        r = subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", "-noverify", "-noautoopen",
++                            "-mountpoint", str(mount), str(dmg)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                           stdin=subprocess.DEVNULL, timeout=300)
++        if r.returncode != 0:
++            raise ArtCraftError("The disk image could not be opened:\n" + r.stdout.decode("utf-8", errors="replace")[-400:])
++        try:
++            apps = _apps_in(mount)
++            if not apps:
++                raise ArtCraftError(f"There is no app inside {dmg.name}.")
++            job.progress(phase=f"Copying {apps[0].name}")
++            c = subprocess.run(["ditto", str(apps[0]), str(dest / apps[0].name)], stdout=subprocess.PIPE,
++                               stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=600)
++            if c.returncode != 0:
++                raise ArtCraftError("The app could not be copied:\n" + c.stdout.decode("utf-8", errors="replace")[-400:])
++        finally:
++            subprocess.run(["hdiutil", "detach", "-force", str(mount)], stdout=subprocess.DEVNULL,
++                           stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=120)
++    finally:
++        try:
++            mount.rmdir()
++        except OSError:
++            pass
++
++
++def install_app(app_id: str, job: jobs.Job) -> Dict[str, Any]:
++    """Download the app's portable build and unpack it. Refuses when the app is already installed."""
++    _, label, _ = _app(app_id)
++    plat = engines.this_platform()
++    pattern = asset_pattern(app_id, plat)
++    if pattern is None:
++        raise ArtCraftError(f"{label} has no ready-built program for {plat[0]} on {plat[1]}.")
++    lock = _INSTALL_LOCKS[app_id]
++    if not lock.acquire(blocking=False):
++        raise ArtCraftError(f"{label} is already being installed.")
++    try:
++        if _app_info(app_id) is not None:
++            raise ArtCraftError(f"{label} is already installed.")
++        job.progress(phase=f"Looking up the latest {label} release")
++        rel = latest_release(f"{REPO_OWNER}/{app_id}")
++        asset = next((a for a in sorted(rel["assets"], key=lambda a: a["name"]) if re.search(pattern, a["name"])), None)
++        if asset is None:
++            raise ArtCraftError(f"The latest {label} release ({rel['tag'] or 'unnamed'}) has no portable build "
++                                f"for {plat[0]} on {plat[1]}.")
++        asset["sha256"] = _published_sha(rel, asset)
++        if not asset["sha256"]:
++            raise ArtCraftError(f"The release does not publish a checksum for {asset['name']}, so Axis will not install it.")
++        tag = re.sub(r"[^A-Za-z0-9._-]+", "-", rel["tag"]) or "release"
++        base = root() / app_id
++        final = base / tag
++        work = base / (tag + ".partial")
++        downloads = engines.root() / "_downloads"
++        base.mkdir(parents=True, exist_ok=True)
++        downloads.mkdir(parents=True, exist_ok=True)
++        remove_tree(work)
++        work.mkdir(parents=True)
++        archive = downloads / asset["name"]
++        try:
++            engines._download(asset, archive, job, 0, asset.get("size"))
++            if asset["name"].endswith(".dmg"):
++                _copy_app_from_dmg(archive, work, job)
++            else:
++                job.progress(phase=f"Unpacking {asset['name']}")
++                engines._unpack(archive, work)
++            program = _find_program(work, app_id, plat[0])
++            if program is None:
++                raise ArtCraftError(f"The program is not in the {label} download.")
++            if os.name != "nt":
++                for p in {program, *program.parent.glob("*-cli")}:
++                    if p.is_file():
++                        p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
++            job.progress(phase=f"Checking that {label} starts")
++            version = _run_check(program)
++            if final.exists():
++                # Never delete a folder Axis has no record of: it may hold the app's settings.
++                final = base / f"{tag}-{int(time.time())}"
++            os.replace(work, final)
++        except BaseException:
++            remove_tree(work)
++            raise
++        finally:
++            archive.unlink(missing_ok=True)
++        record = {"tag": rel["tag"], "version": version, "dir": final.relative_to(engines.root()).as_posix(),
++                  "program": (final / program.relative_to(work)).relative_to(engines.root()).as_posix(),
++                  "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}
++        _remember(app_id, record)
++        return {"app": app_id, "model": label, "tag": rel["tag"]}
++    finally:
++        lock.release()
++
++
++# ----------------------------------------------------------------- installing Rust
++
++
++def _rustup_base() -> str:
++    return (os.environ.get("AXIS_RUSTUP") or "https://static.rust-lang.org/rustup").rstrip("/")
++
++
++def _pump(stream, lines: "queue.Queue[Optional[str]]") -> None:
++    try:
++        for raw in iter(stream.readline, b""):
++            lines.put(raw.decode("utf-8", errors="replace").strip())
++    finally:
++        lines.put(None)
++
++
++def install_rust(job: jobs.Job) -> Dict[str, Any]:
++    """Install a stable Rust with rustup into ~/Axis/engines/rust. Refuses when it is already installed."""
++    plat = engines.this_platform()
++    triple = RUSTUP_TRIPLES.get(plat)
++    if triple is None:
++        raise ArtCraftError(f"rustup has no program for {plat[0]} on {plat[1]}.")
++    lock = _INSTALL_LOCKS[RUST]
++    if not lock.acquire(blocking=False):
++        raise ArtCraftError("Rust is already being installed.")
++    try:
++        if _rust_info() is not None:
++            raise ArtCraftError("Rust is already installed.")
++        exe = "rustup-init" + (".exe" if plat[0] == "windows" else "")
++        url = f"{_rustup_base()}/dist/{triple}/{exe}"
++        downloads = engines.root() / "_downloads"
++        downloads.mkdir(parents=True, exist_ok=True)
++        installer = downloads / exe
++        job.progress(phase="Looking up the rustup checksum")
++        try:
++            sums = engines._read(url + ".sha256")
++        except urllib.error.HTTPError as exc:
++            raise ArtCraftError(f"rustup could not be found ({exc.code} {exc.reason}).") from exc
++        except (urllib.error.URLError, TimeoutError, OSError) as exc:
++            raise ArtCraftError(f"Could not reach static.rust-lang.org ({getattr(exc, 'reason', exc)}). "
++                                "Check your internet connection.") from exc
++        m = re.match(r"\s*([0-9a-fA-F]{64})", sums)
++        if not m:
++            raise ArtCraftError("rustup's checksum could not be read.")
++        try:
++            engines._download({"name": exe, "url": url, "size": None, "sha256": m.group(1).lower()}, installer, job, 0, None)
++        except BaseException:
++            installer.unlink(missing_ok=True)
++            raise
++        home = rust_home()
++        try:
++            remove_tree(home)       # a half-finished earlier attempt
++            (home / "rustup").mkdir(parents=True)
++            (home / "cargo").mkdir()
++            if os.name != "nt":
++                installer.chmod(installer.stat().st_mode | stat.S_IXUSR)
++            env = {**os.environ, "RUSTUP_HOME": str(home / "rustup"), "CARGO_HOME": str(home / "cargo")}
++            env.pop("RUSTUP_TOOLCHAIN", None)
++            kwargs: Dict[str, Any] = {}
++            if os.name == "nt":
++                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
++            job.progress(phase="Installing Rust with rustup")
++            proc = subprocess.Popen([str(installer), "-y", "--no-modify-path", "--profile", "minimal",
++                                     "--default-toolchain", "stable"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                                    stdin=subprocess.DEVNULL, env=env, cwd=str(home), **kwargs)
++            lines: "queue.Queue[Optional[str]]" = queue.Queue()
++            threading.Thread(target=_pump, args=(proc.stdout, lines), daemon=True).start()
++            tail: List[str] = []
++            deadline = time.time() + RUSTUP_TIMEOUT
++            finished = False
++            try:
++                while not finished:
++                    job.check()
++                    if time.time() > deadline:
++                        raise ArtCraftError("Installing Rust took too long and was stopped. Try again.")
++                    try:
++                        line = lines.get(timeout=0.25)
++                    except queue.Empty:
++                        continue
++                    if line is None:
++                        finished = True
++                    elif line:
++                        tail = (tail + [line])[-12:]
++                        job.progress(phase=line[:160])
++            finally:
++                if proc.poll() is None:
++                    proc.kill()
++                proc.wait()
++                if proc.stdout is not None:
++                    proc.stdout.close()
++            if proc.returncode != 0:
++                raise ArtCraftError(f"rustup stopped with exit code {proc.returncode}.\n" + "\n".join(tail[-6:]))
++            cargo = home / "cargo" / "bin" / ("cargo.exe" if plat[0] == "windows" else "cargo")
++            if not cargo.is_file():
++                raise ArtCraftError("rustup finished, but cargo is not where it should be.")
++            job.progress(phase="Checking that Rust runs")
++            r = subprocess.run([str(cargo), "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                               stdin=subprocess.DEVNULL, env=env, timeout=120, **kwargs)
++            version = r.stdout.decode("utf-8", errors="replace").strip()
++            if r.returncode != 0:
++                raise ArtCraftError("Rust was installed but does not run on this computer.\n" + version[-300:])
++        except BaseException:
++            remove_tree(home)
++            raise
++        finally:
++            installer.unlink(missing_ok=True)
++        _remember(RUST, {"version": version[:200], "cargo": cargo.relative_to(engines.root()).as_posix(),
++                         "installed": time.strftime("%Y-%m-%dT%H:%M:%S")})
++        return {"app": RUST, "model": "Rust", "version": version}
++    finally:
++        lock.release()
++
++
++# ----------------------------------------------------------------- what the page asks for
++
++
++def submit(app_id: str) -> jobs.Job:
++    if app_id == RUST:
++        return jobs.submit("install", "artcraft", RUST, "Installing Rust", install_rust)
++    _, label, _ = _app(app_id)
++    if not supported():
++        osname, arch = engines.this_platform()
++        raise ArtCraftError(f"{label} has no ready-built program for {osname} on {arch}.")
++    return jobs.submit("install", "artcraft", app_id, f"Installing {label}", lambda j: install_app(app_id, j))
++
++
++def install(body: Any) -> Dict[str, Any]:
++    if not isinstance(body, dict) or not isinstance(body.get("app"), str):
++        raise ArtCraftError("Say which app to install.")
++    app_id = body["app"].strip().lower()
++    if app_id != RUST:
++        _app(app_id)
++    if (_rust_info() if app_id == RUST else _app_info(app_id)) is not None:
++        raise ArtCraftError(f"{'Rust' if app_id == RUST else _app(app_id)[1]} is already installed.")
++    return {"job": submit(app_id).public()}
++
++
++def _launch(cmd: List[str], cwd: Path, env: Dict[str, str]) -> None:
++    """Start a program detached, so it neither blocks Axis nor closes when Axis stops."""
++    kw: Dict[str, Any] = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
++                              close_fds=True, cwd=str(cwd), env={**os.environ, **env})
++    if os.name == "nt":
++        kw["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
++                               | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
++    else:
++        kw["start_new_session"] = True
++    proc = subprocess.Popen(cmd, **kw)
++    threading.Thread(target=proc.wait, daemon=True).start()   # collect its exit when it closes
++
++
++def open_app(body: Any) -> Dict[str, Any]:
++    """Start an installed app. It runs on its own: closing Axis does not close it."""
++    if not isinstance(body, dict) or not isinstance(body.get("app"), str):
++        raise ArtCraftError("Say which app to open.")
++    app_id = body["app"].strip().lower()
++    _, label, _ = _app(app_id)
++    info = _app_info(app_id)
++    if info is None:
++        raise ArtCraftError(f"{label} is not installed. Install it first.")
++    program = Path(info["path"])
++    if jobs.busy("artcraft", app_id):
++        raise ArtCraftError(f"{label} is still being installed.")
++    try:
++        _launch([str(program)], program.parent, rust_env())
++    except OSError as exc:
++        raise ArtCraftError(f"{label} could not be started: {exc}") from exc
++    return {"opened": app_id}
++
++
++def status() -> Dict[str, Any]:
++    plat = engines.this_platform()
++    apps = []
++    for app_id, label, what in APPS:
++        info = _app_info(app_id)
++        apps.append({"id": app_id, "name": label, "what": what, "installed": bool(info),
++                     "tag": info.get("tag") if info else None, "version": info.get("version") if info else None,
++                     "path": info["path"] if info else None})
++    rust = _rust_info()
++    return {
++        "supported": supported(plat), "platform": {"os": plat[0], "arch": plat[1]},
++        "apps": apps,
++        "rust": {"installed": bool(rust), "supported": plat in RUSTUP_TRIPLES, "version": rust.get("version") if rust else None,
++                 "path": str(rust_home()) if rust else None},
++        "root": str(root()),
++        "jobs": [j for j in jobs.listing() if j["engine"] == "artcraft"],
++    }
+diff --git a/axis/manager.py b/axis/manager.py
+index dc35a96..df8dce8 100644
+--- a/axis/manager.py
++++ b/axis/manager.py
+@@ -1087,7 +1087,7 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
+         "ocr": ocr.status(),
+         "catalog": catalog.public(),
+         "hf_token": bool(hub.token()),
+-        "jobs": jobs.listing(),
++        "jobs": [j for j in jobs.listing() if j["engine"] != "artcraft"],   # the Art Craft tab shows its own
+     }
+ 
+ 
+diff --git a/axis/server.py b/axis/server.py
+index 2c965f5..10fb54b 100644
+--- a/axis/server.py
++++ b/axis/server.py
+@@ -83,6 +83,10 @@ Routes:
+   PUT    /api/manage/settings               llama-server path, context size, extra arguments
+   POST   /api/manage/jobs/<id>/cancel       cancel an install or start
+   DELETE /api/manage/jobs/<id>              remove a finished job from the list
++  GET    /api/artcraft                      the Craft apps and Rust: what is installed, and their install jobs
++  POST   /api/artcraft/install              install an app, or Rust, in the background {app: photocraft|...|rust}
++                                            (cancel it, or clear it from the list, with the /api/manage/jobs routes)
++  POST   /api/artcraft/open                 start an installed app {app}; it keeps running if Axis stops
+ """
+ 
+ from __future__ import annotations
+@@ -103,7 +107,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+ from typing import Any, Dict, List, Optional, Union
+ 
+-from . import __version__, agents, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
++from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+ from .paths import remove_tree, shared_root
+ 
+ WEB_DIR = Path(__file__).resolve().parent / "web"
+@@ -735,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
+             return self._dispatch(method, parts, param)
+         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
+                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
+-                ocr.OcrError, terminal.TerminalError) as exc:
++                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError) as exc:
+             missing = "does not exist" in str(exc)
+             return self._error(404 if missing else 400, str(exc))
+         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+@@ -943,6 +947,14 @@ class Handler(BaseHTTPRequestHandler):
+                     jobs.dismiss(parts[3])
+                     return self._json(200, {"deleted": parts[3]})
+ 
++        elif n >= 2 and parts[1] == "artcraft":
++            if n == 2 and method == "GET":
++                return self._json(200, artcraft.status())
++            if parts[2:] == ["install"] and method == "POST":
++                return self._json(202, artcraft.install(self._body()))
++            if parts[2:] == ["open"] and method == "POST":
++                return self._json(200, artcraft.open_app(self._body()))
++
+         elif n >= 2 and parts[1] == "skills":
+             if n == 2 and method == "GET":
+                 return self._json(200, skills.list_all())
+diff --git a/axis/web/index.html b/axis/web/index.html
+index 3f54c27..0d5ad31 100644
+--- a/axis/web/index.html
++++ b/axis/web/index.html
+@@ -609,6 +609,8 @@ const S = {
+   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
+   ocrResult: null,
+   ocrError: null,
++  art: null,                    // last /api/artcraft result: the Craft apps, Rust, and their install jobs
++  artError: "",                 // the last error from an Art Craft button
+ };
+ S.install = S.installs.chat;
+ 
+@@ -845,6 +847,7 @@ function go(view) {
+   S.view = view;
+   $("app").classList.remove("menu-open");
+   renderNav(); renderMain();
++  if (view.kind === "art") loadArt();
+ }
+ 
+ function renderNav() {
+@@ -860,6 +863,7 @@ function renderNav() {
+       Object.keys(S.streams).some((k) => k !== DIRECT)),
+     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
+     item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
++    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
+     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
+     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
+     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
+@@ -957,6 +961,7 @@ function renderMain() {
+   if (S.view.kind === "history") return renderHistory();
+   if (S.view.kind === "images") return renderImages();
+   if (S.view.kind === "ocr") return renderOcr();
++  if (S.view.kind === "art") return renderArt();
+   renderChat();
+ }
+ 
+@@ -4153,6 +4158,115 @@ function imageModelsSection() {
+       h("button", { class: "link", onclick: () => openModelsTab("engines") }, "Engine settings"), "."));
+ }
+ 
++/* ------------------------------------------------------------- Art Craft */
++// Installs the portable Craft apps (and a portable Rust) into Axis's own folder, and opens them.
++let artTimer = null, artLoading = null;
++function loadArt() {
++  if (artLoading) return artLoading;
++  artLoading = api("/api/artcraft")
++    .then((d) => { const before = S.art; S.art = d; onArt(before, d); })
++    .catch((e) => { if (!S.art || !S.art.apps) S.art = { error: e.message, apps: [], jobs: [] }; })
++    .finally(() => { artLoading = null; scheduleArt(); });
++  return artLoading;
++}
++function scheduleArt() {
++  clearTimeout(artTimer);
++  if (runningJobs(S.art).length > 0) artTimer = setTimeout(loadArt, 1000);   // only while something is installing
++}
++const artSig = (d) => JSON.stringify(d && d.apps ? [d.apps.map((a) => [a.id, a.installed, a.tag]), d.rust, jobSig(d)] : null);
++function onArt(before, d) {
++  let finished = false;
++  for (const j of d.jobs || []) {
++    if (j.state === "running" || jobsSeen.has(j.id)) continue;
++    jobsSeen.add(j.id);
++    if (!before) continue;   // finished before this page opened: nothing to announce
++    finished = true;
++    if (j.state === "done") toast(`Installed ${(j.result && j.result.model) || j.target}`);
++    else if (j.state === "failed") toast(j.label + " failed. Details are on the Art Craft page.");
++  }
++  if (artSig(before) !== artSig(d)) renderNav();
++  if (S.view.kind !== "art") return;
++  if (finished || artSig(before) !== artSig(d)) renderArt();
++  else updateJobProgress(d);
++}
++async function artAction(path, app, done) {
++  S.artError = "";
++  try { const r = await api("/api/artcraft/" + path, { method: "POST", body: { app } }); if (done) done(r); }
++  catch (e) { S.artError = e.message; }
++  await loadArt();
++  renderNav(); renderArt();
++}
++async function artJobAction(j, action) {
++  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}` + (action === "cancel" ? "/cancel" : ""), { method: action === "cancel" ? "POST" : "DELETE" }); }
++  catch (e) { S.artError = e.message; }
++  await loadArt();
++  renderNav(); renderArt();
++}
++function artJobBlock(j) {
++  if (j.state === "running") {
++    return h("div", { class: "job-inline", "data-job": j.id }, progressBar(j),
++      h("div", { class: "job-head" }, h("span", { class: "job-meta job-phase" }, jobMeta(j)),
++        j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => artJobAction(j, "cancel") }, "Cancel") : null));
++  }
++  if (j.state !== "failed") return null;
++  return h("div", { class: "job failed", "data-job": j.id },
++    h("div", { class: "job-head" }, h("strong", {}, j.label + " failed"),
++      h("button", { class: "btn small", onclick: () => artJobAction(j, "dismiss") }, "Dismiss")),
++    h("div", { class: "job-meta job-phase" }, jobMeta(j)));
++}
++function artCard(name, what, state, job, actions) {
++  return h("div", { class: "model-card" },
++    h("h4", {}, name, h("span", { class: "chip" + (state === "Installed" ? " on" : "") }, state)),
++    what ? h("p", { class: "hint", style: "margin:6px 0 0" }, what) : null,
++    job && job.state !== "running" ? artJobBlock(job) : null,
++    h("div", { class: "model-actions" }, job && job.state === "running" ? artJobBlock(job) : actions));
++}
++function renderArt() {
++  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Art Craft"),
++    h("button", { class: "btn small", onclick: () => loadArt().then(() => renderArt()) }, "Refresh"));
++  const a = S.art;
++  if (!a) {
++    loadArt().then(() => { if (S.view.kind === "art") renderArt(); });
++    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
++  }
++  if (a.error && !a.apps.length) {
++    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "form-error", role: "alert" }, a.error))));
++  }
++  const before = $("art-scroll"), top = before ? before.scrollTop : null;
++  const latest = (target) => (a.jobs || []).filter((j) => j.target === target).sort((x, y) => y.started - x.started)[0] || null;
++  const failedOrRunning = (j) => (j && (j.state === "running" || j.state === "failed")) ? j : null;
++  const body = [];
++  if (S.artError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.artError, " ",
++    h("button", { class: "link", onclick: () => { S.artError = ""; renderArt(); } }, "Dismiss")));
++  body.push(h("p", { class: "hint" },
++    "The Craft App Suite is a set of free, open-source creative apps from the ArtCraft team. Axis installs the portable build of each app into its own folder, ",
++    h("code", {}, a.root), ". Nothing is installed on your computer and no administrator rights are needed. ",
++    "Opened apps keep running when you quit Axis."));
++  if (!a.supported) body.push(h("p", { class: "model-note" }, `The Craft apps have no ready-made portable build for ${a.platform.os} on ${a.platform.arch}.`));
++
++  // Rust
++  const rj = failedOrRunning(latest("rust")), r = a.rust;
++  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Rust"),
++    artCard("Rust", `A portable Rust, installed with rustup into Axis\u2019s own folder. Axis never changes your PATH. The apps do not need Rust to run, but any app opened from here finds this Rust on its PATH.${a.platform.os === "windows" ? " Building programs with Rust on Windows also needs Microsoft\u2019s C++ Build Tools." : ""}`,
++      r.installed ? "Installed" : "Not installed", rj,
++      r.installed ? [h("span", { class: "hint", style: "margin:0" }, r.version || "")]
++        : r.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", "rust") }, "Install Rust")]
++        : [h("span", { class: "hint", style: "margin:0" }, "Rust has no installer for this computer.")])));
++
++  // The apps
++  const cards = a.apps.map((app) => {
++    const j = failedOrRunning(latest(app.id));
++    return artCard(app.name, app.what, app.installed ? "Installed" : "Not installed", j,
++      app.installed ? [h("button", { class: "btn primary", onclick: () => artAction("open", app.id, () => toast(`Opening ${app.name}\u2026`)) }, "Open"),
++        h("span", { class: "hint", style: "margin:0" }, app.version || app.tag || "")]
++        : a.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", app.id) }, `Install ${app.name}`)] : []);
++  });
++  body.push(h("div", { class: "skill-group" }, h("h3", {}, "The Craft apps"), cards));
++
++  fill($("main"), bar, h("div", { class: "editor", id: "art-scroll" }, h("div", { class: "form" }, body)));
++  const sc = $("art-scroll"); if (sc && top !== null) sc.scrollTop = top;
++}
++
+ /* ------------------------------------------------------------------ OCR */
+ // Reads the text in a picture with an OCR model (Models page, OCR models).
+ const OCR_RE = /\.(png|jpe?g|bmp|tiff?|webp)$/i;      // what every OCR engine reads; others are converted first
+@@ -4530,7 +4644,7 @@ window.addEventListener("beforeunload", (e) => {
+   if (S.editing && S.editing.dirty) { e.preventDefault(); e.returnValue = ""; return; }   // unsaved changes in Workspace
+   // Closing the window stops Axis, so warn before cutting off a reply, a picture or an install.
+   if (!closesWithWindow || (S.status && S.status.axisDown)) return;
+-  if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0) {
++  if (Object.keys(S.streams).length > 0 || !!S.imageJob || !!S.ocrJob || runningJobs(S.manage).length > 0 || runningJobs(S.art).length > 0) {
+     e.preventDefault(); e.returnValue = "";
+   }
+ });
+diff --git a/docs/api.md b/docs/api.md
+index 289ffe3..987acc9 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -131,6 +131,16 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ | `POST` | `/api/manage/jobs/<id>/cancel` | cancel an install or start |
+ | `DELETE` | `/api/manage/jobs/<id>` | remove a finished job from the list |
+ 
++## Art Craft
++
++| Method | Path | Purpose |
++|--------|------|---------|
++| `GET` | `/api/artcraft` | the 13 Craft apps and Rust: what is installed (version, path), whether this computer is supported, and the Art Craft install jobs |
++| `POST` | `/api/artcraft/install` | install an app, or Rust, in the background: `{"app": "photocraft"}` or `{"app": "rust"}`. Answers `202` with `{"job": ...}`; refuses what is already installed |
++| `POST` | `/api/artcraft/open` | start an installed app: `{"app": "photocraft"}`. It is not stopped when Axis stops |
++
++These jobs are not listed by `GET /api/manage`. Cancel one, or clear a finished one, with the `/api/manage/jobs/<id>` routes above.
++
+ ## Example
+ 
+ ```bash
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 74dd48f..9816837 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -22,6 +22,7 @@ This page explains how Axis is put together, so you can find the right file befo
+   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
+   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
+   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
++  |     +-- artcraft.py                                  (Craft apps and Rust: install, open) |
+   |     +-- procs.py                                     (programs Axis started)         |
+   |     +-- terminal.py                                  (shells: Terminal, Workspace)   |
+   |     +-- updates.py                                   (update check against GitHub)   |
+@@ -64,6 +65,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
+ | Programs Axis started | `~/Axis/run/` | `procs.py`, `instances.py` |
+ | Downloaded models | `~/Axis/models/` | `hub.py`, `manager.py`, `ocr.py` |
+ | Engines | `~/Axis/engines/` | `engines.py`, `ocr.py` |
++| Craft apps and portable Rust | `~/Axis/engines/artcraft/`, `~/Axis/engines/rust/`, `~/Axis/engines/artcraft.json` | `artcraft.py` |
+ | Interface preferences (theme, drafts, open chat) | the browser's local storage | `web/index.html` |
+ 
+ `paths.py` is the single source for the data folder; it honours `AXIS_HOME`.
+diff --git a/docs/development.md b/docs/development.md
+index b67d24a..07dd909 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -36,6 +36,7 @@ On Windows use `py`. The suite starts fake Ollama, llama.cpp, stable-diffusion.c
+ | `tests/test_axis.py` | Server routes, agents, skills, chats, tools, the runner, the CLI, the shortcut and app window, and Workspace files |
+ | `tests/test_manage.py` | Installing, starting, stopping, and deleting models |
+ | `tests/test_engines.py` | Installing engines from (fake) GitHub releases, and image models by name |
++| `tests/test_artcraft.py` | The Art Craft tab: installing and opening the Craft apps, portable Rust |
+ | `tests/test_ocr.py` | Tesseract, the PyTorch environment, and OCR models |
+ | `tests/test_updates.py` | The update check |
+ | `tests/test_hardening.py` | Safety and robustness fixes: deleting read-only folders, uploads, `fetch_page`, Run Python limits, downloads |
+@@ -69,6 +70,7 @@ axis/
+   ocr_worker.py   runs PyTorch OCR inside its own environment
+   manager.py      installs, starts, stops, and deletes models
+   engines.py      installs llama.cpp and stable-diffusion.cpp from GitHub releases
++  artcraft.py     installs and opens the Craft apps, and installs portable Rust
+   catalog.py      short model names and the files each needs
+   hub.py          Hugging Face names and verified, resumable downloads
+   jobs.py         long operations in the background, with progress
+diff --git a/docs/user-guide.md b/docs/user-guide.md
+index 1e293ec..01dbcec 100644
+--- a/docs/user-guide.md
++++ b/docs/user-guide.md
+@@ -199,6 +199,16 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
+ 
+ **OCR tab.** Drop, paste, upload, or choose a picture from Workspace, choose the model, and click **Read text**. For Tesseract, combine installed languages with `+` (`eng+lat`) and choose a page layout (automatic, one column, one block, one line, or scattered text). The result shows the word count, the mean confidence, and the time taken. Pictures you upload or paste are saved in `shared/uploads`; **Save to Workspace** saves the text in `shared/ocr`.
+ 
++## Art Craft
++
++Open **Art Craft** in the sidebar to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
++
++- **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
++- **Open** starts the app. It keeps running if you quit Axis.
++- **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, rustup also adds itself to Apps & features, and building programs with Rust needs Microsoft's C++ Build Tools.
++- The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
++- An app that is already installed is never installed over, so its settings are safe. To remove an app, delete its folder in `Axis/engines/artcraft`.
++
+ ## Workspace
+ 
+ Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
+@@ -268,7 +278,8 @@ Axis/                       in your home folder (override with AXIS_HOME)
+ │       └── workspace/      the agent's folder: every file it makes goes here
+ ├── chats/                  saved conversations, one .json file each
+ ├── engine-settings.json    llama-server path, context size, extra arguments
+-├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, and ocr-python/ (PyTorch for OCR)
++├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
++│                           artcraft/ (the Craft apps) and rust/ (portable Rust)
+ ├── image-models/           image model definitions, one .json file each
+ ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
+ ├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index
+diff --git a/tests/test_artcraft.py b/tests/test_artcraft.py
+new file mode 100644
+index 0000000..835cebb
+--- /dev/null
++++ b/tests/test_artcraft.py
+@@ -0,0 +1,614 @@
++"""Tests for the Art Craft tab: installing and opening the Craft apps, and installing portable Rust (artcraft.py).
++
++Everything runs against fakes: a fake GitHub (API, release pages and downloads) serving small archives
++with stand-in programs, and a fake rustup server whose installer is a small shell script.
++
++Run with:  python -m unittest discover -s tests -v
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import plistlib
++import sys
++import time
++import unittest
++import urllib.parse
++from http.server import BaseHTTPRequestHandler
++from pathlib import Path
++from unittest import mock
++
++from axis import artcraft, engines, jobs
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++from test_engines import _tar
++from test_manage import POSIX_ONLY, Base, request, serve, wait_job
++
++LINUX = ("linux", "x64")
++TRIPLE = "x86_64-unknown-linux-gnu"
++
++
++def app_release(app_id, tag="v1.2.3", program=None, sums=False, extra=None):
++    """(tag, assets) for one app: a Linux tarball with a stand-in program, and files for other systems."""
++    ver = tag.lstrip("v")
++    prog = program or f'#!/bin/sh\necho "{app_id} {ver}"\n'.encode()
++    folder = f"{app_id}-{ver}-linux-x86_64"
++    assets = {
++        f"{folder}.tar.gz": _tar({f"{folder}/bin/{app_id}": (prog, 0o755), f"{folder}/bin/{app_id}-cli": (prog, 0o755),
++                                  f"{folder}/share/doc/README.md": (b"readme", 0o644)}),
++        f"{app_id}-{ver}-windows-x64-portable.zip": b"windows",
++        f"{app_id}-{ver}-macos-universal.dmg": b"mac",
++        f"{app_id}-cli-{ver}-macos-universal.zip": b"cli only",
++    }
++    assets.update(extra or {})
++    if sums:
++        assets["SHA256SUMS.txt"] = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in assets.items()).encode()
++    return tag, assets
++
++
++class FakeGitHub:
++    """Latest releases by repository: {"owner/repo": (tag, {asset name: bytes})}."""
++
++    def __init__(self, repos, api=True, digests=True, bad_digest=()):
++        self.repos, self.api, self.digests, self.bad_digest = repos, api, digests, set(bad_digest)
++        self.downloads = []
++        gh = self
++
++        class H(BaseHTTPRequestHandler):
++            def log_message(self, *a):
++                pass
++
++            def _send(self, code, body=b"", ctype="text/html", extra=None):
++                self.send_response(code)
++                self.send_header("Content-Type", ctype)
++                self.send_header("Content-Length", str(len(body)))
++                for k, v in (extra or {}).items():
++                    self.send_header(k, v)
++                self.end_headers()
++                self.wfile.write(body)
++
++            def do_GET(self):
++                path = urllib.parse.urlsplit(self.path).path
++                base = f"http://127.0.0.1:{self.server.server_address[1]}"
++                parts = [urllib.parse.unquote(p) for p in path.split("/") if p]
++                if parts[:1] == ["api"]:   # /api/repos/<o>/<r>/releases/latest
++                    if not gh.api:
++                        return self._send(429, b"{}", "application/json")
++                    rel = gh.repos.get("/".join(parts[2:4]))
++                    if rel is None or parts[4:] != ["releases", "latest"]:
++                        return self._send(404, b"{}", "application/json")
++                    tag, assets = rel
++                    out = {"tag_name": tag, "assets": []}
++                    for n, b in assets.items():
++                        a = {"name": n, "size": len(b), "browser_download_url": f"{base}/{parts[2]}/{parts[3]}/releases/download/{tag}/{n}"}
++                        if gh.digests:
++                            a["digest"] = "sha256:" + gh.digest(n, b)
++                        out["assets"].append(a)
++                    return self._send(200, json.dumps(out).encode(), "application/json")
++                repo = "/".join(parts[:2])
++                rel = gh.repos.get(repo)
++                if rel is None:
++                    return self._send(404)
++                tag, assets = rel
++                if parts[2:] == ["releases", "latest"]:
++                    return self._send(302, extra={"Location": f"/{repo}/releases/tag/{tag}"})
++                if parts[2:] == ["releases", "tag", tag]:
++                    return self._send(200, b"<html>release</html>")
++                if parts[2:] == ["releases", "expanded_assets", tag]:
++                    html = "".join(f'<a href="/{repo}/releases/download/{tag}/{n}">{n}</a>'
++                                   + (f'<clipboard-copy aria-label="Copy to clipboard digest for {n}" type="button" '
++                                      f'value="sha256:{gh.digest(n, b)}">' if gh.digests else "") for n, b in assets.items())
++                    return self._send(200, html.encode())
++                if parts[2:4] == ["releases", "download"] and parts[4] == tag and parts[5] in assets:
++                    gh.downloads.append(parts[5])
++                    return self._send(200, assets[parts[5]], "application/octet-stream")
++                return self._send(404)
++
++        self.srv, self.url = serve(H)
++
++    def digest(self, name, data):
++        return ("0" * 64) if name in self.bad_digest else hashlib.sha256(data).hexdigest()
++
++    def close(self):
++        self.srv.shutdown()
++        self.srv.server_close()
++
++
++RUSTUP_INIT = b"""#!/bin/sh
++echo "info: syncing channel updates for 'stable'"
++echo "$@" > "$CARGO_HOME/args.txt"
++echo "$RUSTUP_HOME" > "$CARGO_HOME/rustup_home.txt"
++mkdir -p "$CARGO_HOME/bin"
++printf '#!/bin/sh\\necho "cargo 9.9.9 (fake)"\\n' > "$CARGO_HOME/bin/cargo"
++chmod +x "$CARGO_HOME/bin/cargo"
++echo "info: default toolchain set to 'stable'"
++"""
++
++
++class FakeRustup:
++    def __init__(self, installer=RUSTUP_INIT, wrong_sum=False):
++        self.installer, self.wrong_sum = installer, wrong_sum
++        fake = self
++
++        class H(BaseHTTPRequestHandler):
++            def log_message(self, *a):
++                pass
++
++            def do_GET(self):
++                path = urllib.parse.urlsplit(self.path).path
++                body, code = b"", 200
++                if path == f"/dist/{TRIPLE}/rustup-init":
++                    body = fake.installer
++                elif path == f"/dist/{TRIPLE}/rustup-init.sha256":
++                    sha = "0" * 64 if fake.wrong_sum else hashlib.sha256(fake.installer).hexdigest()
++                    body = f"{sha} *rustup-init\n".encode()
++                else:
++                    code = 404
++                self.send_response(code)
++                self.send_header("Content-Length", str(len(body)))
++                self.end_headers()
++                self.wfile.write(body)
++
++        self.srv, self.url = serve(H)
++
++    def close(self):
++        self.srv.shutdown()
++        self.srv.server_close()
++
++
++class ArtBase(Base):
++    def setUp(self):
++        super().setUp()
++        p = mock.patch.object(engines, "this_platform", return_value=LINUX)
++        p.start()
++        self.cleanups.append(p.stop)
++
++    def github(self, repos, **kw):
++        fake = FakeGitHub(repos, **kw)
++        self.cleanups.append(fake.close)
++        os.environ["AXIS_GITHUB"] = fake.url
++        os.environ["AXIS_GITHUB_API"] = fake.url + "/api"
++        return fake
++
++    def rustup(self, **kw):
++        fake = FakeRustup(**kw)
++        self.cleanups.append(fake.close)
++        os.environ["AXIS_RUSTUP"] = fake.url
++        return fake
++
++    def install(self, app, timeout=30):
++        """Run an install the way the page does, and wait for it."""
++        out = artcraft.install({"app": app})
++        return wait_job(out["job"]["id"], timeout)
++
++    def app(self, app_id):
++        return next(a for a in artcraft.status()["apps"] if a["id"] == app_id)
++
++
++# ------------------------------------------------------------------- choosing the download
++
++
++class TestChoosing(Base):
++    def test_there_are_thirteen_apps(self):
++        self.assertEqual(len(artcraft.APPS), 13)
++        self.assertEqual(len(set(artcraft.APP_IDS)), 13)
++        self.assertIn("photocraft", artcraft.APP_IDS)
++
++    def test_portable_file_for_each_system(self):
++        def pick(plat, names, app="photocraft"):
++            pattern = artcraft.asset_pattern(app, plat)
++            return [n for n in names if pattern and __import__("re").search(pattern, n)]
++
++        names = ["photocraft-0.17.0-windows-x64-portable.zip", "photocraft-0.17.0-windows-arm64-portable.zip",
++                 "photocraft-0.17.0-windows-x86-portable.zip", "photocraft-0.17.0-windows-x64.msi",
++                 "photocraft-0.17.0-linux-x86_64.tar.gz", "photocraft-0.17.0-linux-aarch64.tar.gz",
++                 "photocraft-0.17.0-linux-x86_64.AppImage", "photocraft-0.17.0-linux-x86_64.deb",
++                 "photocraft-0.17.0-macos-universal.dmg", "photocraft-cli-0.17.0-macos-universal.zip",
++                 "photocraft-web-0.17.0.zip", "SHA256SUMS.txt"]
++        self.assertEqual(pick(("windows", "x64"), names), ["photocraft-0.17.0-windows-x64-portable.zip"])
++        self.assertEqual(pick(("windows", "arm64"), names), ["photocraft-0.17.0-windows-arm64-portable.zip"])
++        self.assertEqual(pick(("windows", "x86"), names), ["photocraft-0.17.0-windows-x86-portable.zip"])
++        self.assertEqual(pick(("linux", "x64"), names), ["photocraft-0.17.0-linux-x86_64.tar.gz"])
++        self.assertEqual(pick(("linux", "arm64"), names), ["photocraft-0.17.0-linux-aarch64.tar.gz"])
++        self.assertEqual(pick(("macos", "arm64"), names), ["photocraft-0.17.0-macos-universal.dmg"])
++        self.assertEqual(pick(("macos", "x64"), names), ["photocraft-0.17.0-macos-universal.dmg"])
++        self.assertIsNone(artcraft.asset_pattern("photocraft", ("linux", "riscv64")))
++        self.assertIsNone(artcraft.asset_pattern("photocraft", ("freebsd", "x64")))
++
++    def test_one_app_never_picks_another_apps_file(self):
++        import re
++        pattern = artcraft.asset_pattern("gridcraft", ("linux", "x64"))
++        self.assertIsNone(re.search(pattern, "photocraft-0.1.0-linux-x86_64.tar.gz"))
++        self.assertTrue(re.search(pattern, "gridcraft-0.13.0-linux-x86_64.tar.gz"))
++
++    def test_finds_the_program_on_windows_and_linux(self):
++        folder = Path(self.home) / "x"
++        (folder / "wordcraft-1.0-windows-x64-portable").mkdir(parents=True)
++        for name in ("wordcraft-cli.exe", "wordcraft.exe", "portable.txt"):
++            (folder / "wordcraft-1.0-windows-x64-portable" / name).write_bytes(b"x")
++        self.assertEqual(artcraft._find_program(folder, "wordcraft", "windows").name, "wordcraft.exe")
++        (folder / "t" / "bin").mkdir(parents=True)
++        for name in ("wordcraft-cli", "wordcraft"):
++            (folder / "t" / "bin" / name).write_bytes(b"x")
++        self.assertEqual(artcraft._find_program(folder / "t", "wordcraft", "linux").name, "wordcraft")
++        self.assertIsNone(artcraft._find_program(folder / "nothing", "wordcraft", "linux"))
++
++    def test_finds_the_program_inside_a_mac_app(self):
++        folder = Path(self.home) / "m"
++        macos = folder / "EffectCraft.app" / "Contents" / "MacOS"
++        macos.mkdir(parents=True)
++        (macos / "Other").write_bytes(b"x")
++        (macos / "EffectCraft").write_bytes(b"x")
++        (folder / "EffectCraft.app" / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "EffectCraft"}))
++        self.assertEqual(artcraft._find_program(folder, "effectcraft", "macos").name, "EffectCraft")
++
++    @unittest.skipIf(os.name == "nt", "needs symbolic links")
++    def test_disk_image_scan_skips_the_applications_shortcut(self):
++        volume = Path(self.home) / "volume"
++        (volume / "Real.app").mkdir(parents=True)
++        elsewhere = Path(self.home) / "elsewhere" / "System.app"
++        elsewhere.mkdir(parents=True)
++        (volume / "Applications").symlink_to(elsewhere.parent)
++        self.assertEqual([p.name for p in artcraft._apps_in(volume)], ["Real.app"])
++        nested = Path(self.home) / "nested"
++        (nested / "Disk" / "Inner.app").mkdir(parents=True)
++        self.assertEqual([p.name for p in artcraft._apps_in(nested)], ["Inner.app"])
++
++
++# ------------------------------------------------------------------- installing and opening apps
++
++
++class TestInstallApp(ArtBase):
++    def test_status_before_anything_is_installed(self):
++        s = artcraft.status()
++        self.assertTrue(s["supported"])
++        self.assertEqual(len(s["apps"]), 13)
++        self.assertFalse(any(a["installed"] for a in s["apps"]))
++        self.assertFalse(s["rust"]["installed"])
++        self.assertEqual(s["jobs"], [])
++        self.assertEqual(artcraft.rust_env(), {})
++
++    @POSIX_ONLY
++    def test_install_unpacks_checks_and_records(self):
++        gh = self.github({"storytold/photocraft": app_release("photocraft")})
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "done", job.error)
++        self.assertEqual(job.result["model"], "PhotoCraft")
++        a = self.app("photocraft")
++        self.assertTrue(a["installed"])
++        self.assertEqual((a["tag"], a["version"]), ("v1.2.3", "photocraft 1.2.3"))
++        program = Path(a["path"])
++        self.assertEqual(program, Path(self.home) / "engines" / "artcraft" / "photocraft" / "v1.2.3" / "photocraft-1.2.3-linux-x86_64" / "bin" / "photocraft")
++        self.assertTrue(os.access(program, os.X_OK))
++        self.assertTrue(os.access(program.with_name("photocraft-cli"), os.X_OK))
++        self.assertEqual(gh.downloads, ["photocraft-1.2.3-linux-x86_64.tar.gz"])
++        self.assertEqual(list((Path(self.home) / "engines" / "_downloads").glob("*")), [])
++        self.assertEqual(list((Path(self.home) / "engines" / "artcraft" / "photocraft").glob("*.partial")), [])
++        # Only that app is installed, and the record survives a fresh read.
++        self.assertEqual([x["id"] for x in artcraft.status()["apps"] if x["installed"]], ["photocraft"])
++
++    @POSIX_ONLY
++    def test_install_reads_release_pages_when_the_api_refuses(self):
++        self.github({"storytold/vectorcraft": app_release("vectorcraft", "v0.18.0")}, api=False)
++        job = self.install("vectorcraft")
++        self.assertEqual(job.state, "done", job.error)
++        self.assertEqual(self.app("vectorcraft")["tag"], "v0.18.0")
++
++    @POSIX_ONLY
++    def test_checksum_can_come_from_the_sha256sums_file(self):
++        self.github({"storytold/gridcraft": app_release("gridcraft", sums=True)}, digests=False)
++        job = self.install("gridcraft")
++        self.assertEqual(job.state, "done", job.error)
++
++    def test_no_published_checksum_means_no_install(self):
++        self.github({"storytold/gridcraft": app_release("gridcraft")}, digests=False)
++        job = self.install("gridcraft")
++        self.assertEqual(job.state, "failed")
++        self.assertIn("checksum", job.error)
++        self.assertFalse(self.app("gridcraft")["installed"])
++
++    def test_a_damaged_download_is_deleted_and_nothing_is_recorded(self):
++        name = "photocraft-1.2.3-linux-x86_64.tar.gz"
++        self.github({"storytold/photocraft": app_release("photocraft")}, bad_digest=[name])
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "failed")
++        self.assertIn("checksum", job.error)
++        self.assertFalse(self.app("photocraft")["installed"])
++        engines_dir = Path(self.home) / "engines"
++        self.assertEqual(list((engines_dir / "_downloads").glob("*")), [])
++        self.assertEqual(list((engines_dir / "artcraft" / "photocraft").glob("*")), [])
++
++    def test_a_release_without_a_portable_build_says_so(self):
++        tag, assets = app_release("photocraft")
++        assets = {n: b for n, b in assets.items() if "linux" not in n}
++        self.github({"storytold/photocraft": (tag, assets)})
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "failed")
++        self.assertIn("no portable build", job.error)
++        self.assertFalse(self.app("photocraft")["installed"])
++
++    @POSIX_ONLY
++    def test_an_archive_without_the_program_is_refused(self):
++        folder = "photocraft-1.2.3-linux-x86_64"
++        tag, assets = app_release("photocraft", extra={f"{folder}.tar.gz": _tar({f"{folder}/share/readme": (b"x", 0o644)})})
++        self.github({"storytold/photocraft": (tag, assets)})
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "failed")
++        self.assertIn("not in the PhotoCraft download", job.error)
++        self.assertEqual(list((Path(self.home) / "engines" / "artcraft" / "photocraft").glob("*")), [])
++
++    @POSIX_ONLY
++    def test_a_program_that_cannot_load_is_refused(self):
++        broken = b"#!/bin/sh\necho './x: /lib/libc.so.6: version GLIBC_2.99 not found' >&2\nexit 1\n"
++        self.github({"storytold/photocraft": app_release("photocraft", program=broken)})
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "failed")
++        self.assertIn("does not run on this computer", job.error)
++        self.assertFalse(self.app("photocraft")["installed"])
++
++    @POSIX_ONLY
++    def test_a_program_that_ignores_version_is_still_installed(self):
++        silent = b"#!/bin/sh\nexit 0\n"
++        self.github({"storytold/photocraft": app_release("photocraft", program=silent)})
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "done", job.error)
++        self.assertEqual(self.app("photocraft")["version"], "")
++
++    @POSIX_ONLY
++    def test_an_installed_app_is_never_installed_over(self):
++        self.github({"storytold/photocraft": app_release("photocraft")})
++        self.assertEqual(self.install("photocraft").state, "done")
++        settings = Path(self.app("photocraft")["path"]).parent.parent / "PhotoCraftData" / "settings.json"
++        settings.parent.mkdir()
++        settings.write_text("mine")
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "already installed"):
++            artcraft.install({"app": "photocraft"})
++        self.assertEqual(settings.read_text(), "mine")
++
++    @POSIX_ONLY
++    def test_a_folder_without_a_record_is_kept_not_deleted(self):
++        self.github({"storytold/photocraft": app_release("photocraft")})
++        old = Path(self.home) / "engines" / "artcraft" / "photocraft" / "v1.2.3"
++        old.mkdir(parents=True)
++        (old / "settings.json").write_text("mine")
++        job = self.install("photocraft")
++        self.assertEqual(job.state, "done", job.error)
++        self.assertEqual((old / "settings.json").read_text(), "mine")
++        self.assertNotEqual(Path(self.app("photocraft")["path"]).parts[-5], "v1.2.3")
++
++    def test_unknown_and_missing_app_names(self):
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "not one of the Craft apps"):
++            artcraft.install({"app": "paintcraft"})
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "Say which app"):
++            artcraft.install({})
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "Say which app"):
++            artcraft.open_app({"app": 5})
++
++    def test_a_system_without_portable_builds_is_told_so(self):
++        with mock.patch.object(engines, "this_platform", return_value=("freebsd", "x64")):
++            self.assertFalse(artcraft.status()["supported"])
++            with self.assertRaisesRegex(artcraft.ArtCraftError, "no ready-built program"):
++                artcraft.install({"app": "photocraft"})
++
++    @POSIX_ONLY
++    def test_two_installs_of_the_same_app_cannot_run_together(self):
++        self.github({"storytold/photocraft": app_release("photocraft")})
++        first = artcraft.submit("photocraft")
++        with self.assertRaises(jobs.JobError):
++            artcraft.submit("photocraft")
++        jobs.wait(first)
++
++    @POSIX_ONLY
++    def test_cancelling_leaves_nothing_behind(self):
++        gh = self.github({"storytold/photocraft": app_release("photocraft")})
++        job = artcraft.submit("photocraft")
++        job._cancel.set()
++        jobs.wait(job)
++        self.assertEqual(job.state, "cancelled")
++        self.assertFalse(self.app("photocraft")["installed"])
++        self.assertEqual(list((Path(self.home) / "engines" / "artcraft" / "photocraft").glob("*")), [])
++        del gh
++
++
++class TestOpen(ArtBase):
++    def test_opening_something_not_installed_is_refused(self):
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "not installed"):
++            artcraft.open_app({"app": "photocraft"})
++
++    def wait_for(self, path, timeout=10):
++        deadline = time.time() + timeout
++        while time.time() < deadline and not path.exists():
++            time.sleep(0.05)
++        self.assertTrue(path.exists(), f"{path} never appeared")
++        time.sleep(0.1)
++        return path.read_text()
++
++    @POSIX_ONLY
++    def test_open_starts_the_installed_program_in_its_own_folder(self):
++        probe = b'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "x 1.0"; exit 0; fi\npwd > opened.txt\nenv > env.txt\n'
++        self.github({"storytold/photocraft": app_release("photocraft", program=probe)})
++        self.assertEqual(self.install("photocraft").state, "done")
++        program = Path(self.app("photocraft")["path"])
++        self.assertEqual(artcraft.open_app({"app": "photocraft"}), {"opened": "photocraft"})
++        self.assertEqual(Path(self.wait_for(program.parent / "opened.txt").strip()).resolve(), program.parent.resolve())
++        env = self.wait_for(program.parent / "env.txt")
++        self.assertNotIn("CARGO_HOME=", env)
++
++    @POSIX_ONLY
++    def test_an_opened_app_finds_the_portable_rust(self):
++        probe = b'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "x 1.0"; exit 0; fi\nenv > env.txt\n'
++        self.github({"storytold/photocraft": app_release("photocraft", program=probe)})
++        self.rustup()
++        self.assertEqual(wait_job(artcraft.install({"app": "rust"})["job"]["id"]).state, "done")
++        self.assertEqual(self.install("photocraft").state, "done")
++        program = Path(self.app("photocraft")["path"])
++        artcraft.open_app({"app": "photocraft"})
++        env = dict(line.split("=", 1) for line in self.wait_for(program.parent / "env.txt").splitlines() if "=" in line)
++        home = Path(self.home) / "engines" / "rust"
++        self.assertEqual(Path(env["CARGO_HOME"]), home / "cargo")
++        self.assertEqual(Path(env["RUSTUP_HOME"]), home / "rustup")
++        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(home / "cargo" / "bin"))
++
++    def test_an_app_that_is_still_installing_cannot_be_opened_twice_over(self):
++        self.github({"storytold/photocraft": app_release("photocraft")})
++        artcraft._remember("photocraft", {"tag": "v1", "dir": "artcraft/photocraft/v1", "program": "artcraft/photocraft/v1/p"})
++        p = Path(self.home) / "engines" / "artcraft" / "photocraft" / "v1" / "p"
++        p.parent.mkdir(parents=True)
++        p.write_text("x")
++        with mock.patch.object(jobs, "busy", return_value=object()):
++            with self.assertRaisesRegex(artcraft.ArtCraftError, "still being installed"):
++                artcraft.open_app({"app": "photocraft"})
++
++    def test_a_record_whose_files_are_gone_counts_as_not_installed(self):
++        artcraft._remember("photocraft", {"tag": "v1", "dir": "artcraft/photocraft/v1", "program": "artcraft/photocraft/v1/p"})
++        self.assertFalse(self.app("photocraft")["installed"])
++        artcraft._remember("figcraft", {"tag": "v1", "dir": "x", "program": "../../outside"})
++        self.assertFalse(self.app("figcraft")["installed"])
++
++
++# ------------------------------------------------------------------- Rust
++
++
++class TestRust(ArtBase):
++    @POSIX_ONLY
++    def test_install_rust_into_its_own_folder_without_touching_the_path(self):
++        path_before = os.environ["PATH"]
++        self.rustup()
++        job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
++        self.assertEqual(job.state, "done", job.error)
++        home = Path(self.home) / "engines" / "rust"
++        self.assertEqual((home / "cargo" / "args.txt").read_text().split(),
++                         ["-y", "--no-modify-path", "--profile", "minimal", "--default-toolchain", "stable"])
++        self.assertEqual(Path((home / "cargo" / "rustup_home.txt").read_text().strip()), home / "rustup")
++        s = artcraft.status()["rust"]
++        self.assertTrue(s["installed"])
++        self.assertEqual(s["version"], "cargo 9.9.9 (fake)")
++        self.assertEqual(os.environ["PATH"], path_before)
++        env = artcraft.rust_env()
++        self.assertEqual(set(env), {"RUSTUP_HOME", "CARGO_HOME", "PATH"})
++        self.assertTrue(env["PATH"].startswith(str(home / "cargo" / "bin") + os.pathsep))
++        self.assertEqual(list((Path(self.home) / "engines" / "_downloads").glob("*")), [])
++        with self.assertRaisesRegex(artcraft.ArtCraftError, "already installed"):
++            artcraft.install({"app": "rust"})
++
++    @POSIX_ONLY
++    def test_rust_is_not_installed_when_the_checksum_is_wrong(self):
++        self.rustup(wrong_sum=True)
++        job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
++        self.assertEqual(job.state, "failed")
++        self.assertIn("checksum", job.error)
++        self.assertFalse(artcraft.status()["rust"]["installed"])
++        self.assertFalse((Path(self.home) / "engines" / "rust").exists())
++
++    @POSIX_ONLY
++    def test_a_failing_rustup_reports_what_it_said_and_cleans_up(self):
++        self.rustup(installer=b"#!/bin/sh\necho 'error: could not download component rustc'\nmkdir -p \"$CARGO_HOME/bin\"\nexit 1\n")
++        job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
++        self.assertEqual(job.state, "failed")
++        self.assertIn("exit code 1", job.error)
++        self.assertIn("could not download component rustc", job.error)
++        self.assertFalse(artcraft.status()["rust"]["installed"])
++        self.assertFalse((Path(self.home) / "engines" / "rust").exists())
++
++    @POSIX_ONLY
++    def test_rustup_that_finishes_without_cargo_is_refused(self):
++        self.rustup(installer=b"#!/bin/sh\necho done\n")
++        job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
++        self.assertEqual(job.state, "failed")
++        self.assertIn("cargo is not where it should be", job.error)
++        self.assertFalse((Path(self.home) / "engines" / "rust").exists())
++
++    @POSIX_ONLY
++    def test_cancelling_rust_stops_rustup_and_removes_what_it_made(self):
++        self.rustup(installer=b"#!/bin/sh\necho 'info: downloading component rustc'\nmkdir -p \"$CARGO_HOME/bin\"\nexec sleep 60\n")
++        job = artcraft.submit("rust")
++        deadline = time.time() + 15
++        while time.time() < deadline and "downloading" not in job.phase:
++            time.sleep(0.05)
++        self.assertIn("downloading component rustc", job.phase)   # the page shows what rustup says
++        job._cancel.set()
++        jobs.wait(job, 15)
++        self.assertEqual(job.state, "cancelled")
++        self.assertFalse((Path(self.home) / "engines" / "rust").exists())
++        self.assertFalse(artcraft.status()["rust"]["installed"])
++
++    def test_rust_for_a_system_rustup_does_not_cover(self):
++        with mock.patch.object(engines, "this_platform", return_value=("freebsd", "x64")):
++            self.assertFalse(artcraft.status()["rust"]["supported"])
++            job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
++            self.assertEqual(job.state, "failed")
++            self.assertIn("rustup has no program", job.error)
++
++    def test_every_supported_system_has_a_rustup_triple(self):
++        for plat in [("windows", "x64"), ("windows", "arm64"), ("windows", "x86"), ("linux", "x64"), ("linux", "arm64"),
++                     ("macos", "x64"), ("macos", "arm64")]:
++            self.assertIn(plat, artcraft.RUSTUP_TRIPLES)
++        self.assertTrue(artcraft.RUSTUP_TRIPLES[("windows", "x64")].endswith("windows-msvc"))
++
++
++# ------------------------------------------------------------------- the routes
++
++
++class TestRoutes(ArtBase):
++    def test_status_install_and_the_models_page(self):
++        self.github({"storytold/photocraft": app_release("photocraft")})
++        url = self.axis("http://127.0.0.1:9")
++        code, body = request(url + "/api/artcraft")
++        self.assertEqual(code, 200)
++        self.assertEqual(len(body["apps"]), 13)
++        self.assertTrue(body["supported"])
++
++        code, body = request(url + "/api/artcraft/install", "POST", {"app": "photocraft"})
++        self.assertEqual(code, 202)
++        job = body["job"]
++        self.assertEqual((job["engine"], job["target"], job["label"]), ("artcraft", "photocraft", "Installing PhotoCraft"))
++        # The Art Craft tab lists the job; the Models page does not.
++        code, body = request(url + "/api/artcraft")
++        self.assertIn(job["id"], [j["id"] for j in body["jobs"]])
++        code, manage = request(url + "/api/manage")
++        self.assertEqual(code, 200)
++        self.assertNotIn(job["id"], [j["id"] for j in manage["jobs"]])
++        wait_job(job["id"])
++
++    def test_errors_are_plain_400s(self):
++        url = self.axis("http://127.0.0.1:9")
++        for path, body in (("install", {}), ("install", {"app": "nope"}), ("open", {"app": "photocraft"}), ("open", {})):
++            code, answer = request(url + "/api/artcraft/" + path, "POST", body)
++            self.assertEqual(code, 400, (path, body))
++            self.assertTrue(answer["error"])
++        self.assertEqual(request(url + "/api/artcraft/unknown", "POST", {})[0], 404)
++
++    @POSIX_ONLY
++    def test_install_then_open_through_the_routes(self):
++        probe = b'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "x 1.0"; exit 0; fi\necho opened > opened.txt\n'
++        self.github({"storytold/wordcraft": app_release("wordcraft", program=probe)})
++        url = self.axis("http://127.0.0.1:9")
++        code, body = request(url + "/api/artcraft/install", "POST", {"app": "wordcraft"})
++        self.assertEqual(wait_job(body["job"]["id"]).state, "done")
++        code, again = request(url + "/api/artcraft/install", "POST", {"app": "wordcraft"})
++        self.assertEqual(code, 400)
++        self.assertIn("already installed", again["error"])
++        code, opened = request(url + "/api/artcraft/open", "POST", {"app": "wordcraft"})
++        self.assertEqual((code, opened), (200, {"opened": "wordcraft"}))
++        program = Path(self.app("wordcraft")["path"])
++        deadline = time.time() + 10
++        while time.time() < deadline and not (program.parent / "opened.txt").exists():
++            time.sleep(0.05)
++        self.assertTrue((program.parent / "opened.txt").exists())
++
++    def test_the_job_can_be_cancelled_and_cleared_with_the_job_routes(self):
++        self.rustup(installer=b"#!/bin/sh\nexec sleep 60\n")
++        url = self.axis("http://127.0.0.1:9")
++        code, body = request(url + "/api/artcraft/install", "POST", {"app": "rust"})
++        job_id = body["job"]["id"]
++        self.assertEqual(request(url + f"/api/manage/jobs/{job_id}/cancel", "POST")[0], 200)
++        wait_job(job_id, 15)
++        self.assertEqual(request(url + f"/api/manage/jobs/{job_id}", "DELETE")[0], 200)
++        code, body = request(url + "/api/artcraft")
++        self.assertEqual(body["jobs"], [])
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+
