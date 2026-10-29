@@ -610,5 +610,76 @@ class TestRoutes(ArtBase):
         self.assertEqual(body["jobs"], [])
 
 
+# ------------------------------------------------------------------- updating and deleting
+
+
+class TestUpdateAndDelete(ArtBase):
+    def update(self, app, timeout=30):
+        return wait_job(artcraft.install({"app": app}, update=True)["job"]["id"], timeout)
+
+    @POSIX_ONLY
+    def test_check_update_and_delete_an_app(self):
+        gh = self.github({"storytold/photocraft": app_release("photocraft", "v1.2.3")})
+        self.assertEqual(self.install("photocraft").state, "done")
+        program = Path(self.app("photocraft")["path"])
+        data = program.parent / "PhotoCraftData"
+        data.mkdir()
+        (data / "settings.json").write_text("mine")
+        old_root = Path(self.home) / "engines" / "artcraft" / "photocraft" / "v1.2.3"
+
+        s = artcraft.check_updates()
+        self.assertFalse(next(a for a in s["apps"] if a["id"] == "photocraft")["check"]["update"])
+        self.assertIn("already up to date", self.update("photocraft").error)
+
+        gh.repos["storytold/photocraft"] = app_release("photocraft", "v1.3.0")
+        s = artcraft.check_updates()
+        check = next(a for a in s["apps"] if a["id"] == "photocraft")["check"]
+        self.assertEqual((check["update"], check["latest"]), (True, "v1.3.0"))
+
+        job = self.update("photocraft")
+        self.assertEqual(job.state, "done", job.error)
+        a = self.app("photocraft")
+        self.assertEqual((a["tag"], a["version"]), ("v1.3.0", "photocraft 1.3.0"))
+        self.assertIsNone(a["check"])
+        self.assertEqual((Path(a["path"]).parent / "PhotoCraftData" / "settings.json").read_text(), "mine")
+        self.assertFalse(old_root.exists())
+
+        artcraft.remove({"app": "photocraft"})
+        self.assertFalse(self.app("photocraft")["installed"])
+        self.assertFalse((Path(self.home) / "engines" / "artcraft" / "photocraft").exists())
+
+    def test_update_of_something_not_installed_is_refused(self):
+        with self.assertRaisesRegex(artcraft.ArtCraftError, "not installed"):
+            artcraft.install({"app": "photocraft"}, update=True)
+        with self.assertRaisesRegex(artcraft.ArtCraftError, "not installed"):
+            artcraft.install({"app": "rust"}, update=True)
+
+    @POSIX_ONLY
+    def test_rust_update_check_update_and_delete(self):
+        self.rustup()
+        self.assertEqual(wait_job(artcraft.install({"app": "rust"})["job"]["id"]).state, "done")
+        bin_dir = Path(self.home) / "engines" / "rust" / "cargo" / "bin"
+        rustup = bin_dir / "rustup"
+        rustup.write_text('#!/bin/sh\nif [ "$1" = check ]; then echo "stable - Update available : 1.0 -> 2.0"; fi\n')
+        rustup.chmod(0o755)
+        self.assertTrue(artcraft.check_updates()["rust"]["check"]["update"])
+        rustup.write_text('#!/bin/sh\nif [ "$1" = check ]; then echo "stable - Up to date : 2.0"; fi\n'
+                          'if [ "$1" = update ]; then echo updated; printf \'#!/bin/sh\\necho "cargo 10.0.0"\\n\' > "$(dirname "$0")/cargo"; fi\n')
+        job = wait_job(artcraft.install({"app": "rust"}, update=True)["job"]["id"])
+        self.assertEqual(job.state, "done", job.error)
+        self.assertEqual(artcraft.status()["rust"]["version"], "cargo 10.0.0")
+        self.assertFalse(artcraft.check_updates()["rust"]["check"]["update"])
+        artcraft.remove({"app": "rust"})
+        self.assertFalse(artcraft.status()["rust"]["installed"])
+        self.assertFalse((Path(self.home) / "engines" / "rust").exists())
+
+    def test_routes(self):
+        url = self.axis("http://127.0.0.1:9")
+        self.assertEqual(request(url + "/api/artcraft/check", "POST", {})[0], 200)
+        self.assertEqual(request(url + "/api/artcraft/update", "POST", {"app": "photocraft"})[0], 400)
+        self.assertEqual(request(url + "/api/artcraft/remove", "POST", {})[0], 400)
+        self.assertEqual(request(url + "/api/artcraft/remove", "POST", {"app": "photocraft"})[0], 200)
+
+
 if __name__ == "__main__":
     unittest.main()

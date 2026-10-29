@@ -611,6 +611,8 @@ const S = {
   ocrError: null,
   art: null,                    // last /api/artcraft result: the Craft apps, Rust, and their install jobs
   artError: "",                 // the last error from an Art Craft button
+  artChecked: false,            // update check done since this page opened
+  artChecking: false,
 };
 S.install = S.installs.chat;
 
@@ -847,7 +849,7 @@ function go(view) {
   S.view = view;
   $("app").classList.remove("menu-open");
   renderNav(); renderMain();
-  if (view.kind === "art") loadArt();
+  if (view.kind === "art") loadArt().then(() => { if (!S.artChecked) checkArt(); });
 }
 
 function renderNav() {
@@ -4173,7 +4175,7 @@ function scheduleArt() {
   clearTimeout(artTimer);
   if (runningJobs(S.art).length > 0) artTimer = setTimeout(loadArt, 1000);   // only while something is installing
 }
-const artSig = (d) => JSON.stringify(d && d.apps ? [d.apps.map((a) => [a.id, a.installed, a.tag]), d.rust, jobSig(d)] : null);
+const artSig = (d) => JSON.stringify(d && d.apps ? [d.apps.map((a) => [a.id, a.installed, a.tag, a.check]), d.rust, jobSig(d)] : null);
 function onArt(before, d) {
   let finished = false;
   for (const j of d.jobs || []) {
@@ -4195,6 +4197,27 @@ async function artAction(path, app, done) {
   catch (e) { S.artError = e.message; }
   await loadArt();
   renderNav(); renderArt();
+}
+async function checkArt() {
+  if (S.artChecking) return;
+  S.artChecking = true; S.artChecked = true;
+  if (S.view.kind === "art") renderArt();
+  try { S.art = await api("/api/artcraft/check", { method: "POST", body: {} }); }
+  catch (e) { S.artError = e.message; }
+  S.artChecking = false;
+  renderNav(); if (S.view.kind === "art") renderArt();
+}
+async function artRemove(id, name) {
+  if (!confirm(`Delete ${name}? Its files, and any settings kept in its folder, are removed from disk. You can install it again later.`)) return;
+  await artAction("remove", id, () => toast(`Deleted ${name}`));
+}
+function artButtons(id, name, installed, open, check) {
+  const upd = check && check.update;
+  return [open ? h("button", { class: "btn" + (upd ? "" : " primary"), onclick: open }, "Open") : null,
+    upd ? h("button", { class: "btn primary", onclick: () => artAction("update", id) }, "Update" + (check.latest ? " to " + check.latest : "")) : null,
+    h("button", { class: "btn", onclick: () => artRemove(id, name) }, "Delete"),
+    h("span", { class: "hint", style: "margin:0" }, installed || "",
+      check && check.error ? " (could not check for updates)" : check && !check.update ? " \u00b7 up to date" : "")];
 }
 async function artJobAction(j, action) {
   try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}` + (action === "cancel" ? "/cancel" : ""), { method: action === "cancel" ? "POST" : "DELETE" }); }
@@ -4223,7 +4246,7 @@ function artCard(name, what, state, job, actions) {
 }
 function renderArt() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Art Craft"),
-    h("button", { class: "btn small", onclick: () => loadArt().then(() => renderArt()) }, "Refresh"));
+    h("button", { class: "btn small", disabled: S.artChecking, onclick: checkArt }, S.artChecking ? "Checking\u2026" : "Check for updates"));
   const a = S.art;
   if (!a) {
     loadArt().then(() => { if (S.view.kind === "art") renderArt(); });
@@ -4248,17 +4271,17 @@ function renderArt() {
   const rj = failedOrRunning(latest("rust")), r = a.rust;
   body.push(h("div", { class: "skill-group" }, h("h3", {}, "Rust"),
     artCard("Rust", `A portable Rust, installed with rustup into Axis\u2019s own folder. Axis never changes your PATH. The apps do not need Rust to run, but any app opened from here finds this Rust on its PATH.${a.platform.os === "windows" ? " Building programs with Rust on Windows also needs Microsoft\u2019s C++ Build Tools." : ""}`,
-      r.installed ? "Installed" : "Not installed", rj,
-      r.installed ? [h("span", { class: "hint", style: "margin:0" }, r.version || "")]
+      r.installed ? (r.check && r.check.update ? "Update available" : "Installed") : "Not installed", rj,
+      r.installed ? artButtons("rust", "Rust", r.version || "", null, r.check)
         : r.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", "rust") }, "Install Rust")]
         : [h("span", { class: "hint", style: "margin:0" }, "Rust has no installer for this computer.")])));
 
   // The apps
   const cards = a.apps.map((app) => {
     const j = failedOrRunning(latest(app.id));
-    return artCard(app.name, app.what, app.installed ? "Installed" : "Not installed", j,
-      app.installed ? [h("button", { class: "btn primary", onclick: () => artAction("open", app.id, () => toast(`Opening ${app.name}\u2026`)) }, "Open"),
-        h("span", { class: "hint", style: "margin:0" }, app.version || app.tag || "")]
+    return artCard(app.name, app.what, app.installed ? (app.check && app.check.update ? "Update available" : "Installed") : "Not installed", j,
+      app.installed ? artButtons(app.id, app.name, app.version || app.tag || "",
+        () => artAction("open", app.id, () => toast(`Opening ${app.name}\u2026`)), app.check)
         : a.supported ? [h("button", { class: "btn primary", onclick: () => artAction("install", app.id) }, `Install ${app.name}`)] : []);
   });
   body.push(h("div", { class: "skill-group" }, h("h3", {}, "The Craft apps"), cards));

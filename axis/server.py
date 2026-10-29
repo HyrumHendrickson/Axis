@@ -86,6 +86,9 @@ Routes:
   GET    /api/artcraft                      the Craft apps and Rust: what is installed, and their install jobs
   POST   /api/artcraft/install              install an app, or Rust, in the background {app: photocraft|...|rust}
                                             (cancel it, or clear it from the list, with the /api/manage/jobs routes)
+  POST   /api/artcraft/update               update an installed app, or Rust, in the background {app}
+  POST   /api/artcraft/remove               delete an installed app (all its files), or Rust {app}
+  POST   /api/artcraft/check                ask whether newer versions exist; answers like GET /api/artcraft
   POST   /api/artcraft/open                 start an installed app {app}; it keeps running if Axis stops
 """
 
@@ -952,6 +955,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, artcraft.status())
             if parts[2:] == ["install"] and method == "POST":
                 return self._json(202, artcraft.install(self._body()))
+            if parts[2:] == ["update"] and method == "POST":
+                return self._json(202, artcraft.install(self._body(), update=True))
+            if parts[2:] == ["remove"] and method == "POST":
+                return self._json(200, artcraft.remove(self._body()))
+            if parts[2:] == ["check"] and method == "POST":
+                return self._json(200, artcraft.check_updates())
             if parts[2:] == ["open"] and method == "POST":
                 return self._json(200, artcraft.open_app(self._body()))
 

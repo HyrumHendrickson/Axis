@@ -27,6 +27,7 @@ import os
 import plistlib
 import queue
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -34,6 +35,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -76,6 +78,7 @@ BAD_START = re.compile(r"GLIBC|error while loading shared libraries|cannot execu
 
 _LOCK = threading.Lock()      # the record file
 _INSTALL_LOCKS = {name: threading.Lock() for name in APP_IDS + [RUST]}
+_UPDATES: Dict[str, Dict[str, Any]] = {}   # the last update check: app id (or "rust") -> {update, latest} or {error}
 
 
 class ArtCraftError(Exception):
@@ -131,6 +134,14 @@ def _app_info(app_id: str) -> Optional[Dict[str, Any]]:
     if not program.exists() or not inside(program, root()):
         return None
     return {**info, "path": str(program)}
+
+
+def _forget(key: str) -> None:
+    with _LOCK:
+        data = _load()
+        data.pop(key, None)
+        _save(data)
+    _UPDATES.pop(key, None)
 
 
 def _rust_info() -> Optional[Dict[str, Any]]:
@@ -350,8 +361,10 @@ def _copy_app_from_dmg(dmg: Path, dest: Path, job: jobs.Job) -> None:
             pass
 
 
-def install_app(app_id: str, job: jobs.Job) -> Dict[str, Any]:
-    """Download the app's portable build and unpack it. Refuses when the app is already installed."""
+def install_app(app_id: str, job: jobs.Job, update: bool = False) -> Dict[str, Any]:
+    """Download the app's portable build and unpack it. Refuses when the app is already installed,
+    unless update is set: then the newer version goes beside the old one, the old one's settings folders
+    are copied across, and the old version is removed once the new one is recorded."""
     _, label, _ = _app(app_id)
     plat = engines.this_platform()
     pattern = asset_pattern(app_id, plat)
@@ -361,10 +374,15 @@ def install_app(app_id: str, job: jobs.Job) -> Dict[str, Any]:
     if not lock.acquire(blocking=False):
         raise ArtCraftError(f"{label} is already being installed.")
     try:
-        if _app_info(app_id) is not None:
+        old = _app_info(app_id)
+        if update and old is None:
+            raise ArtCraftError(f"{label} is not installed.")
+        if old is not None and not update:
             raise ArtCraftError(f"{label} is already installed.")
         job.progress(phase=f"Looking up the latest {label} release")
         rel = latest_release(f"{REPO_OWNER}/{app_id}")
+        if old is not None and rel["tag"] == old.get("tag"):
+            raise ArtCraftError(f"{label} is already up to date ({rel['tag']}).")
         asset = next((a for a in sorted(rel["assets"], key=lambda a: a["name"]) if re.search(pattern, a["name"])), None)
         if asset is None:
             raise ArtCraftError(f"The latest {label} release ({rel['tag'] or 'unnamed'}) has no portable build "
@@ -398,6 +416,11 @@ def install_app(app_id: str, job: jobs.Job) -> Dict[str, Any]:
                         p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             job.progress(phase=f"Checking that {label} starts")
             version = _run_check(program)
+            if old is not None:   # keep the settings folders the old version made beside its program
+                old_dir, new_dir = Path(old["path"]).parent, program.parent
+                for d in old_dir.iterdir() if old_dir.is_dir() else []:
+                    if d.is_dir() and not d.is_symlink() and not (new_dir / d.name).exists():
+                        shutil.copytree(d, new_dir / d.name, symlinks=True)
             if final.exists():
                 # Never delete a folder Axis has no record of: it may hold the app's settings.
                 final = base / f"{tag}-{int(time.time())}"
@@ -411,6 +434,11 @@ def install_app(app_id: str, job: jobs.Job) -> Dict[str, Any]:
                   "program": (final / program.relative_to(work)).relative_to(engines.root()).as_posix(),
                   "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _remember(app_id, record)
+        _UPDATES.pop(app_id, None)
+        if old is not None:
+            gone = engines.root() / old["dir"]
+            if gone != final and inside(gone, root() / app_id):
+                remove_tree(gone)   # a copy still in use (Windows) is left for the next delete
         return {"app": app_id, "model": label, "tag": rel["tag"]}
     finally:
         lock.release()
@@ -528,28 +556,114 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
         lock.release()
 
 
+def update_rust(job: jobs.Job) -> Dict[str, Any]:
+    """Bring the portable Rust up to the newest stable release with rustup."""
+    info = _rust_info()
+    if info is None:
+        raise ArtCraftError("Rust is not installed.")
+    home = rust_home()
+    exe = "rustup" + (".exe" if os.name == "nt" else "")
+    env = {**os.environ, **rust_env()}
+    kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    job.progress(phase="Updating Rust with rustup")
+    r = subprocess.run([str(home / "cargo" / "bin" / exe), "update", "stable", "--no-self-update"], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, timeout=RUSTUP_TIMEOUT, **kwargs)
+    out = r.stdout.decode("utf-8", errors="replace").strip()
+    if r.returncode != 0:
+        raise ArtCraftError(f"rustup stopped with exit code {r.returncode}.\n" + "\n".join(out.splitlines()[-6:]))
+    v = subprocess.run([info["path"], "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                       env=env, timeout=120, **kwargs)
+    version = v.stdout.decode("utf-8", errors="replace").strip()[:200]
+    _remember(RUST, {**{k: info[k] for k in ("cargo", "installed")}, "version": version})
+    _UPDATES.pop(RUST, None)
+    return {"app": RUST, "model": "Rust", "version": version}
+
+
+def remove(body: Any) -> Dict[str, Any]:
+    """Delete an installed app (every version, and any settings kept in its folder), or Rust."""
+    if not isinstance(body, dict) or not isinstance(body.get("app"), str):
+        raise ArtCraftError("Say which app to delete.")
+    app_id = body["app"].strip().lower()
+    if app_id != RUST:
+        _app(app_id)
+    label = "Rust" if app_id == RUST else _app(app_id)[1]
+    if jobs.busy("artcraft", app_id):
+        raise ArtCraftError(f"{label} is being installed or updated. Wait for it to finish, or cancel it.")
+    folder = rust_home() if app_id == RUST else root() / app_id
+    remove_tree(folder)
+    if folder.exists():
+        raise ArtCraftError(f"Some files of {label} are in use. Close it and try again.")
+    _forget(app_id)
+    return {"removed": app_id}
+
+
+def _check_one(app_id: str) -> Dict[str, Any]:
+    info = _app_info(app_id)
+    try:
+        tag = latest_release(f"{REPO_OWNER}/{app_id}")["tag"]
+    except Exception as exc:   # one app failing to answer must not hide the others
+        return {"error": str(exc)}
+    return {"latest": tag, "update": bool(tag) and tag != (info or {}).get("tag")}
+
+
+def _check_rust() -> Dict[str, Any]:
+    info = _rust_info()
+    exe = "rustup" + (".exe" if os.name == "nt" else "")
+    try:
+        r = subprocess.run([str(rust_home() / "cargo" / "bin" / exe), "check"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           stdin=subprocess.DEVNULL, env={**os.environ, **rust_env()}, timeout=90,
+                           **({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}))
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"error": f"Could not check Rust: {exc}"}
+    out = r.stdout.decode("utf-8", errors="replace")
+    if r.returncode != 0:
+        return {"error": "Could not check Rust:\n" + "\n".join(out.strip().splitlines()[-3:])}
+    return {"update": "update available" in out.lower(), "latest": "", "installed": (info or {}).get("version", "")}
+
+
+def check_updates() -> Dict[str, Any]:
+    """Ask GitHub (and rustup) whether newer versions exist, for what is installed. Remembered until the next check."""
+    ids = [a for a in APP_IDS if _app_info(a) is not None]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = dict(zip(ids, pool.map(_check_one, ids)))
+        if _rust_info() is not None:
+            results[RUST] = _check_rust()
+    _UPDATES.clear()
+    _UPDATES.update(results)
+    return status()
+
+
 # ----------------------------------------------------------------- what the page asks for
 
 
-def submit(app_id: str) -> jobs.Job:
+def submit(app_id: str, update: bool = False) -> jobs.Job:
     if app_id == RUST:
+        if update:
+            return jobs.submit("install", "artcraft", RUST, "Updating Rust", update_rust)
         return jobs.submit("install", "artcraft", RUST, "Installing Rust", install_rust)
     _, label, _ = _app(app_id)
     if not supported():
         osname, arch = engines.this_platform()
         raise ArtCraftError(f"{label} has no ready-built program for {osname} on {arch}.")
-    return jobs.submit("install", "artcraft", app_id, f"Installing {label}", lambda j: install_app(app_id, j))
+    verb = "Updating" if update else "Installing"
+    return jobs.submit("install", "artcraft", app_id, f"{verb} {label}", lambda j: install_app(app_id, j, update))
 
 
-def install(body: Any) -> Dict[str, Any]:
+def install(body: Any, update: bool = False) -> Dict[str, Any]:
     if not isinstance(body, dict) or not isinstance(body.get("app"), str):
         raise ArtCraftError("Say which app to install.")
     app_id = body["app"].strip().lower()
     if app_id != RUST:
         _app(app_id)
-    if (_rust_info() if app_id == RUST else _app_info(app_id)) is not None:
-        raise ArtCraftError(f"{'Rust' if app_id == RUST else _app(app_id)[1]} is already installed.")
-    return {"job": submit(app_id).public()}
+    name = "Rust" if app_id == RUST else _app(app_id)[1]
+    have = (_rust_info() if app_id == RUST else _app_info(app_id)) is not None
+    if update and not have:
+        raise ArtCraftError(f"{name} is not installed.")
+    if have and not update:
+        raise ArtCraftError(f"{name} is already installed.")
+    return {"job": submit(app_id, update).public()}
 
 
 def _launch(cmd: List[str], cwd: Path, env: Dict[str, str]) -> None:
@@ -591,13 +705,13 @@ def status() -> Dict[str, Any]:
         info = _app_info(app_id)
         apps.append({"id": app_id, "name": label, "what": what, "installed": bool(info),
                      "tag": info.get("tag") if info else None, "version": info.get("version") if info else None,
-                     "path": info["path"] if info else None})
+                     "path": info["path"] if info else None, "check": _UPDATES.get(app_id) if info else None})
     rust = _rust_info()
     return {
         "supported": supported(plat), "platform": {"os": plat[0], "arch": plat[1]},
         "apps": apps,
         "rust": {"installed": bool(rust), "supported": plat in RUSTUP_TRIPLES, "version": rust.get("version") if rust else None,
-                 "path": str(rust_home()) if rust else None},
+                 "path": str(rust_home()) if rust else None, "check": _UPDATES.get(RUST) if rust else None},
         "root": str(root()),
         "jobs": [j for j in jobs.listing() if j["engine"] == "artcraft"],
     }

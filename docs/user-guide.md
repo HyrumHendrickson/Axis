@@ -207,7 +207,8 @@ Open **Art Craft** in the sidebar to install and open the Craft App Suite: free,
 - **Open** starts the app. It keeps running if you quit Axis.
 - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, rustup also adds itself to Apps & features, and building programs with Rust needs Microsoft's C++ Build Tools.
 - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
-- An app that is already installed is never installed over, so its settings are safe. To remove an app, delete its folder in `Axis/engines/artcraft`.
+- When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
+- **Delete** removes the app (every version, and any settings kept in its folder) or Rust, after asking. Installing over an installed app is never done, so settings are safe.
 
 ## Workspace
 

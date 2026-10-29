@@ -4,6 +4,9 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Added
+- **Art Craft: Update and Delete.** The tab checks once when it opens (and on **Check for updates**) and marks each installed app, and Rust, as **Update available** or up to date. **Update** installs the newer version beside the old one, copies settings folders kept beside the old program, then removes the old version. **Delete** removes an app or Rust. API: `POST /api/artcraft/check`, `/update`, `/remove`.
+
 ## [4.2.1] - 2026-10-29
 
 ### Added

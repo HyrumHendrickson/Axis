@@ -139,6 +139,10 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `POST` | `/api/artcraft/install` | install an app, or Rust, in the background: `{"app": "photocraft"}` or `{"app": "rust"}`. Answers `202` with `{"job": ...}`; refuses what is already installed |
 | `POST` | `/api/artcraft/open` | start an installed app: `{"app": "photocraft"}`. It is not stopped when Axis stops |
 
+| `POST` | `/api/artcraft/check` | ask whether newer versions exist for what is installed (each app's `check` field: `update`, `latest`, or `error`); answers like `GET /api/artcraft` |
+| `POST` | `/api/artcraft/update` | update an installed app, or Rust, in the background: `{"app": ...}`. Answers `202` with `{"job": ...}` |
+| `POST` | `/api/artcraft/remove` | delete an installed app (all its files), or Rust: `{"app": ...}` |
+
 These jobs are not listed by `GET /api/manage`. Cancel one, or clear a finished one, with the `/api/manage/jobs/<id>` routes above.
 
 ## Example
