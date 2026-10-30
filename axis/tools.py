@@ -215,17 +215,6 @@ TOOL_SPECS["read_text"] = {
         "required": ["path"],
     },
 }
-TOOL_SPECS["call_agent"] = {
-    "description": "Ask another Axis agent to complete a focused subtask and return its answer. The called agent cannot call other agents.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "agent": {"type": "string", "description": "The exact name of the agent to call"},
-            "message": {"type": "string", "description": "A clear, self-contained request for that agent"},
-        },
-        "required": ["agent", "message"],
-    },
-}
 
 
 def specs(names: List[str]) -> List[Dict[str, Any]]:
@@ -1199,21 +1188,6 @@ def read_text(where: Where, args: Dict[str, Any]) -> str:
     return head + ("\n" + _clip(text, MAX_READ) if text else "\nNo text was found in the picture.")
 
 
-def call_agent(_where: Where, args: Dict[str, Any], invoke: Optional[Callable[[str, str], str]] = None) -> str:
-    agent = _require(args, "agent")
-    message = _require(args, "message")
-    if not isinstance(agent, str) or not agent.strip() or not isinstance(message, str) or not message.strip():
-        raise ToolError("agent and message must be non-empty text.")
-    if invoke is None:
-        raise ToolError("Agent delegation is unavailable in this context.")
-    try:
-        return invoke(agent.strip(), message.strip())
-    except ToolError:
-        raise
-    except Exception as exc:
-        raise ToolError(str(exc)) from exc
-
-
 # File management is intentionally not exposed as an agent skill. Agents can use
 # the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
 # to the user.
@@ -1238,14 +1212,12 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "generate_image": generate_image,
     "run_cas": run_cas,
     "read_text": read_text,
-    "call_agent": call_agent,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }
 
 
 def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: Optional[Path] = None,
-            on_image_event: Optional[Callable[[Dict[str, Any]], None]] = None, image_preview: bool = False,
-            agent_call: Optional[Callable[[str, str], str]] = None) -> tuple:
+            on_image_event: Optional[Callable[[Dict[str, Any]], None]] = None, image_preview: bool = False) -> tuple:
     """Run one tool. Returns (ok, text). Never raises for tool-level problems.
 
     shared is the shared folder when the agent may use it, otherwise None. on_image_event
@@ -1261,8 +1233,6 @@ def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: O
         workspace.mkdir(parents=True, exist_ok=True)
         if name == "generate_image":
             return True, HANDLERS[name](Places(workspace, shared), args, on_event=on_image_event, preview=image_preview)
-        if name == "call_agent":
-            return True, HANDLERS[name](Places(workspace, shared), args, invoke=agent_call)
         return True, HANDLERS[name](Places(workspace, shared), args)
     except ToolError as exc:
         return False, f"Error: {exc}"

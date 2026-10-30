@@ -104,13 +104,6 @@ BUILTIN: List[Dict[str, Any]] = [
 ]
 BUILTIN += tool_skills.build()    # CAS, Images and OCR, the pages under Tools
 BUILTIN += craft_skills.build()   # one skill for each Art Craft app
-BUILTIN.append({
-    "id": "call-agents",
-    "name": "Call other agents",
-    "description": "Ask another Axis agent to complete a focused subtask and return its answer.",
-    "instructions": "When a task is easier to divide, call another agent with a clear, self-contained request. Include the other agent's answer in your final response when useful. Agents called by another agent cannot call further agents.",
-    "tools": ["call_agent"],
-})
 BUILTIN_IDS = {s["id"] for s in BUILTIN}
 EDITABLE = ("name", "description", "instructions")   # what a user may change on a built-in skill
 

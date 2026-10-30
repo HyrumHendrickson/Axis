@@ -171,7 +171,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .models-tab .busy-dot { background: var(--ok); margin: 0; }
 .models-split > .editor { min-width: 0; }
 .tool-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 220px); flex: 1; min-height: 0; }
-.tool-layout.tools-collapsed { grid-template-columns: 1fr; }
 .tool-layout > .tool-content { min-width: 0; overflow: auto; }
 .tool-tabs { order: 2; overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 6px 0; }
 .tool-tab { display: flex; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); padding: 11px 16px; cursor: pointer; text-align: left; }
@@ -904,7 +903,6 @@ const TOOLS_GROUP = "Tools";
 function go(view) {
   if (S.view.kind === "workspace" && view.kind !== "workspace" && !leaveEdit()) return;
   if (view.kind === "models" && view.focus) { S.modelsTab = { images: "image" }[view.focus] || view.focus; store("axis.modelsTab", S.modelsTab); }
-  if (TOOL_VIEWS.includes(view.kind)) { S.toolsOpen = true; store("axis.toolsOpen", true); }
   S.view = view;
   $("app").classList.remove("menu-open");
   renderNav(); renderMain();
@@ -938,10 +936,7 @@ function toolsGroup(item) {
   const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
   const anyBusy = Object.values(busy).some(Boolean);
   const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
-    "aria-controls": "tool-tabs", onclick: () => {
-      if (!TOOL_VIEWS.includes(v.kind)) return go({ kind: "images" });
-      S.toolsOpen = !S.toolsOpen; store("axis.toolsOpen", S.toolsOpen); renderNav(); renderMain();
-    } },
+    "aria-controls": "nav-tools", onclick: () => go({ kind: TOOL_VIEWS.includes(v.kind) ? v.kind : "images" }) },
     h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft, OCR and CAS")),
     h("span", { class: "nav-chevron", "aria-hidden": "true" }));
   return [head];
@@ -1068,7 +1063,7 @@ function decorateToolLayout() {
     [["images", "Images"], ["art", "Art Craft"], ["ocr", "OCR"], ["cas", "CAS"], ["latex", "LaTeX"]].map(([id, label]) =>
       h("button", { class: "tool-tab", role: "tab", "aria-current": S.view.kind === id ? "true" : "false", onclick: () => go({ kind: id }) }, label)));
   const content = h("div", { class: "tool-content" }); body.forEach((x) => content.append(x));
-  const layout = h("div", { class: "tool-layout" + (S.toolsOpen ? "" : " tools-collapsed") }, content, S.toolsOpen ? tabs : null);
+  const layout = h("div", { class: "tool-layout" }, content, tabs);
   main.append(layout);
 }
 new MutationObserver(() => queueMicrotask(decorateToolLayout)).observe($("main"), { childList: true });
