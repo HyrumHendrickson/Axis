@@ -1,13 +1,10 @@
-"""Actions an agent can take. File actions work inside the agent's own folder.
+"""Actions an agent can take. File actions work inside Axis's shared workspace.
 
-When the agent has the Shared folder skill, paths that start with "shared/"
-point into ~/Axis/shared, a folder every such agent can read and write. The file
-tools refuse any other path outside the agent's folder. Python code (run_python)
-runs with the folder as its working directory, and a Python file (run_python_file)
-with the file's own folder. A guard blocks writing, deleting or renaming files
-outside the agent's folder (and the shared folder, when enabled) and starting
-other programs. The guard keeps ordinary code contained; it is not a security
-sandbox against deliberately hostile code.
+Paths that start with "shared/" also point into ~/Axis/shared for compatibility.
+Python code and program files run from the shared workspace. A guard blocks
+writing, deleting or renaming files outside the workspace and starting other
+programs. The guard keeps ordinary code contained; it is not a security sandbox
+against deliberately hostile code.
 """
 
 from __future__ import annotations

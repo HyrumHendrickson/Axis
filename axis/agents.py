@@ -3,7 +3,7 @@
 Each agent lives in ~/Axis/agents/<name>/:
 
     agent.json   settings
-    workspace/   the agent's own folder; every file it makes is saved here
+Files made by agents are saved in ~/Axis/shared, the one workspace shared by every agent.
 
 Settings:
 * system_prompt  who the agent is (sent as the system message)
@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -81,7 +82,7 @@ class Agent:
 
     @property
     def workspace(self) -> Path:
-        return self.folder / "workspace"
+        return shared_root()
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -90,7 +91,7 @@ class Agent:
 
     def save(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
-        self.workspace.mkdir(exist_ok=True)
+        self.workspace.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         tmp = self.folder / "agent.json.tmp"
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -164,7 +165,54 @@ def load(name: str) -> Agent:
         raise AgentError(f"{path}: {exc}") from exc
     if migrated:
         agent.save()
+    _migrate_legacy_workspace(agent)
     return agent
+
+
+def _next_available(root: Path, name: str) -> Path:
+    """Choose a non-destructive destination for a legacy workspace entry."""
+    candidate = root / name
+    if not candidate.exists() and not candidate.is_symlink():
+        return candidate
+    stem, dot, suffix = name.rpartition(".") if "." in name.lstrip(".") else (name, "", "")
+    n = 2
+    while True:
+        candidate = root / (f"{stem} ({n}){dot}{suffix}")
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+        n += 1
+
+
+def _merge_legacy_workspace(source: Path, destination: Path) -> None:
+    """Move an old agent workspace into the shared workspace without overwriting files."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in list(source.iterdir()):
+        target = destination / child.name
+        if child.is_dir() and not child.is_symlink() and target.is_dir() and not target.is_symlink():
+            _merge_legacy_workspace(child, target)
+            try:
+                child.rmdir()
+            except OSError:
+                pass
+            continue
+        shutil.move(str(child), str(_next_available(destination, child.name)))
+    try:
+        source.rmdir()
+    except OSError:
+        pass
+
+
+def _migrate_legacy_workspace(agent: Agent) -> None:
+    """Migrate pre-4.3 per-agent files once; agent settings and chats remain per-agent."""
+    legacy = agent.folder / "workspace"
+    if not legacy.is_dir() or legacy.is_symlink():
+        return
+    try:
+        _merge_legacy_workspace(legacy, shared_root())
+    except OSError:
+        # A locked legacy file should not prevent the agent from loading. It remains
+        # in place and can be migrated on a later startup.
+        return
 
 
 def update(name: str, data: Dict[str, Any]) -> Agent:
@@ -358,8 +406,8 @@ def tool_names(agent: Optional[Agent]) -> List[str]:
 
 
 def shared_folder(agent: Optional[Agent]) -> Optional[Path]:
-    """The shared folder, if this agent may use it (it has the Shared folder skill)."""
-    if agent is None or skill_lib.SHARED_SKILL not in agent.skills:
+    """The one workspace shared by every agent that can work with files."""
+    if agent is None:
         return None
     root = shared_root()
     root.mkdir(parents=True, exist_ok=True)

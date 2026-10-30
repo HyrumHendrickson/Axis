@@ -14,9 +14,9 @@ Routes:
   POST   /api/agents                        create an agent
   GET    /api/agents/<name>                 one agent
   PUT    /api/agents/<name>                 update (or rename) an agent
-  DELETE /api/agents/<name>                 delete an agent and its folder
-  GET    /api/agents/<name>/files           every file in the agent's folder (flat list)
-  POST   /api/agents/<name>/open-folder     show the folder in Explorer/Finder
+  DELETE /api/agents/<name>                 delete an agent (shared files remain)
+  GET    /api/agents/<name>/files           files in the shared workspace (flat list)
+  POST   /api/agents/<name>/open-folder     show the shared workspace in Explorer/Finder
   GET    /api/files/<name>?path=dir         one folder of an agent's folder (the Workspace tab)
                                             (<name> "_shared" means the folder shared by agents)
   GET    /api/files/<name>/view?path=file   a file prepared for preview

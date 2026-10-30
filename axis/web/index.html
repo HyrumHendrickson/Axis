@@ -1020,7 +1020,7 @@ function renderChat() {
     models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
   const location = h("select", { "aria-label": "Agent location", disabled: !!stream,
     onchange: (e) => { S.chatLocation[target] = e.target.value; renderChat(); } },
-    [[agent ? agent.name : "", agent ? "Agent folder" : "No agent folder"], [SHARED, "Shared folder"]].map(([v, label]) => {
+    [[SHARED, "Shared folder"]].map(([v, label]) => {
       const o = h("option", { value: v }, label); o.selected = chatLocation(target) === v; return o;
     }));
   const hasHistory = getHistory(target).length > 0;
@@ -1230,14 +1230,12 @@ const STEP_TEXT = {
 };
 const SHARED = "_shared";   // the Workspace tab's name for the folder agents share
 function hasShared(agent) {
-  const a = S.agents.find((x) => x.name === agent);
-  return !!(a && a.skills.includes("shared-folder"));
+  return agent === SHARED || S.agents.some((x) => x.name === agent);
 }
 function openInWorkspace(agent, path, isFile) {
   if (!leaveEdit()) return;
-  if (agent !== SHARED && hasShared(agent) && (path === "shared" || path.startsWith("shared/"))) {
-    agent = SHARED; path = path.replace(/^shared\/?/, "");
-  }
+  if (path === "shared" || path.startsWith("shared/")) path = path.replace(/^shared\/?/, "");
+  agent = SHARED;
   const dir = isFile ? path.split("/").slice(0, -1).join("/") : path;
   S.workspace = { agent, dir, file: isFile ? path : "" };
   go({ kind: "workspace" });
@@ -1794,7 +1792,7 @@ function workspaceSection(agent) {
           try { await api("/api/agents/" + encodeURIComponent(agent.name) + "/open-folder", { method: "POST" }); }
           catch (e) { toast(e.message); }
         } }, "Open folder"))),
-    h("p", { class: "hint" }, "Every file this agent makes is saved here. Deleting the agent deletes this folder."),
+    h("p", { class: "hint" }, "All agents use the shared workspace. Deleting this agent leaves shared files intact."),
     h("div", { class: "path" }, agent.workspace),
     list);
 }
@@ -1941,17 +1939,16 @@ function parseCsv(text, limit) {
 
 let workspaceTimer = null;
 function renderWorkspace() {
-  const names = S.agents.map((a) => a.name);
-  if (names.length) names.push(SHARED);
-  if (!names.includes(S.workspace.agent)) S.workspace = { agent: names[0] || "", dir: "", file: "" };
+  const names = [SHARED];
+  if (S.workspace.agent !== SHARED) S.workspace = { agent: SHARED, dir: "", file: "" };
   const label = (n) => n === SHARED ? "Shared folder" : n;
   const f = S.workspace;
   S.nameEdit = null;
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
   if (!f.agent) {
     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
-      h("h3", {}, "No agent folders yet"),
-      h("p", {}, "Every agent gets its own folder. Create an agent, give it the Make files or Run Python skill, and what it makes will appear here."),
+      h("h3", {}, "No agents yet"),
+      h("p", {}, "Create an agent to work with the shared workspace."),
       h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
     return;
   }
@@ -1968,7 +1965,7 @@ function renderWorkspace() {
   const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
   const segs = f.dir ? f.dir.split("/") : [];
   const crumb = (label, dir) => dropTarget(h("button", { onclick: () => openDir(dir), title: dir ? dir : "Top of this folder" }, label), dir);
-  crumbs.append(crumb(f.agent === SHARED ? "shared" : f.agent, ""));
+  crumbs.append(crumb("shared", ""));
   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), crumb(seg, segs.slice(0, i + 1).join("/"))));
   const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   const tools = h("div", { class: "crumb-tools" },

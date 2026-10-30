@@ -15,7 +15,7 @@ def axis_home() -> Path:
 
 
 def shared_root() -> Path:
-    """The folder shared by every agent that has the Shared folder skill."""
+    """The one workspace shared by every agent."""
     return axis_home() / "shared"
 
 
