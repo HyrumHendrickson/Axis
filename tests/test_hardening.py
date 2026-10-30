@@ -91,7 +91,7 @@ class TestDeleteRoute(Base):
     def test_deleting_a_read_only_folder_in_the_files_tab(self):
         url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
         request(url + "/api/agents", "POST", {"name": "a"})
-        sub = Path(self.home) / "agents" / "a" / "workspace" / "sub"
+        sub = Path(self.home) / "shared" / "sub"
         sub.mkdir()
         f = sub / "locked.txt"
         f.write_text("x")
@@ -112,7 +112,7 @@ class TestServerSafety(Base):
         super().setUp()
         self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
         request(self.url + "/api/agents", "POST", {"name": "a"})
-        self.ws = Path(self.home) / "agents" / "a" / "workspace"
+        self.ws = Path(self.home) / "shared"
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def upload(self, name, data, path=""):

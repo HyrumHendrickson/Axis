@@ -377,10 +377,10 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
     skill = skill_lib.get(skill_id)
     actions = list(skill["tools"])
     needs_files = bool(next((s.get("needs_files") for s in skill_lib.BUILTIN if s["id"] == skill_id), False))
-    # The Shared folder skill is only sent to an agent that also has a file action, and it changes
-    # the folder note; show it the way such an agent receives it.
-    names = actions or (["list_files"] if needs_files else [])
-    system = skills_prompt([skill_id], names, shared=skill_id == skill_lib.SHARED_SKILL).lstrip("\n")
+    # Every agent with an action that works with files uses the one shared folder (see build_messages),
+    # so the preview shows the folder note the same way.
+    names = actions or (["run_python"] if needs_files else [])
+    system = skills_prompt([skill_id], names, shared=True).lstrip("\n")
     notes = []
     if needs_files:
         notes.append("This is only sent to an agent that also has a file or Python skill.")

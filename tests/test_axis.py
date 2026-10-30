@@ -267,8 +267,10 @@ def tool_msg(name, **args):
 class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
-        self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "list-files", "read-files", "write-files", "delete-files",
-                               "web-search", "wikipedia", "image-generation", "shared-folder"])
+        self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia",
+                               "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
+                               "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
+                               "figcraft"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
         self.assertEqual(s["id"], "plain-english")
         self.assertFalse(s["builtin"])
@@ -300,7 +302,7 @@ class TestSkillsAndAgents(Base):
         self.assertEqual([s["id"] for s in skills.list_all()][0], "run-python")   # the order is kept
         self.assertEqual([s["id"] for s in skills.list_all() if not s["builtin"]], [])   # the edit is not a custom skill
         self.assertTrue(next(s for s in skills.list_all() if s["id"] == "run-python")["modified"])
-        self.assertFalse(skills.get("list-files")["modified"])
+        self.assertFalse(skills.get("web-search")["modified"])
         # agents are sent the edited text
         a = agents.create({"name": "coder", "skills": ["run-python"]})
         system = agents.build_messages(a, [{"role": "user", "content": "hi"}])[0]["content"]
@@ -323,10 +325,10 @@ class TestSkillsAndAgents(Base):
         with self.assertRaisesRegex(skills.SkillError, "name"):
             skills.update("run-python", {"name": ""})
         with self.assertRaisesRegex(skills.SkillError, "already exists"):
-            skills.update("run-python", {"name": "list files"})                  # another skill's name
+            skills.update("run-python", {"name": "web search"})                  # another skill's name
         skills.create({"name": "Mine", "instructions": "x"})
         with self.assertRaisesRegex(skills.SkillError, "already exists"):
-            skills.update("list-files", {"name": "MINE"})
+            skills.update("web-search", {"name": "MINE"})
         with self.assertRaisesRegex(skills.SkillError, "Only built-in"):
             skills.reset("mine")                                                 # a custom skill has no default
         with self.assertRaisesRegex(skills.SkillError, "does not exist"):
@@ -338,9 +340,9 @@ class TestSkillsAndAgents(Base):
         root = Path(self.home) / "skills" / "built-in"
         root.mkdir(parents=True)
         (root / "run-python.json").write_text("{not json")
-        (root / "list-files.json").write_text(json.dumps({"name": "", "instructions": "  ", "description": 7}))
+        (root / "web-search.json").write_text(json.dumps({"name": "", "instructions": "  ", "description": 7}))
         self.assertFalse(skills.get("run-python")["modified"])
-        self.assertEqual(skills.get("list-files")["name"], "List files")
+        self.assertEqual(skills.get("web-search")["name"], "Web search")
         self.assertEqual(len(skills.list_all()), len(skills.BUILTIN) + 1)
 
     def test_skill_preview_is_what_is_sent(self):
@@ -352,8 +354,6 @@ class TestSkillsAndAgents(Base):
             self.assertEqual(preview["tools"], tools.specs(skill["tools"]))
             self.assertEqual(bool(preview["tools_text"]), bool(skill["tools"]))
             self.assertTrue(preview["notes"])
-            if skill["id"] == skills.SHARED_SKILL:
-                continue                                    # only sent with a file action: checked below
             # an agent with just this skill is sent exactly the text the page shows
             agent = agents.Agent(name="p", skills=[skill["id"]])
             system = agents.build_messages(agent, [{"role": "user", "content": "hi"}])[0]["content"]
@@ -366,25 +366,22 @@ class TestSkillsAndAgents(Base):
         self.assertTrue(search["system"].endswith(skills.TOOLS_NOTE))
         self.assertEqual([t["function"]["name"] for t in search["tools"]], ["web_search", "fetch_page"])
         self.assertIn("web_search", search["tools_text"])
-        self.assertTrue(agents.skill_preview("write-files")["system"].endswith(skills.WORKSPACE_NOTE))
-        shared = agents.skill_preview("shared-folder")
-        pair = agents.Agent(name="p", skills=["shared-folder", "list-files"])
-        sent = agents.build_messages(pair, [{"role": "user", "content": "hi"}])[0]["content"]
-        self.assertIn(shared["system"].split(skills.SHARED_WORKSPACE_NOTE)[0].split("\n\n", 1)[1], sent)
-        self.assertTrue(sent.endswith(skills.SHARED_WORKSPACE_NOTE))
-        self.assertTrue(shared["system"].endswith(skills.SHARED_WORKSPACE_NOTE))
-        self.assertIn("also has a file or Python skill", " ".join(shared["notes"]))
+        # an action that works with files adds the note about the one shared folder
+        terminal = agents.skill_preview("run-terminal")
+        self.assertTrue(terminal["system"].endswith(skills.SHARED_WORKSPACE_NOTE))
+        python = agents.skill_preview("run-python")
+        self.assertTrue(python["system"].endswith(skills.SHARED_WORKSPACE_NOTE + " " + skills.SHARED_PYTHON_NOTE))
         with self.assertRaisesRegex(skills.SkillError, "does not exist"):
             agents.skill_preview("nope")
 
     def test_agent_crud_and_workspace(self):
         skills.create({"name": "Brief", "instructions": "Be brief."})
         a = agents.create({"name": "editor", "system_prompt": "You edit.", "config": ["Rule.", " "],
-                           "skills": ["brief", "write-files", "brief"]})
-        self.assertEqual(a.skills, ["brief", "write-files"])
+                           "skills": ["brief", "run-terminal", "brief"]})
+        self.assertEqual(a.skills, ["brief", "run-terminal"])
         self.assertEqual(a.config, ["Rule."])
         self.assertTrue(a.workspace.is_dir())
-        self.assertEqual(a.workspace, Path(self.home) / "agents" / "editor" / "workspace")
+        self.assertEqual(a.workspace, Path(self.home) / "shared")
         with self.assertRaisesRegex(agents.AgentError, "Unknown skill"):
             agents.update("editor", {"skills": ["nope"]})
         (a.workspace / "made.txt").write_text("x")
@@ -439,8 +436,8 @@ class TestSkillsAndAgents(Base):
         self.assertEqual(agents.build_messages(None, history), history)
         self.assertEqual(agents.tool_names(a), [])
 
-        b = agents.create({"name": "y", "skills": ["write-files", "run-python"]})
-        self.assertEqual(agents.tool_names(b), ["write_file", "make_folder", "run_python", "run_python_file"])
+        b = agents.create({"name": "y", "skills": ["run-terminal", "run-python"]})
+        self.assertEqual(agents.tool_names(b), ["run_terminal", "run_terminal_file", "run_python", "run_python_file"])
         self.assertIn("own folder", agents.build_messages(b, history)[0]["content"])
 
     def test_long_history_is_trimmed_to_fit(self):
@@ -458,15 +455,17 @@ class TestSkillsAndAgents(Base):
 
     def test_delete_removes_read_only_files(self):
         a = agents.create({"name": "ro"})
-        f = a.workspace / "locked.txt"
+        sub = a.folder / "sub"
+        sub.mkdir()
+        f = sub / "locked.txt"
         f.write_text("x")
         os.chmod(f, 0o444)
-        os.chmod(a.workspace, 0o555)
+        os.chmod(sub, 0o555)
         try:
             agents.delete("ro")
         finally:
-            if a.workspace.exists():
-                os.chmod(a.workspace, 0o755)
+            if sub.exists():
+                os.chmod(sub, 0o755)
         self.assertFalse(a.folder.exists())
 
     def test_build_messages_rejects_bad_history(self):
@@ -764,7 +763,7 @@ class TestServer(Base):
         body = json.loads(text)
         self.assertEqual((body["builtin"], body["modified"], body["instructions"]), (True, True, "Show your working."))
         listed = {s["id"]: s for s in json.loads(request(self.url + "/api/skills")[1])}
-        self.assertTrue(listed["run-python"]["modified"] and not listed["list-files"]["modified"])
+        self.assertTrue(listed["run-python"]["modified"] and not listed["web-search"]["modified"])
         code, text = request(self.url + "/api/skills/run-python/sends")
         self.assertEqual(code, 200, text)
         sends = json.loads(text)
@@ -782,10 +781,10 @@ class TestServer(Base):
         self.assertNotIn("Show your working.", request(self.url + "/api/skills/run-python/sends")[1])
 
     def test_agent_routes(self):
-        body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."], "skills": ["list-files"]}
+        body = {"name": "poet", "system_prompt": "Be poetic.", "config": ["Rhyme."], "skills": ["run-terminal"]}
         code, text = request(self.url + "/api/agents", "POST", body)
         self.assertEqual(code, 201, text)
-        self.assertTrue(json.loads(text)["workspace"].endswith("workspace"))
+        self.assertTrue(json.loads(text)["workspace"].endswith("shared"))
         self.assertEqual(request(self.url + "/api/agents", "POST", body)[0], 400)
         self.assertEqual(request(self.url + "/api/agents", "POST", {"name": "x", "skills": ["nope"]})[0], 400)
         code, text = request(self.url + "/api/agents/poet", "PUT", {"name": "bard"})
@@ -804,7 +803,7 @@ class TestServer(Base):
     def test_files_routes(self):
         request(self.url + "/api/agents", "POST", {"name": "files"})  # a name that used to clash with a route
         self.assertEqual(request(self.url + "/api/agents/files")[0], 200)
-        ws = Path(self.home) / "agents" / "files" / "workspace"
+        ws = Path(self.home) / "shared"
         (ws / "notes").mkdir()
         (ws / "notes" / "a.md").write_text("# Hello")
         (ws / "page.html").write_text("<script>alert(1)</script>")
@@ -903,17 +902,17 @@ class TestServer(Base):
     def test_chat_agent_with_tools_writes_into_its_folder(self):
         skills.create({"name": "Brief", "instructions": "Be brief."})
         request(self.url + "/api/agents", "POST", {"name": "maker", "model": "qwen3:8b", "config": ["C1"],
-                                                    "skills": ["brief", "write-files", "run-python"]})
+                                                    "skills": ["brief", "run-python"]})
         msg = tool_msg("run_python", code="open('result.txt','w').write(str(6*7)); print('saved')")
         ev = chat_events(request(self.url + "/api/chat", "POST", {"agent": "maker", "messages": msg})[1])
         self.assertEqual(ev[0], {"model": "qwen3:8b"})
         self.assertEqual([e["tool"]["name"] for e in ev if "tool" in e], ["run_python"])
         self.assertIn("saved", [e for e in ev if "tool_result" in e][0]["tool_result"]["output"])
         self.assertEqual(ev[-1], {"done": True})
-        ws = Path(self.home) / "agents" / "maker" / "workspace"
+        ws = Path(self.home) / "shared"
         self.assertEqual((ws / "result.txt").read_text(), "42")
         first = REQUESTS[0]
-        self.assertEqual([t["function"]["name"] for t in first["tools"]], ["write_file", "make_folder", "run_python", "run_python_file"])
+        self.assertEqual([t["function"]["name"] for t in first["tools"]], ["run_python", "run_python_file"])
         self.assertIn("Be brief.", first["messages"][0]["content"])
         self.assertIn("- C1", first["messages"][1]["content"])
         files = json.loads(request(self.url + "/api/agents/maker/files")[1])["files"]
@@ -1021,7 +1020,7 @@ class TestFileManagement(Base):
         super().setUp()
         self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
         request(self.url + "/api/agents", "POST", {"name": "a"})
-        self.ws = Path(self.home) / "agents" / "a" / "workspace"
+        self.ws = Path(self.home) / "shared"
         self.base = self.url + "/api/files/a"
 
     def upload(self, name, data, path=""):
@@ -1305,7 +1304,8 @@ class TestSharedFolder(Base):
         self.shared = Path(self.home) / "shared"
         for d in (self.a, self.b):
             d.mkdir()
-        self.all = list(tools.FILE_TOOLS) + ["run_python"]
+        # File actions are no longer advertised by a skill, but the handlers still work when called.
+        self.all = sorted(runner.FILE_HANDLERS) + ["run_python"]
 
     def test_shared_paths_need_the_skill(self):
         ok, out = tools.execute(self.a, "write_file", {"path": "shared/x.txt", "content": "hi"}, self.all)
@@ -1345,11 +1345,12 @@ class TestSharedFolder(Base):
         self.assertFalse((self.shared / "q.txt").exists())
 
     def test_prompt_mentions_shared_folder_only_with_file_actions(self):
-        a = agents.create({"name": "talker", "skills": ["shared-folder"]})
+        skills.create({"name": "Brief", "instructions": "Be brief."})
+        a = agents.create({"name": "talker", "skills": ["brief"]})
         system = agents.build_messages(a, [{"role": "user", "content": "hi"}])[0]["content"]
         self.assertNotIn("shared", system.lower())
         self.assertIsNone(agents.shared_folder(None))
-        b = agents.create({"name": "filer", "skills": ["write-files", "shared-folder"]})
+        b = agents.create({"name": "filer", "skills": ["run-terminal"]})
         system = agents.build_messages(b, [{"role": "user", "content": "hi"}])[0]["content"]
         self.assertIn("shared/", system)
         self.assertEqual(agents.shared_folder(b), Path(self.home) / "shared")
@@ -1594,10 +1595,10 @@ class TestImages(Base):
 
     def test_agent_step_previews(self):
         self.add_model()
-        agent = agents.create({"name": "painter", "skills": ["image-generation"]})
+        ws = Path(self.home) / "shared"
         for preview in (False, True):
             events = []
-            session = runner.Session(agent.workspace, ["generate_image"], events.append, image_preview=preview)
+            session = runner.Session(ws, ["generate_image"], events.append, image_preview=preview)
             out = session.run("generate_image", {"prompt": "a fox %s" % preview}, "0-0")
             self.assertTrue(out.startswith("Saved images/"), out)
             prog = [e["tool_progress"] for e in events if "tool_progress" in e]
@@ -1686,9 +1687,10 @@ class TestImages(Base):
 
     def test_agent_tool(self):
         self.add_model()
-        self.assertIn("image-generation", skills.BUILTIN_IDS)
-        agent = agents.create({"name": "artist", "skills": ["image-generation"]})
-        self.assertEqual(agents.tool_names(agent), ["generate_image"])
+        # Agents no longer have an image skill; the action still works when it is called directly.
+        self.assertNotIn("image-generation", skills.BUILTIN_IDS)
+        agent = agents.create({"name": "artist"})
+        self.assertEqual(agents.tool_names(agent), [])
         ok, out = tools.execute(agent.workspace, "create_image", {"description": "a red fox"}, ["generate_image"])
         self.assertTrue(ok, out)
         self.assertTrue(out.startswith("Saved images/"), out)
@@ -1723,16 +1725,6 @@ class TestImages(Base):
         self.assertIn("error", events[-1])
         self.assertEqual(request(url + "/api/images/models/z-image-turbo", "DELETE")[0], 200)
         self.assertEqual(request(url + "/api/images/models/z-image-turbo", "DELETE")[0], 404)
-
-    def test_agent_chat_uses_tool(self):
-        self.add_model()
-        url = self.axis_server(self.model_server(OllamaHandler, ["llama3.1:8b"]))
-        request(url + "/api/agents", "POST", {"name": "artist", "skills": ["image-generation"]})
-        msg = 'TOOL generate_image {"prompt": "a red fox in snow"}'
-        events = chat_events(request(url + "/api/chat", "POST", {"agent": "artist", "messages": [{"role": "user", "content": msg}]})[1])
-        result = next(e["tool_result"] for e in events if "tool_result" in e)
-        self.assertTrue(result["ok"], result)
-        self.assertRegex(result["output"], r"^Saved images/\S+\.png ")
 
 
 class TestCli(Base):
@@ -2242,7 +2234,7 @@ class TestWorkspaceRoutes(Base):
                 time.sleep(0.1)
             self.fail(f"{needle!r} never appeared in {text!r}")
 
-        _, offset = wait_for("workspace")                            # the prompt shows the folder
+        _, offset = wait_for("shared")                               # the prompt shows the folder
         t.write("echo marker-one\n")
         text, offset = wait_for("marker-one\nmarker-one")
         self.assertEqual(text.count("echo marker-one"), 1)           # the command is shown once, not echoed twice
@@ -2278,21 +2270,18 @@ class TestWorkspaceRoutes(Base):
         self.assertIn("'notes'", inner)
         self.assertIn("- a.md (15 B)", inner)
         self.assertNotIn("The file open", inner)
-        # another agent's folder cannot be reached with the agent's own actions
+        # every agent's folder is the one shared workspace, so another agent's folder lists the same files
         agents.create({"name": "b"})
         other = note({"place": "b", "path": ""})
         self.assertIn("the folder of the agent 'b'", other)
-        self.assertIn("It is empty.", other)
+        self.assertIn("- report.md (1.5 KB)", other)
         self.assertIn("You cannot reach it", other)
-        # the shared folder is reachable only with the Shared folder skill
-        (Path(self.home) / "shared").mkdir(exist_ok=True)
-        (Path(self.home) / "shared" / "inbox.md").write_text("hi")
+        # the shared folder place is named as such
+        (self.ws / "inbox.md").write_text("hi")
         plain = note({"place": "_shared", "path": ""})
         self.assertIn("the folder shared by agents", plain)
         self.assertIn("- inbox.md (2 B)", plain)
         self.assertIn("You cannot reach it", plain)
-        sharer = agents.update("a", {"skills": ["shared-folder", "list-files"]})
-        self.assertIn("'shared'", note({"place": "_shared", "path": ""}, sharer))
         # a long folder is cut short
         for i in range(60):
             (self.ws / f"f{i:02}.txt").write_text("")

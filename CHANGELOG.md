@@ -4,6 +4,15 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.3] - 2026-10-29
+
+### Fixed
+- The loop guard that answers "you already did exactly this" now forgets earlier file listings and file contents after a file changes, so a rewritten file or a changed folder is no longer reported as it was before.
+- The preview on the Skills page of what a skill sends to the model now matches what a chat sends: an agent with an action that works with files is told about the one shared folder.
+
+### Changed
+- The test suite follows the current design: one shared workspace for all agents, and no separate file, image-generation or shared-folder skills.
+
 ## [4.3.2] - 2026-10-29
 
 ### Added

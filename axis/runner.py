@@ -150,7 +150,8 @@ IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
 
 # Actions that read or change this computer's files. After one of them succeeds, the remembered results of
 # earlier ones may be out of date, so they are forgotten (see Session.run).
-LOCAL_TOOLS = set(tools.FILE_TOOLS) | set(tools.EXECUTION_TOOLS) | {"generate_image"}
+FILE_HANDLERS = {"list_files", "read_file", "write_file", "make_folder", "delete_file"}   # no longer a skill, still callable
+LOCAL_TOOLS = FILE_HANDLERS | set(tools.EXECUTION_TOOLS) | {"generate_image"}
 CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image"}
 
 
