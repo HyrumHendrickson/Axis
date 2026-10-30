@@ -125,7 +125,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, jobs, latex, manager, ocr, procs, runner, skills, terminal, tools, updates
 from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -870,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
-                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError) as exc:
+                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError, latex.LatexError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -1121,6 +1121,22 @@ class Handler(BaseHTTPRequestHandler):
                 root.mkdir(parents=True, exist_ok=True)
                 # The user's own code, like the Workspace Run button: not checked the way an agent's is.
                 return self._json(200, cas.run(tools.Places(root), body.get("system"), body.get("code"), checked=False))
+
+        elif n >= 2 and parts[1] == "latex":
+            if n == 2 and method == "GET":
+                return self._json(200, latex.status())
+            if parts[2:] == ["install"] and method == "POST":
+                return self._json(200, latex.install())
+            if parts[2:] == ["enabled"] and method == "PUT":
+                body = self._body()
+                return self._json(200, latex.set_enabled(body.get("enabled") if isinstance(body, dict) else False))
+            if parts[2:] == ["script"] and method == "GET":
+                path = latex.script_path()
+                if path is None:
+                    return self._error(404, "The LaTeX renderer is not downloaded.")
+                return self._send(200, path.read_bytes(), "application/javascript; charset=utf-8")
+            if n == 2 and method == "DELETE":
+                return self._json(200, latex.remove())
 
         elif n >= 2 and parts[1] == "skills":
             if n == 2 and method == "GET":

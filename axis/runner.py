@@ -228,15 +228,16 @@ def reply(
         return
 
     messages = list(messages)
+    model_tool_names = tools.model_tools(tool_names)
     key = (conn.url, model)
     text_mode = key in _TEXT_MODE
 
     def use_text_mode() -> None:
-        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + text_protocol(tool_names)}
+        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + text_protocol(model_tool_names)}
 
     if text_mode:
         use_text_mode()
-    specs = tools.specs(tool_names)
+    specs = tools.specs(model_tool_names)
     session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview)
 
     for step in range(MAX_STEPS):

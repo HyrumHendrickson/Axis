@@ -155,6 +155,8 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .msg.ai pre { position: relative; }
 .code-copy { position: absolute; top: 6px; right: 6px; font: 600 11px/1 var(--sans); padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; }
 .msg.ai pre:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+.msg.ai mjx-container { overflow-x: auto; overflow-y: hidden; max-width: 100%; }
+.latex-card { max-width: 760px; }
 .msg-tools { align-items: baseline; flex-wrap: wrap; }
 .msg-stats { color: var(--muted); font-size: 12px; }
 .msg-note { color: var(--muted); font-size: 12px; font-style: italic; }
@@ -168,11 +170,21 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .models-tab[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
 .models-tab .busy-dot { background: var(--ok); margin: 0; }
 .models-split > .editor { min-width: 0; }
+.tool-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 220px); flex: 1; min-height: 0; }
+.tool-layout > .tool-content { min-width: 0; overflow: auto; }
+.tool-tabs { order: 2; overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 6px 0; }
+.tool-tab { display: flex; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); padding: 11px 16px; cursor: pointer; text-align: left; }
+.tool-tab:hover, .tool-tab[aria-current="true"] { background: var(--accent-soft); }
+.tool-tab[aria-current="true"] { box-shadow: inset -3px 0 0 var(--ink); font-weight: 600; }
 @media (max-width: 760px) {
   .models-split { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .models-tabs { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .models-tab { width: auto; flex: none; border-bottom: 0; white-space: nowrap; }
   .models-tab[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
+  .tool-layout { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .tool-tabs { order: 0; display: flex; overflow-x: auto; border-left: 0; border-bottom: 1px solid var(--line); }
+  .tool-tab { width: auto; flex: none; border-bottom: 0; white-space: nowrap; }
+  .tool-tab[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
 }
 .busy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--panel-ink); margin-right: 6px; animation: pulse 1.2s infinite; vertical-align: middle; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin: 0 6px; overflow: hidden; }
@@ -633,6 +645,8 @@ const S = {
   casSystem: "",                // the CAS the Try it box uses ("" = the default)
   casResult: null,              // the last Try it result
   casRunning: false,
+  latex: null,
+  latexLoading: false,
 };
 S.install = S.installs.chat;
 
@@ -811,6 +825,22 @@ function markdown(src) {
     return "<pre><code>" + esc(code.replace(/\n$/, "")) + "</code></pre>";
   }).join("");
 }
+let latexScript = null;
+function loadLatexScript() {
+  if (latexScript) return latexScript;
+  latexScript = new Promise((resolve, reject) => {
+    window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] },
+      options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] }, startup: { typeset: false } };
+    const script = document.createElement("script"); script.src = "/api/latex/script"; script.async = true;
+    script.onload = () => resolve(window.MathJax); script.onerror = () => { latexScript = null; reject(new Error("Could not load the LaTeX renderer.")); };
+    document.head.append(script);
+  });
+  return latexScript;
+}
+function typesetLatex(root) {
+  if (!S.latex || !S.latex.enabled || !root) return;
+  loadLatexScript().then((mj) => mj.typesetPromise ? mj.typesetPromise([root]) : null).catch(() => {});
+}
 
 /* ----------------------------------------------------------------- status */
 const ready = () => !!(S.status && S.status.ready);
@@ -878,6 +908,7 @@ function go(view) {
   renderNav(); renderMain();
   if (view.kind === "art") loadArt().then(() => { if (!S.artChecked) checkArt(); });
   if (view.kind === "cas") loadCas().then(() => { if (S.view.kind === "cas") renderCas(); });
+  if (view.kind === "latex") loadLatex().then(() => { if (S.view.kind === "latex") renderLatex(); });
 }
 
 function renderNav() {
@@ -897,22 +928,18 @@ function renderNav() {
     toolsGroup(item),
   );
 }
-const TOOL_VIEWS = ["images", "art", "ocr", "cas"];
+const TOOL_VIEWS = ["images", "art", "ocr", "cas", "latex"];
 // Images, Art Craft, OCR and CAS sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
 function toolsGroup(item) {
   const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob,
-    cas: runningJobs(S.cas).length > 0 || S.casRunning };
+    cas: runningJobs(S.cas).length > 0 || S.casRunning, latex: S.latexLoading };
   const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
   const anyBusy = Object.values(busy).some(Boolean);
   const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
-    "aria-controls": "nav-tools", onclick: () => { S.toolsOpen = !open; store("axis.toolsOpen", S.toolsOpen); renderNav(); } },
+    "aria-controls": "nav-tools", onclick: () => go({ kind: TOOL_VIEWS.includes(v.kind) ? v.kind : "images" }) },
     h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft, OCR and CAS")),
     h("span", { class: "nav-chevron", "aria-hidden": "true" }));
-  return [head, open ? h("div", { class: "nav-sub", id: "nav-tools" },
-    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), busy.images),
-    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), busy.art),
-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr),
-    item("CAS", "Exact math with Maxima or SymPy", v.kind === "cas", () => go({ kind: "cas" }), busy.cas)) : null];
+  return [head];
 }
 
 async function quitAxis() {
@@ -1022,8 +1049,24 @@ function renderMain() {
   if (S.view.kind === "ocr") return renderOcr();
   if (S.view.kind === "art") return renderArt();
   if (S.view.kind === "cas") return renderCas();
+  if (S.view.kind === "latex") return renderLatex();
   renderChat();
 }
+function decorateToolLayout() {
+  if (!TOOL_VIEWS.includes(S.view.kind) || $("tool-tabs")) return;
+  const main = $("main");
+  const bar = main.querySelector(":scope > .bar");
+  if (!bar) return;
+  const body = [...main.children].filter((x) => x !== bar);
+  if (!body.length) return;
+  const tabs = h("div", { class: "tool-tabs", id: "tool-tabs", role: "tablist", "aria-label": "Tools" },
+    [["images", "Images"], ["art", "Art Craft"], ["ocr", "OCR"], ["cas", "CAS"], ["latex", "LaTeX"]].map(([id, label]) =>
+      h("button", { class: "tool-tab", role: "tab", "aria-current": S.view.kind === id ? "true" : "false", onclick: () => go({ kind: id }) }, label)));
+  const content = h("div", { class: "tool-content" }); body.forEach((x) => content.append(x));
+  const layout = h("div", { class: "tool-layout" }, content, tabs);
+  main.append(layout);
+}
+new MutationObserver(() => queueMicrotask(decorateToolLayout)).observe($("main"), { childList: true });
 
 const viewing = (target) => S.view.kind === "chat" && S.view.agent === target;
 const targetName = (target) => target || "Direct chat";
@@ -1423,6 +1466,7 @@ function renderThread(target, agent, model) {
       h("button", { class: "link", onclick: () => retry(target) }, "Try again")));
   }
   fill(inner, kids);
+  typesetLatex(inner);
 }
 
 // The reply being written. Drawn from S.streams, so it reappears whenever this chat is shown again.
@@ -4545,6 +4589,46 @@ async function runCas() {
   S.casRunning = false;
   renderNav(); if (S.view.kind === "cas") renderCas();
 }
+let latexLoading = null;
+function loadLatex() {
+  if (latexLoading) return latexLoading;
+  latexLoading = api("/api/latex").then((d) => { S.latex = d; if (d.enabled) loadLatexScript(); return d; })
+    .catch((e) => { S.latex = { installed: false, enabled: false, error: e.message }; return S.latex; })
+    .finally(() => { latexLoading = null; });
+  return latexLoading;
+}
+async function latexInstall() {
+  S.latexLoading = true; renderNav(); renderLatex();
+  try { S.latex = await api("/api/latex/install", { method: "POST" }); await loadLatexScript(); toast("LaTeX rendering is ready."); }
+  catch (e) { toast(e.message); }
+  S.latexLoading = false; renderNav(); if (S.view.kind === "latex") renderLatex();
+}
+async function latexEnable(enabled) {
+  try { S.latex = await api("/api/latex/enabled", { method: "PUT", body: { enabled } });
+    if (enabled) await loadLatexScript(); renderChat(); renderLatex(); }
+  catch (e) { toast(e.message); }
+}
+async function latexRemove() {
+  if (!confirm("Delete the downloaded LaTeX renderer?")) return;
+  try { S.latex = await api("/api/latex", { method: "DELETE" }); latexScript = null; toast("LaTeX renderer deleted."); renderChat(); renderLatex(); }
+  catch (e) { toast(e.message); }
+}
+function renderLatex() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "LaTeX"),
+    h("button", { class: "btn small", onclick: () => loadLatex().then(renderLatex) }, "Refresh"));
+  const l = S.latex;
+  if (!l) { loadLatex().then(() => { if (S.view.kind === "latex") renderLatex(); }); return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint" }, "Loading…"))); }
+  const body = h("div", { class: "editor latex-card" },
+    h("h3", {}, "Render equations in chat replies"),
+    h("p", {}, "Axis uses a local MathJax renderer. It is downloaded only when you choose Install, and never changes your model or prompt."),
+    h("p", {}, l.installed ? `Downloaded (${Math.round(l.size / 1024)} KB).` : "Not downloaded."),
+    l.error ? h("p", { class: "form-error" }, l.error) : null,
+    h("div", { class: "model-actions" },
+      !l.installed ? h("button", { class: "btn primary", disabled: S.latexLoading, onclick: latexInstall }, S.latexLoading ? "Downloading…" : "Download LaTeX renderer") : null,
+      l.installed ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: l.enabled, onchange: (e) => latexEnable(e.target.checked) }), "Turn on LaTeX in chats") : null,
+      l.installed ? h("button", { class: "btn danger", onclick: latexRemove }, "Delete download") : null));
+  fill($("main"), bar, body);
+}
 function renderCas() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "CAS"),
     h("button", { class: "btn small", onclick: () => loadCas().then(() => { if (S.view.kind === "cas") renderCas(); }) }, "Refresh"));
@@ -4926,6 +5010,7 @@ window.addEventListener("beforeunload", (e) => {
 /* ------------------------------------------------------------------ start */
 (async function start() {
   reportPage();
+  loadLatex().then(() => { if (S.view.kind === "chat") renderChat(); });
   setInterval(reportPage, 5000);
   const drafts = recall("axis.drafts", {});
   if (drafts && typeof drafts === "object" && !Array.isArray(drafts)) S.drafts = drafts;

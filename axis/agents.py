@@ -389,8 +389,9 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
         notes.append("The closing note about the agent's folder is added once per agent, however many action skills it has.")
     notes.append("The agent's own system prompt comes first, and its config instructions are added to each message "
                  "you send. They are not part of the skill.")
-    return {"id": skill["id"], "name": skill["name"], "system": system, "tools": tool_lib.specs(actions),
-            "tools_text": runner.text_protocol(actions) if actions else "", "notes": notes}
+    shown = tool_lib.model_tools(actions)
+    return {"id": skill["id"], "name": skill["name"], "system": system, "tools": tool_lib.specs(shown),
+            "tools_text": runner.text_protocol(shown) if shown else "", "notes": notes}
 
 
 def tool_names(agent: Optional[Agent]) -> List[str]:

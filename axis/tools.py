@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -188,6 +189,17 @@ TOOL_SPECS["run_cas"] = {
         "required": ["code"],
     },
 }
+# These are the names shown to models.  The execution layer keeps run_cas as
+# the compatibility name, while the model receives the concrete backend it
+# can actually use.
+TOOL_SPECS["run_maxima"] = copy.deepcopy(TOOL_SPECS["run_cas"])
+TOOL_SPECS["run_maxima"]["description"] = TOOL_SPECS["run_maxima"]["description"].replace(
+    "Run code in a computer algebra system (CAS)", "Run Maxima code")
+TOOL_SPECS["run_maxima"]["parameters"]["properties"].pop("system", None)
+TOOL_SPECS["run_sympy"] = copy.deepcopy(TOOL_SPECS["run_cas"])
+TOOL_SPECS["run_sympy"]["description"] = TOOL_SPECS["run_sympy"]["description"].replace(
+    "Run code in a computer algebra system (CAS)", "Run a SymPy Python program")
+TOOL_SPECS["run_sympy"]["parameters"]["properties"].pop("system", None)
 TOOL_SPECS["read_text"] = {
     "description": "Read the text in a picture (OCR) with a local OCR model and return it. The picture must be a PNG, "
     "JPEG, BMP, TIFF or WebP file in your folder.",
@@ -208,6 +220,36 @@ TOOL_SPECS["read_text"] = {
 def specs(names: List[str]) -> List[Dict[str, Any]]:
     """Tool definitions in the OpenAI/Ollama function format."""
     return [{"type": "function", "function": {"name": n, **TOOL_SPECS[n]}} for n in names if n in TOOL_SPECS]
+
+
+def model_tools(names: List[str]) -> List[str]:
+    """Return model-facing names, selected from the current local setup."""
+    out: List[str] = []
+    cas_name = "run_cas"
+    try:
+        from . import cas
+        selected = cas.default_system()
+        if selected in ("maxima", "sympy"):
+            cas_name = "run_" + selected
+    except Exception:
+        pass
+    for name in names:
+        shown = cas_name if name == "run_cas" else name
+        if shown not in out:
+            out.append(shown)
+    if "generate_image" in out:
+        try:
+            from . import images
+            available = [m.get("name") or m.get("id") for m in images.status().get("models", [])
+                         if isinstance(m, dict) and m.get("exists") is not False]
+            if available:
+                TOOL_SPECS["generate_image"]["description"] = (
+                    "Make a picture with one of the configured local image models: " + ", ".join(available) + ". "
+                    "Choose the model argument only when the user asks; otherwise use the default. "
+                    "Describe the subject, style, lighting and composition in the prompt.")
+        except Exception:
+            pass
+    return out
 
 
 # -------------------------------------------------------------------- helpers
@@ -1053,6 +1095,11 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
         name = key
     elif key in TOOL_ALIASES and TOOL_ALIASES[key] in allowed:
         name = TOOL_ALIASES[key]
+    if name in ("run_maxima", "run_sympy") and "run_cas" in allowed:
+        args = dict(args) if isinstance(args, dict) else args
+        if isinstance(args, dict):
+            args.setdefault("system", name[4:])
+        name = "run_cas"
     if not isinstance(args, dict) or name not in TOOL_SPECS:
         return name, args
     out = dict(args)

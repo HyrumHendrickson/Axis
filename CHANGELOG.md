@@ -151,3 +151,8 @@ Changes before 4.1.1 were not recorded in a changelog. The Git history (`git log
 - Reordered the sidebar tabs: Direct chat, Past chats, Agents, Workspace, Terminal, Images, Models, Art Craft, OCR, Skills.
 - Added a temporary “Allow terminal commands” checkbox to Terminal and Workspace agent sidebars.
 - Added a per-chat Location selector for the agent folder or Shared folder, and moved the Workspace folder selector beside the Workspace title.
+## 4.3.6
+
+- Added optional local LaTeX rendering for chat replies, with download, enable/disable and delete controls.
+- Tool definitions now expose the installed CAS backend by name and include configured image-model choices.
+
