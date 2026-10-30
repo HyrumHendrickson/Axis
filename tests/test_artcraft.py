@@ -477,7 +477,9 @@ class TestRust(ArtBase):
         vcvars.parent.mkdir(parents=True)
         vcvars.write_text("", encoding="utf-8")
         engine_root = Path(self.home) / "engines"
-        result = mock.Mock(returncode=0, stdout="PATH=C:\\msvc\\bin\nVCToolsInstallDir=C:\\msvc\\\n")
+        # cmd.exe's `set` prints names the way they were first written, so the search path is "Path", not "PATH"
+        result = mock.Mock(returncode=0, stdout="[vcvarsall.bat] Environment initialized\nPath=C:\\msvc\\bin\n"
+                                                "VCToolsInstallDir=C:\\msvc\\\n")
         # Path is this system's own kind (the test also runs on Windows, where PosixPath cannot be made), and
         # no real Visual Studio Installer is looked for: the folders named here do not exist.
         nowhere = str(Path(self.home) / "no-program-files")
@@ -488,7 +490,8 @@ class TestRust(ArtBase):
                 mock.patch.object(artcraft.subprocess, "run", return_value=result) as run:
             env = artcraft._vcvars_env()
             again = artcraft._vcvars_env()
-        self.assertEqual(env["VCToolsInstallDir"], "C:\\msvc\\")
+        self.assertEqual(env["VCTOOLSINSTALLDIR"], "C:\\msvc\\")     # names are upper-case, like os.environ on Windows
+        self.assertEqual(env["PATH"], "C:\\msvc\\bin")
         self.assertEqual(again, env)
         self.assertEqual(run.call_count, 1)     # a found environment is kept, not looked for again
         # cmd.exe gets one finished command line: a list would reach it with backslash-escaped quotes
@@ -499,6 +502,15 @@ class TestRust(ArtBase):
         self.assertIn('call "', command)
         self.assertIn("vcvarsall.bat", command)
         self.assertIn("amd64", command)
+
+    @POSIX_ONLY
+    def test_a_cpp_tools_failure_keeps_rust_installed(self):
+        self.rustup()
+        with mock.patch.object(artcraft, "_install_cpp_tools", side_effect=artcraft.ArtCraftError("no admin")):
+            job = wait_job(artcraft.install({"app": "rust"})["job"]["id"])
+        self.assertEqual(job.state, "failed")
+        self.assertIn("Rust is installed", job.error)
+        self.assertTrue(artcraft.status()["rust"]["installed"])
 
     @POSIX_ONLY
     def test_install_rust_into_its_own_folder_without_touching_the_path(self):

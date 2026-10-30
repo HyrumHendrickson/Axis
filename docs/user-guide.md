@@ -68,7 +68,7 @@ Choose an agent's skills in its settings (**Edit agent**). Every agent chooses f
 | Delete files | Delete files and empty folders |
 | Web search | `web_search` and `fetch_page` |
 | Wikipedia | `wikipedia_search` and `wikipedia_article` |
-| CAS | `run_cas`: exact math with Maxima or SymPy from the **CAS** page. Listed under **Tools**. |
+| CAS | Exact math with the system chosen on the **CAS** page. The agent is shown `run_maxima` or `run_sympy`, whichever is in use, not both. Listed under **Tools**. |
 | Images | `generate_image` with a local Stable Diffusion model, as on the **Images** page. Listed under **Tools**. |
 | OCR | `read_text`: reads the text in a picture in the agent's folder with an OCR model, as on the **OCR** page. Listed under **Tools**. |
 | Shared folder | Lets file actions reach `shared/`, a folder common to all agents with this skill |

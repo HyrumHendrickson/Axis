@@ -53,7 +53,7 @@ def text_protocol(tool_names: List[str]) -> str:
         "Available tools:",
     ]
     for name in tool_names:
-        spec = tools.TOOL_SPECS[name]
+        spec = tools.tool_spec(name)
         props = spec["parameters"]["properties"]
         args = ", ".join(f'"{k}": {v["description"]}' for k, v in props.items()) or "no arguments"
         lines.append(f"- {name}: {spec['description']} Arguments: {args}")

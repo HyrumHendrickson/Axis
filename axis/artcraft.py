@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import __version__, engines, jobs
-from .paths import inside, remove_tree
+from .paths import inside, remove_tree, replace_retry, unlink_quiet
 
 REPO_OWNER = "storytold"
 
@@ -77,6 +77,10 @@ RUSTUP_TRIPLES = {
 RUSTUP_TIMEOUT = 45 * 60      # seconds rustup may take to fetch the toolchain
 CPP_TOOLS_TIMEOUT = 45 * 60
 CPP_TOOLS_URL = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
+CPP_WINGET_ID = "Microsoft.VisualStudio.2022.BuildTools"
+# What the Visual Studio installer is asked to add: the C++ build tools and the Windows SDK they need.
+CPP_TOOLS_ARGS = ["--quiet", "--wait", "--norestart", "--nocache",
+                  "--add", "Microsoft.VisualStudio.Workload.VCTools", "--includeRecommended"]
 BAD_START = re.compile(r"GLIBC|error while loading shared libraries|cannot execute binary|bad CPU type", re.I)
 
 _LOCK = threading.Lock()      # the record file
@@ -218,6 +222,35 @@ def _vcvars_env() -> Dict[str, str]:
     return dict(_VC_CACHE[key])
 
 
+def _console_text(data: Any) -> str:
+    """Decode what cmd.exe printed. It writes in the console's (OEM) code page, not UTF-8 or the ANSI page."""
+    if isinstance(data, str):
+        return data
+    if os.name == "nt":
+        try:
+            import ctypes
+            return data.decode("cp%d" % ctypes.windll.kernel32.GetOEMCP(), errors="replace")   # type: ignore[attr-defined]
+        except (ImportError, AttributeError, OSError, LookupError):
+            pass
+    return data.decode("utf-8", errors="replace")
+
+
+def _parse_environment(text: str) -> Dict[str, str]:
+    """The lines NAME=value printed by `set`.
+
+    Names are upper-cased, as os.environ does on Windows: `set` prints the name the way it was first written
+    (usually `Path`), and everything here looks for PATH. Lines of another form (a banner) are skipped.
+    """
+    env: Dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and "\x00" not in key and not key.startswith("=") and not any(c.isspace() for c in key):
+            env[key.upper()] = value
+    return env
+
+
 def _find_vcvars_env() -> Dict[str, str]:
     base = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or ""
     candidates = [Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"] if base else []
@@ -269,19 +302,14 @@ def _find_vcvars_env() -> Dict[str, str]:
                 # outer quotes are removed and the inner ones are kept.
                 comspec = os.environ.get("COMSPEC", "cmd.exe")
                 r = subprocess.run(f'"{comspec}" /d /s /c "{command}"',
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                   timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except (OSError, subprocess.SubprocessError):
                 continue
             if r.returncode != 0:
                 continue
-            env = {}
-            for line in r.stdout.splitlines():
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    if key and "\x00" not in key:
-                        env[key] = value
-            if env.get("PATH") and (env.get("VCToolsInstallDir") or shutil.which("link.exe", path=env["PATH"])):
+            env = _parse_environment(_console_text(r.stdout))
+            if env.get("PATH") and (env.get("VCTOOLSINSTALLDIR") or shutil.which("link.exe", path=env["PATH"])):
                 return env
     if shutil.which("cl") and shutil.which("link"):
         return dict(os.environ)
@@ -301,52 +329,150 @@ def rust_build_env() -> Dict[str, str]:
     return env
 
 
-def _install_cpp_tools() -> None:
-    """Install the Windows C++ workload needed by Rust's MSVC target when absent."""
-    if os.name != "nt" or _vcvars_env():
+def _run_elevated(exe: str, args: List[str], timeout: float) -> int:
+    """Run a program as administrator on Windows (Windows asks the user to allow it) and wait for it.
+
+    The Visual Studio installer must run as administrator, and Windows refuses to start such a program
+    from an ordinary one (error 740). ShellExecuteEx with the "runas" verb is the way to ask for it.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class ShellExecuteInfo(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+                    ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    kernel32, shell32 = ctypes.windll.kernel32, ctypes.windll.shell32   # type: ignore[attr-defined]
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    info = ShellExecuteInfo()
+    info.cbSize = ctypes.sizeof(ShellExecuteInfo)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"
+    info.lpFile = exe
+    info.lpParameters = subprocess.list2cmdline(args)
+    info.nShow = 0   # hidden
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = ctypes.GetLastError()
+        if error == 1223:   # ERROR_CANCELLED: the user chose No
+            raise ArtCraftError("Windows asked for permission to install the Microsoft C++ Build Tools and it was "
+                                "not given. Click Yes when Windows asks, then try again.")
+        raise ArtCraftError(f"Windows could not start the Microsoft C++ Build Tools installer (error {error}).")
+    handle = info.hProcess
+    try:
+        wait_ms = int(min(timeout, 2 ** 31 / 1000) * 1000)
+        if kernel32.WaitForSingleObject(handle, wait_ms) != 0:   # 0 is WAIT_OBJECT_0
+            raise ArtCraftError("The Microsoft C++ Build Tools installer took too long. It may still be running in "
+                                "the background; wait for it to finish, then try again.")
+        code = wintypes.DWORD(0)
+        kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return int(code.value)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _signed_by_microsoft(path: Path) -> Optional[bool]:
+    """True/False when Windows can say whether the file carries a valid Microsoft signature; None when the
+    check itself could not be run."""
+    script = ("$s = Get-AuthenticodeSignature -LiteralPath $args[0]; "
+              "if ($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -match 'O=Microsoft Corporation') "
+              "{ 'signed' } else { 'unsigned' }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script, str(path)],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = r.stdout.decode("utf-8", errors="replace").strip()
+    if r.returncode != 0 or out not in ("signed", "unsigned"):
+        return None
+    return out == "signed"
+
+
+def _cpp_via_winget(job: Optional[jobs.Job]) -> None:
+    """Ask winget (which shows the Windows permission prompt itself) to install the C++ Build Tools."""
+    winget = shutil.which("winget")
+    if not winget:
         return
+    if job is not None:
+        job.progress(phase="Installing the Microsoft C++ Build Tools with winget")
+    cmd = [winget, "install", "--id", CPP_WINGET_ID, "--exact", "--silent", "--accept-package-agreements",
+           "--accept-source-agreements", "--override", subprocess.list2cmdline(CPP_TOOLS_ARGS)]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                       timeout=CPP_TOOLS_TIMEOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        pass   # not fatal: the next way is tried, and the result is judged by looking for the linker
+
+
+def _cpp_via_bootstrapper(job: Optional[jobs.Job]) -> None:
+    """Download Microsoft's own installer and run it, asking Windows for administrator rights."""
     downloads = engines.root() / "_downloads"
     downloads.mkdir(parents=True, exist_ok=True)
-    # Do not reuse a fixed name here. Windows Update, Defender, or a previous
-    # installer process may still have the old bootstrapper open, which makes
-    # opening it with ``wb`` fail with WinError 5. A unique file also lets a
-    # second attempt proceed while Windows is finishing cleanup of the first.
-    installer: Optional[Path] = None
+    # A fixed name could still be open from an earlier attempt (Windows Update, Defender): use a unique file.
+    fd, name = tempfile.mkstemp(prefix="vs_BuildTools-", suffix=".exe", dir=str(downloads))
+    os.close(fd)
+    installer = Path(name)
     try:
-        fd, name = tempfile.mkstemp(prefix="vs_BuildTools-", suffix=".exe", dir=str(downloads))
-        os.close(fd)
-        installer = Path(name)
+        if job is not None:
+            job.progress(phase="Downloading the Microsoft C++ Build Tools installer")
         req = urllib.request.Request(CPP_TOOLS_URL, headers={"User-Agent": f"axis/{__version__}"})
         with urllib.request.urlopen(req, timeout=60) as source, installer.open("wb") as target:
             shutil.copyfileobj(source, target, 1024 * 1024)
-        install_path = engines.root() / "msvc"
-        args = [str(installer), "--quiet", "--wait", "--norestart", "--nocache", "--installPath", str(install_path),
-                "--add", "Microsoft.VisualStudio.Workload.VCTools", "--includeRecommended"]
-        r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=CPP_TOOLS_TIMEOUT,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if r.returncode not in (0, 3010):
-            output = r.stdout.decode("utf-8", errors="replace")[-600:]
-            raise ArtCraftError(f"Microsoft C++ Build Tools stopped with exit code {r.returncode}.\n{output}")
+        if _signed_by_microsoft(installer) is False:
+            raise ArtCraftError("The Microsoft C++ Build Tools installer that was downloaded is not signed by "
+                                "Microsoft, so Axis did not run it.")
+        if job is not None:
+            job.progress(phase="Installing the Microsoft C++ Build Tools (Windows may ask for permission)")
+        args = [str(installer)] + CPP_TOOLS_ARGS + ["--installPath", str(engines.root() / "msvc")]
+        try:
+            r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                               timeout=CPP_TOOLS_TIMEOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            code = r.returncode
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 740:   # 740: "the requested operation requires elevation"
+                raise
+            code = _run_elevated(str(installer), args[1:], CPP_TOOLS_TIMEOUT)
+        if code not in (0, 3010):   # 3010: done, restart wanted
+            raise ArtCraftError(f"The Microsoft C++ Build Tools installer stopped with exit code {code}.")
     except (urllib.error.URLError, OSError, subprocess.SubprocessError) as exc:
-        raise ArtCraftError(f"Could not download or install Microsoft C++ Build Tools ({exc}).") from exc
+        raise ArtCraftError(f"Could not download or install Microsoft C++ Build Tools ({getattr(exc, 'reason', exc)}).") from exc
     finally:
-        if installer is not None:
-            try:
-                installer.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                # The bootstrapper can remain briefly locked by Windows or
-                # antivirus software. It is uniquely named and harmless; do
-                # not replace the useful installation result with a cleanup
-                # error.
-                pass
+        unlink_quiet(installer)
+
+
+CPP_HELP = ("Install them yourself from https://visualstudio.microsoft.com/visual-cpp-build-tools/ (choose "
+            "\"Desktop development with C++\"), then try again.")
+
+
+def _install_cpp_tools(job: Optional[jobs.Job] = None) -> None:
+    """Install the Windows C++ workload needed by Rust's MSVC target when it is absent.
+
+    winget goes first: it asks Windows for permission itself and checks the installer. If that does not
+    leave the tools behind (winget is missing, or the tools were already there without the C++ part), Microsoft's own
+    installer is downloaded, checked for Microsoft's signature, and run as administrator.
+    """
+    if os.name != "nt" or _vcvars_env():
+        return
+    _cpp_via_winget(job)
+    if _vcvars_env():
+        return
+    try:
+        _cpp_via_bootstrapper(job)
+    except ArtCraftError as exc:
+        raise ArtCraftError(f"{exc}\n{CPP_HELP}") from exc
     if not _vcvars_env():
-        raise ArtCraftError("Microsoft C++ Build Tools were installed, but the Rust linker is still unavailable. Restart Axis and try again.")
+        raise ArtCraftError("Microsoft C++ Build Tools were installed, but Axis cannot find the Rust linker yet. "
+                            "Restart Axis and try again. " + CPP_HELP)
 
 
 def ensure_cpp_tools() -> None:
-    """Download the Windows C++ workload when a Rust build needs it."""
+    """Install the Windows C++ workload when a Rust build needs it."""
     _install_cpp_tools()
 
 
@@ -610,12 +736,12 @@ def install_app(app_id: str, job: jobs.Job, update: bool = False) -> Dict[str, A
             if final.exists():
                 # Never delete a folder Axis has no record of: it may hold the app's settings.
                 final = base / f"{tag}-{int(time.time())}"
-            os.replace(work, final)
+            replace_retry(work, final)
         except BaseException:
             remove_tree(work)
             raise
         finally:
-            archive.unlink(missing_ok=True)
+            unlink_quiet(archive)
         record = {"tag": rel["tag"], "version": version, "dir": final.relative_to(engines.root()).as_posix(),
                   "program": (final / program.relative_to(work)).relative_to(engines.root()).as_posix(),
                   "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}
@@ -676,7 +802,7 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
         try:
             engines._download({"name": exe, "url": url, "size": None, "sha256": m.group(1).lower()}, installer, job, 0, None)
         except BaseException:
-            installer.unlink(missing_ok=True)
+            unlink_quiet(installer)
             raise
         home = rust_home()
         try:
@@ -691,9 +817,23 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
             if os.name == "nt":
                 kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             job.progress(phase="Installing Rust with rustup")
-            proc = subprocess.Popen([str(installer), "-y", "--no-modify-path", "--profile", "minimal",
-                                     "--default-toolchain", "stable"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, env=env, cwd=str(home), **kwargs)
+            proc = None
+            for attempt in range(10):
+                try:
+                    proc = subprocess.Popen([str(installer), "-y", "--no-modify-path", "--profile", "minimal",
+                                             "--default-toolchain", "stable"], stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
+                                            cwd=str(home), **kwargs)
+                    break
+                except PermissionError as exc:   # an antivirus program is still scanning the new download
+                    if attempt == 9:
+                        raise ArtCraftError("Windows would not let Axis start rustup-init.exe (an antivirus "
+                                            f"program may be blocking it): {exc.strerror or exc}") from exc
+                    job.check()
+                    time.sleep(1.0)
+                except OSError as exc:
+                    raise ArtCraftError(f"rustup-init could not be started: {exc.strerror or exc}") from exc
+            assert proc is not None
             lines: "queue.Queue[Optional[str]]" = queue.Queue()
             threading.Thread(target=_pump, args=(proc.stdout, lines), daemon=True).start()
             tail: List[str] = []
@@ -730,14 +870,21 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
             version = r.stdout.decode("utf-8", errors="replace").strip()
             if r.returncode != 0:
                 raise ArtCraftError("Rust was installed but does not run on this computer.\n" + version[-300:])
-            _install_cpp_tools()
         except BaseException:
             remove_tree(home)
             raise
         finally:
-            installer.unlink(missing_ok=True)
+            unlink_quiet(installer)
         _remember(RUST, {"version": version[:200], "cargo": cargo.relative_to(engines.root()).as_posix(),
                          "installed": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        # Rust is installed and recorded. The Windows C++ Build Tools come last, and a problem with them
+        # must not undo the Rust that was just downloaded (it used to: everything was deleted).
+        job.check()
+        try:
+            _install_cpp_tools(job)
+        except ArtCraftError as exc:
+            raise ArtCraftError("Rust is installed, but the Microsoft C++ Build Tools it needs to build programs "
+                                f"on Windows are not.\n{exc}") from exc
         return {"app": RUST, "model": "Rust", "version": version}
     finally:
         lock.release()

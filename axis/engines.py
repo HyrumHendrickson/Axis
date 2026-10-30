@@ -38,7 +38,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from . import __version__, jobs
-from .paths import axis_home, inside
+from .paths import axis_home, inside, replace_retry, unlink_quiet
 
 CHUNK = 1024 * 1024
 RELEASES_TO_SCAN = 10
@@ -537,7 +537,7 @@ def _install_build(engine: str, build: str, rels, job: jobs.Job) -> Dict[str, An
                 job.progress(phase=f"Unpacking {a['name']}")
                 _unpack(archive, work)
             finally:
-                archive.unlink(missing_ok=True)
+                unlink_quiet(archive)
         found: Dict[str, Path] = {}
         for prog in spec["programs"]:
             p = _find(work, prog)
@@ -562,7 +562,7 @@ def _install_build(engine: str, build: str, rels, job: jobs.Job) -> Dict[str, An
             shutil.rmtree(final, ignore_errors=True)
         if final.exists():
             final = base / f"{folder_name}-{int(time.time())}"
-        os.replace(work, final)
+        replace_retry(work, final)
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise

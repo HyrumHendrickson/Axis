@@ -70,8 +70,20 @@ def is_newer(latest: str, current: str) -> bool:
         return False
 
 
+def _python() -> str:
+    """This Python, as a console program: pythonw.exe (how Axis runs on Windows) shows no output at all."""
+    exe = Path(sys.executable)
+    if os.name == "nt" and exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").is_file():
+        return str(exe.with_name("python.exe"))
+    return sys.executable
+
+
+def _no_window() -> Dict[str, Any]:
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+
+
 def pip_command(source: str = REPO_ZIP) -> List[str]:
-    return [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
+    return [_python(), "-m", "pip", "install", "--upgrade", "--force-reinstall",
             "--no-cache-dir", "--disable-pip-version-check", source]
 
 
@@ -183,8 +195,8 @@ def state() -> Dict[str, Any]:
 
 def _installed_version() -> Optional[str]:
     try:
-        res = subprocess.run([sys.executable, "-c", "import axis; print(axis.__version__)"],
-                             capture_output=True, text=True, timeout=60)
+        res = subprocess.run([_python(), "-c", "import axis; print(axis.__version__)"],
+                             capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, **_no_window())
         return res.stdout.strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
@@ -193,7 +205,7 @@ def _installed_version() -> Optional[str]:
 def _update(source: str) -> None:
     try:
         res = subprocess.run(pip_command(source), capture_output=True, text=True, timeout=900,
-                             stdin=subprocess.DEVNULL)
+                             stdin=subprocess.DEVNULL, **_no_window())
         ok, output = res.returncode == 0, (res.stdout or "") + (res.stderr or "")
     except (OSError, subprocess.SubprocessError) as exc:
         ok, output = False, str(exc)

@@ -60,6 +60,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .upd { margin-left: auto; border: 0; border-radius: 10px; padding: 4px 9px; font: 600 11px/1.2 var(--sans); white-space: nowrap; background: var(--panel-line); color: var(--panel-ink); }
 .upd.ok { background: var(--ok); color: var(--accent-ink); }
 .upd.warn { background: var(--warn); color: var(--accent-ink); cursor: pointer; }
+.upd.restart { background: var(--accent); color: var(--accent-ink); cursor: pointer; }
 .upd.bad { background: var(--bad); color: var(--accent-ink); cursor: pointer; }
 .upd.busy { cursor: pointer; }
 button.upd { cursor: pointer; }
@@ -84,11 +85,6 @@ button.upd:hover { filter: brightness(1.12); }
 .nav-item[aria-current="true"] { background: var(--panel-active); box-shadow: inset 3px 0 0 var(--panel-ink); }
 .nav-item small { display: block; color: var(--panel-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-empty { color: var(--panel-muted); font-size: 13px; padding: 4px 10px; }
-.nav-group { display: flex; align-items: center; gap: 8px; }
-.nav-group > span:first-child { flex: 1; min-width: 0; }
-.nav-chevron { flex: none; width: 8px; height: 8px; border-right: 2px solid var(--panel-muted); border-bottom: 2px solid var(--panel-muted); transform: rotate(-45deg); transition: transform .15s; margin-right: 4px; }
-.nav-group[aria-expanded="true"] .nav-chevron { transform: rotate(45deg); }
-.nav-sub { margin: 2px 0 4px 14px; padding-left: 6px; border-left: 1px solid var(--panel-line); }
 
 /* ---------- buttons ---------- */
 .btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
@@ -170,19 +166,20 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .models-tab[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
 .models-tab .busy-dot { background: var(--ok); margin: 0; }
 .models-split > .editor { min-width: 0; }
-.tool-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 220px); flex: 1; min-height: 0; }
+/* Tools sub-tabs: a column on the left of the page, like the Models tabs */
+.tool-layout { display: grid; grid-template-columns: minmax(170px, 220px) minmax(0, 1fr); flex: 1; min-height: 0; }
 .tool-layout > .tool-content { min-width: 0; overflow: auto; }
-.tool-tabs { order: 2; overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 6px 0; }
+.tool-tabs { overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); padding: 6px 0; }
 .tool-tab { display: flex; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); padding: 11px 16px; cursor: pointer; text-align: left; }
 .tool-tab:hover, .tool-tab[aria-current="true"] { background: var(--accent-soft); }
-.tool-tab[aria-current="true"] { box-shadow: inset -3px 0 0 var(--ink); font-weight: 600; }
+.tool-tab[aria-current="true"] { box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
 @media (max-width: 760px) {
   .models-split { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .models-tabs { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .models-tab { width: auto; flex: none; border-bottom: 0; white-space: nowrap; }
   .models-tab[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
-  .tool-layout { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
-  .tool-tabs { order: 0; display: flex; overflow-x: auto; border-left: 0; border-bottom: 1px solid var(--line); }
+  .tool-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .tool-tabs { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 0; }
   .tool-tab { width: auto; flex: none; border-bottom: 0; white-space: nowrap; }
   .tool-tab[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
 }
@@ -620,7 +617,6 @@ const S = {
   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
   imageSelected: null,          // the picture shown large in the Images tab
   imageError: null,
-  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR, CAS)
   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
   manageError: "",              // the last error from a Models page action
   install: null,                // the install form of the Models sub-tab that is open (one of installs)
@@ -925,21 +921,17 @@ function renderNav() {
     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
-    toolsGroup(item),
+    toolsItem(item),
   );
 }
 const TOOL_VIEWS = ["images", "art", "ocr", "cas", "latex"];
-// Images, Art Craft, OCR and CAS sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
-function toolsGroup(item) {
+// Images, Art Craft, OCR, CAS and LaTeX are the pages under Tools. The sidebar has one plain entry for them (the page
+// shows the other tools as tabs on its left); it shows a Working dot while any of them is busy.
+function toolsItem(item) {
   const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob,
     cas: runningJobs(S.cas).length > 0 || S.casRunning, latex: S.latexLoading };
-  const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
-  const anyBusy = Object.values(busy).some(Boolean);
-  const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
-    "aria-controls": "nav-tools", onclick: () => go({ kind: TOOL_VIEWS.includes(v.kind) ? v.kind : "images" }) },
-    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft, OCR and CAS")),
-    h("span", { class: "nav-chevron", "aria-hidden": "true" }));
-  return [head];
+  return item("Tools", "Images, Art Craft, OCR, CAS and LaTeX", TOOL_VIEWS.includes(v.kind),
+    () => go({ kind: TOOL_VIEWS.includes(v.kind) ? v.kind : "images" }), Object.values(busy).some(Boolean));
 }
 
 async function quitAxis() {
@@ -1063,7 +1055,7 @@ function decorateToolLayout() {
     [["images", "Images"], ["art", "Art Craft"], ["ocr", "OCR"], ["cas", "CAS"], ["latex", "LaTeX"]].map(([id, label]) =>
       h("button", { class: "tool-tab", role: "tab", "aria-current": S.view.kind === id ? "true" : "false", onclick: () => go({ kind: id }) }, label)));
   const content = h("div", { class: "tool-content" }); body.forEach((x) => content.append(x));
-  const layout = h("div", { class: "tool-layout" }, content, tabs);
+  const layout = h("div", { class: "tool-layout" }, tabs, content);
   main.append(layout);
 }
 new MutationObserver(() => queueMicrotask(decorateToolLayout)).observe($("main"), { childList: true });
@@ -4938,7 +4930,7 @@ function renderUpdate() {
     current:  ["ok", "Up to date", false],
     outdated: ["warn", "Out of date", true],
     updating: ["busy", "Updating\u2026", true],
-    updated:  ["ok", "Restart Axis", true],
+    updated:  ["restart", "Restart Axis", true],
     failed:   ["bad", "Update failed", true],
     unknown:  ["", "Update check failed", true],
   }[st];
@@ -5029,7 +5021,6 @@ window.addEventListener("beforeunload", (e) => {
   }
   S.term.side = recall("axis.termSide", true) !== false;
   S.term.agent = String(recall("axis.termAgent", "") || "");
-  S.toolsOpen = recall("axis.toolsOpen", false) === true;
   const tc = recall("axis.termCommands", 5);
   if (TERM_COMMAND_CHOICES.some(([n]) => n === tc)) S.termCommands = tc;
   loadWsFolder();

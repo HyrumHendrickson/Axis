@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -68,8 +69,7 @@ BUILTIN: List[Dict[str, Any]] = [
         "description": "Compile and run Rust code, or run a .rs file already in the agent's folder, and return its output.",
         "instructions": "When a task needs Rust, write a complete program and run it with run_rust, or run a Rust file "
         "already in your folder with run_rust_file. Print the results you need. Rust is not a security sandbox; the "
-        "program runs with the user's permissions. On Windows, Axis installs the Microsoft C++ Build Tools when the "
-        "MSVC linker is needed.",
+        "program runs with the user's permissions.",
         "tools": ["run_rust", "run_rust_file"],
     },
     {
@@ -77,9 +77,8 @@ BUILTIN: List[Dict[str, Any]] = [
         "name": "Run terminal code",
         "description": "Run a program or shell code using the computer's terminal language and return its output.",
         "instructions": "Use run_terminal for a short program written in the terminal's language, or run_terminal_file for "
-        "a program already in your folder. The default shell is bash or sh on macOS and Linux, and cmd on Windows; "
-        "set shell to powershell or cmd on Windows when needed. Terminal programs run with the user's permissions and "
-        "are not a security sandbox.",
+        "a program already in your folder. Leave shell out to use the computer's default shell. Terminal programs "
+        "run with the user's permissions and are not a security sandbox.",
         "tools": ["run_terminal", "run_terminal_file"],
     },
     {
@@ -143,6 +142,47 @@ def _public(skill: Dict[str, Any], builtin: bool) -> Dict[str, Any]:
 
 def builtin_dir() -> Path:
     return skills_root() / "built-in"
+
+
+def _adapt_rust(text: str) -> str:
+    from . import artcraft, engines
+    try:
+        have = artcraft._rust_info() is not None or shutil.which("rustc") is not None
+    except Exception:
+        return text
+    if not have:
+        text = (f"{text.rstrip()} Rust is not installed yet, so run_rust will fail: tell the user to install it on "
+                "the Art Craft page (under Tools).")
+    if engines.this_platform()[0] == "windows":
+        text = (f"{text.rstrip()} On Windows, Axis installs the Microsoft C++ Build Tools the first time a build "
+                "needs the linker; that can take many minutes, so say so if a build seems stuck.")
+    return text
+
+
+def _adapt_terminal(text: str) -> str:
+    from . import tools
+    try:
+        shells = tools._shells_here()
+    except Exception:
+        return text
+    note = f"The default shell here is {shells[0]}; shells available: {', '.join(shells)}."
+    if shells[0] == "cmd":
+        note += " Write cmd syntax (for example dir, type, copy, %VAR%) unless you set shell to powershell."
+    else:
+        note += " Write POSIX shell syntax unless you set shell to another one."
+    return f"{text.rstrip()} {note}"
+
+
+def adapt(skill_id: str, instructions: str) -> str:
+    """A built-in skill's instructions as an agent reads them now: the text plus what is set up on this computer
+    (the CAS in use, installed image and OCR models, the shell, whether a Craft app is installed)."""
+    if skill_id == "run-rust":
+        return _adapt_rust(instructions)
+    if skill_id == "run-terminal":
+        return _adapt_terminal(instructions)
+    if skill_id in craft_skills.IDS:
+        return craft_skills.adapt(skill_id, instructions)
+    return tool_skills.adapt(skill_id, instructions)
 
 
 def _default(skill_id: str) -> Optional[Dict[str, Any]]:

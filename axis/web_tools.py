@@ -288,6 +288,8 @@ def _http(url: str, data: Optional[bytes] = None, public_only: bool = False,
         raise WebError(f"Could not reach the site: {reason}. Check the internet connection.")
     except (socket.timeout, TimeoutError):
         raise WebError(f"The site did not answer within {TIMEOUT} seconds.")
+    except (http.client.HTTPException, OSError) as exc:   # the answer broke off, or the connection was reset
+        raise WebError(f"The connection to the site failed: {exc.__class__.__name__}. Try again.")
     try:
         text = raw[:MAX_DOWNLOAD].decode(charset, errors="replace")
     except LookupError:

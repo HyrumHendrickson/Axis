@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import sys
+import time
 from pathlib import Path
 
 
@@ -174,3 +175,33 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path, onexc=retry)
     else:
         shutil.rmtree(path, onerror=retry)
+
+
+def unlink_quiet(path: Path, tries: int = 10) -> None:
+    """Delete a file that may not exist. Never raises.
+
+    On Windows an antivirus program or the search indexer often has a file we just finished with open for
+    a moment, and deleting it fails. It is tried again for a few seconds; a leftover temporary file is
+    harmless and must never turn a finished install into a failed one.
+    """
+    for attempt in range(max(1, tries)):
+        try:
+            Path(path).unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt + 1 < tries:
+                time.sleep(0.3)
+
+
+def replace_retry(src: Path, dst: Path, tries: int = 20) -> None:
+    """os.replace that waits out the short locks Windows puts on freshly written files and folders."""
+    for attempt in range(max(1, tries)):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt + 1 >= tries:
+                raise
+            time.sleep(0.25)

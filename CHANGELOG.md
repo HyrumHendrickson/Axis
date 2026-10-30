@@ -3,6 +3,11 @@
 All notable changes to Axis are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Axis uses [semantic versioning](https://semver.org/): a major version for changes that break existing data or habits, a minor version for new features, and a patch version for fixes and small improvements.
 
 ## [Unreleased]
+- Tools: the sub-tabs are now on the left, and the sidebar Tools entry no longer has a dropdown arrow that opened nothing.
+- The **Restart Axis** badge after an update is no longer green.
+- Windows: the LaTeX renderer downloads again (a temporary file was left open and could not be renamed). Rust installs again: the Visual Studio environment was never recognised, and a failed C++ Build Tools step deleted the Rust that had just been installed. The Build Tools are installed with winget when possible, otherwise with Microsoft's signed installer run as administrator. Short file locks from antivirus programs are waited out.
+- Skills now send what fits this computer. An agent with the CAS skill is shown `run_maxima` or `run_sympy` (the one in use), never `run_cas`; the Images, OCR, Run terminal, Run Rust and Art Craft skills list what is installed, the default shell, and quoting for that shell.
+- Reading a web page no longer fails with an unhandled error when the connection breaks off; the Windows update check and install no longer show a console window or lose their output.
 
 ## [4.3.5] - 2026-10-30
 

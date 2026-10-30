@@ -10,14 +10,20 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from . import __version__
 from .paths import axis_home
 
 ASSET_NAME = "tex-svg.js"
 ASSET_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"
+# The same file from a second host, tried when the first cannot be reached (some networks block one of them).
+MIRROR_URL = "https://unpkg.com/mathjax@3/es5/tex-svg.js"
+MIN_SIZE = 10000
 
 
 class LatexError(Exception):
@@ -54,30 +60,64 @@ def status() -> Dict[str, Any]:
             "url": ASSET_URL}
 
 
+def _fetch(url: str, temp: Path) -> None:
+    """Download url into temp. Raises LatexError if the answer is not the renderer."""
+    request = urllib.request.Request(url, headers={"User-Agent": f"Axis/{__version__}"})
+    with urllib.request.urlopen(request, timeout=60) as response, temp.open("wb") as out:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    if temp.stat().st_size < MIN_SIZE:
+        raise LatexError("The LaTeX renderer download was incomplete.")
+
+
+def _move_into_place(temp: Path, target: Path) -> None:
+    """Rename temp over target. On Windows the rename fails while an antivirus program or the search
+    indexer still has the new file open, so it is tried again for a few seconds."""
+    for attempt in range(20):
+        try:
+            os.replace(temp, target)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.25)
+
+
 def install() -> Dict[str, Any]:
     folder = _folder()
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / ASSET_NAME
-    temp = Path(tempfile.mkstemp(prefix="mathjax-", suffix=".js", dir=str(folder))[1])
+    # mkstemp returns a file that is already open. Close it at once: Windows will not rename or delete a
+    # file that anything still has open, which made every download on Windows end in "Access is denied".
+    fd, name = tempfile.mkstemp(prefix="mathjax-", suffix=".js", dir=str(folder))
+    os.close(fd)
+    temp = Path(name)
+    problem: Optional[str] = None
     try:
-        request = urllib.request.Request(ASSET_URL, headers={"User-Agent": "Axis/4.3.6"})
-        with urllib.request.urlopen(request, timeout=60) as response, temp.open("wb") as out:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-        if temp.stat().st_size < 10000:
-            raise LatexError("The LaTeX renderer download was incomplete.")
-        os.replace(temp, target)
-    except Exception as exc:
+        for url in (ASSET_URL, MIRROR_URL):
+            try:
+                _fetch(url, temp)
+                problem = None
+                break
+            except (urllib.error.URLError, OSError, LatexError) as exc:
+                reason = getattr(exc, "reason", None) or exc
+                problem = str(reason) if not isinstance(exc, LatexError) else str(exc)
+        if problem is not None:
+            raise LatexError(f"Could not download the LaTeX renderer: {problem.rstrip('.')}. "
+                             "Check your internet connection.")
+        try:
+            _move_into_place(temp, target)
+        except OSError as exc:
+            raise LatexError(f"The LaTeX renderer was downloaded but could not be saved ({exc.strerror or exc}). "
+                             "Close any program that is scanning the Axis folder and try again.") from exc
+    finally:
         try:
             temp.unlink()
         except OSError:
             pass
-        if isinstance(exc, LatexError):
-            raise
-        raise LatexError(f"Could not download the LaTeX renderer: {exc}") from exc
     _save({**_settings(), "enabled": True})
     return status()
 
@@ -94,6 +134,8 @@ def remove() -> Dict[str, Any]:
         (_folder() / ASSET_NAME).unlink()
     except FileNotFoundError:
         pass
+    except OSError as exc:
+        raise LatexError(f"Could not delete the LaTeX renderer ({exc.strerror or exc}). Try again in a moment.") from exc
     try:
         _folder().rmdir()
     except OSError:
@@ -102,6 +144,6 @@ def remove() -> Dict[str, Any]:
     return status()
 
 
-def script_path() -> Path | None:
+def script_path() -> Optional[Path]:
     info = status()
     return _folder() / ASSET_NAME if info["installed"] else None

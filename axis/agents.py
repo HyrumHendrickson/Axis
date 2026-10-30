@@ -355,7 +355,8 @@ def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False) 
     text = ""
     if chosen:
         text += "\n\nYou have the following skills. Use them when relevant.\n"
-        text += "\n".join(f"\n## {s['name']}\n{s['instructions']}" for s in chosen)
+        text += "\n".join(f"\n## {s['name']}\n{skill_lib.adapt(s['id'], s['instructions']) if s['builtin'] else s['instructions']}"
+                          for s in chosen)
     if uses_files and shared:
         text += "\n\n" + skill_lib.SHARED_WORKSPACE_NOTE
         if "run_python" in names or "run_python_file" in names:

@@ -189,17 +189,29 @@ TOOL_SPECS["run_cas"] = {
         "required": ["code"],
     },
 }
-# These are the names shown to models.  The execution layer keeps run_cas as
-# the compatibility name, while the model receives the concrete backend it
-# can actually use.
-TOOL_SPECS["run_maxima"] = copy.deepcopy(TOOL_SPECS["run_cas"])
-TOOL_SPECS["run_maxima"]["description"] = TOOL_SPECS["run_maxima"]["description"].replace(
-    "Run code in a computer algebra system (CAS)", "Run Maxima code")
-TOOL_SPECS["run_maxima"]["parameters"]["properties"].pop("system", None)
-TOOL_SPECS["run_sympy"] = copy.deepcopy(TOOL_SPECS["run_cas"])
-TOOL_SPECS["run_sympy"]["description"] = TOOL_SPECS["run_sympy"]["description"].replace(
-    "Run code in a computer algebra system (CAS)", "Run a SymPy Python program")
-TOOL_SPECS["run_sympy"]["parameters"]["properties"].pop("system", None)
+# What a model is shown is one concrete action, run_maxima or run_sympy, chosen from what is installed and
+# what the user picked on the CAS page (see model_tools). run_cas stays the name of the action in Axis
+# (allowed lists, the handler) and the one a model sees only when no CAS is installed yet.
+TOOL_SPECS["run_maxima"] = {
+    "description": "Run Maxima code for exact symbolic math: algebra, calculus, equations, series, matrices and "
+    "number theory. The code is a list of Maxima commands, each ending in ; (show the result) or $ (hide it). "
+    "Your folder is the working folder.",
+    "parameters": {
+        "type": "object",
+        "properties": {"code": {"type": "string", "description": "The Maxima commands to run"}},
+        "required": ["code"],
+    },
+}
+TOOL_SPECS["run_sympy"] = {
+    "description": "Run a SymPy program for exact symbolic math: algebra, calculus, equations, series, matrices and "
+    "number theory. The code is a complete Python program that imports sympy and prints its results. "
+    "Your folder is the working folder.",
+    "parameters": {
+        "type": "object",
+        "properties": {"code": {"type": "string", "description": "The complete Python program that uses SymPy"}},
+        "required": ["code"],
+    },
+}
 TOOL_SPECS["read_text"] = {
     "description": "Read the text in a picture (OCR) with a local OCR model and return it. The picture must be a PNG, "
     "JPEG, BMP, TIFF or WebP file in your folder.",
@@ -217,38 +229,83 @@ TOOL_SPECS["read_text"] = {
 }
 
 
+def _shells_here() -> List[str]:
+    """The shells run_terminal can use on this computer, the default first."""
+    names = ["cmd", "powershell", "pwsh"] if os.name == "nt" else ["bash", "sh", "pwsh"]
+    found = [n for n in names if n == "cmd" or shutil.which(n)]
+    try:
+        from . import terminal
+        default = terminal.default_shell_name()
+    except ImportError:
+        default = found[0] if found else "sh"
+    return [default] + [n for n in found if n != default]
+
+
+def tool_spec(name: str) -> Dict[str, Any]:
+    """One action's definition as the model should read it now: the static text in TOOL_SPECS plus what is
+    set up on this computer (the image models, the OCR models and languages, the shells). A copy is
+    returned; TOOL_SPECS itself never changes, so a model that was removed is not mentioned later."""
+    spec = copy.deepcopy(TOOL_SPECS[name])
+    props = spec["parameters"]["properties"]
+    try:
+        if name == "generate_image":
+            models = images.list_models()
+            usable = [m for m in models if not m.get("missing")]
+            if usable:
+                default = images.default_model_id(models)
+                names = ", ".join(m["name"] + (" (default)" if m["id"] == default else "") for m in usable)
+                spec["description"] = ("Make a picture from a text description with one of the local image models: "
+                                       f"{names}. The picture is saved as a PNG in Axis's images folder (not in your "
+                                       "folder) and shown to the user. Describe the subject, style, lighting and "
+                                       "composition in the prompt.")
+                props["model"]["description"] = ("Name of the image model to use, one of: "
+                                                 + ", ".join(m["name"] for m in usable)
+                                                 + " (optional; the default if omitted)")
+        elif name == "read_text":
+            from . import ocr
+            usable = [m for m in ocr.list_models() if m.get("usable")]
+            if usable:
+                props["model"]["description"] = ("OCR model to use, one of: " + ", ".join(m["id"] for m in usable)
+                                                 + " (optional; a sensible installed model if omitted)")
+                langs = [m["model"] for m in usable if m.get("engine") == "tesseract"]
+                if langs:
+                    props["languages"]["description"] = ("For Tesseract only: languages to read, joined with +, "
+                                                         "from the installed ones: " + ", ".join(langs)
+                                                         + " (optional)")
+        elif name in ("run_terminal", "run_terminal_file"):
+            shells = _shells_here()
+            props["shell"]["description"] = (f"Optional shell: one of {', '.join(shells)} (auto uses {shells[0]}, "
+                                             "which is also the default if omitted)")
+    except Exception:   # a setup problem must never stop a reply; the static text is still correct
+        return copy.deepcopy(TOOL_SPECS[name])
+    return spec
+
+
 def specs(names: List[str]) -> List[Dict[str, Any]]:
     """Tool definitions in the OpenAI/Ollama function format."""
-    return [{"type": "function", "function": {"name": n, **TOOL_SPECS[n]}} for n in names if n in TOOL_SPECS]
+    return [{"type": "function", "function": {"name": n, **tool_spec(n)}} for n in names if n in TOOL_SPECS]
 
 
-def model_tools(names: List[str]) -> List[str]:
-    """Return model-facing names, selected from the current local setup."""
-    out: List[str] = []
-    cas_name = "run_cas"
+def cas_tool_name() -> str:
+    """The name of the CAS action a model is shown: run_maxima or run_sympy for the system that is in use
+    (the one chosen on the CAS page, else the first installed), run_cas when none is installed."""
     try:
         from . import cas
         selected = cas.default_system()
-        if selected in ("maxima", "sympy"):
-            cas_name = "run_" + selected
     except Exception:
-        pass
+        selected = None
+    return "run_" + selected if selected in ("maxima", "sympy") else "run_cas"
+
+
+def model_tools(names: List[str]) -> List[str]:
+    """The names of the actions a model is shown for an agent that has `names`, chosen from the current setup:
+    the CAS action becomes run_maxima or run_sympy."""
+    out: List[str] = []
+    cas_name = cas_tool_name() if "run_cas" in names else "run_cas"
     for name in names:
         shown = cas_name if name == "run_cas" else name
         if shown not in out:
             out.append(shown)
-    if "generate_image" in out:
-        try:
-            from . import images
-            available = [m.get("name") or m.get("id") for m in images.status().get("models", [])
-                         if isinstance(m, dict) and m.get("exists") is not False]
-            if available:
-                TOOL_SPECS["generate_image"]["description"] = (
-                    "Make a picture with one of the configured local image models: " + ", ".join(available) + ". "
-                    "Choose the model argument only when the user asks; otherwise use the default. "
-                    "Describe the subject, style, lighting and composition in the prompt.")
-        except Exception:
-            pass
     return out
 
 

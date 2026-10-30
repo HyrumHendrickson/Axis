@@ -210,6 +210,27 @@ class TestRunning(CasBase):
         # Python sent without naming the system goes to SymPy.
         self.assertIn("42", tools.run_cas(tools.Places(self.ws), {"code": "import math\nprint(42)"}))
 
+    def test_the_agent_is_shown_only_the_cas_in_use(self):
+        self.fake_maxima()
+        self.fake_sympy()
+        agent = agents.Agent(name="m", skills=["cas"])
+        for chosen, shown, hidden in (("maxima", "run_maxima", "run_sympy"), ("sympy", "run_sympy", "run_maxima")):
+            cas.save_settings({"default": chosen})
+            self.assertEqual(tools.model_tools(["run_cas"]), [shown])
+            self.assertEqual([t["function"]["name"] for t in tools.specs([shown])], [shown])
+            system = agents.skills_prompt(agent.skills, agents.tool_names(agent))
+            self.assertIn(shown, system)
+            self.assertNotIn(hidden, system)
+            self.assertNotIn("run_cas", system)
+            self.assertNotIn("system", tools.tool_spec(shown)["parameters"]["properties"])
+            # a call to the shown name runs that system
+            name, args = tools.normalize_call(shown, {"code": "1"}, ["run_cas"])
+            self.assertEqual((name, args["system"]), ("run_cas", chosen))
+
+    def test_the_agent_is_told_when_no_cas_is_installed(self):
+        self.assertEqual(tools.model_tools(["run_cas"]), ["run_cas"])
+        self.assertIn("No computer algebra system is installed", tool_skills.adapt("cas", "Use run_cas."))
+
     def test_settings_path(self):
         prog = self.fake_maxima()
         os.environ.pop("AXIS_MAXIMA")

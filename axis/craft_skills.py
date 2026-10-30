@@ -14,20 +14,23 @@ written. Edit the text of a skill on the Skills page if a newer release changes 
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 GROUP = "Art Craft apps"
 TOOLS = ["run_terminal", "run_terminal_file"]
 
-# What every skill says first. {cli} is the name of the program.
+# What every skill says first. {cli} is the name of the program. Quoting advice is added by adapt() for the
+# shell this computer uses; the examples below are written for bash.
 _START = (
     "Run {cli} with run_terminal; it is already on the PATH when the app is installed on the Art Craft page. "
-    "If the shell cannot find it, say so and tell the user to install the app there (on macOS the app download "
-    "has no command-line program). Use relative paths in your working folder. Never overwrite an original file: "
-    "write results to new names, check them, and tell the user which files you made. "
-    "Quote JSON for the shell: single quotes in bash, sh and pwsh; in the default Windows shell (cmd) use double "
-    "quotes and write each inner quote as \\\". "
+    "If the shell cannot find it, say so and tell the user to install the app there. Use relative paths in your "
+    "working folder. Never overwrite an original file: write results to new names, check them, and tell the user "
+    "which files you made. "
 )
+_QUOTE_POSIX = "Quote JSON for the shell with single quotes, as in the examples. "
+_QUOTE_CMD = ("The examples below are written for bash. In the default Windows shell (cmd) use double quotes "
+              "around JSON and write each inner quote as \\\", or set shell to powershell or pwsh and keep the single quotes. ")
 
 # (id, app name, what it is for, instructions after the common start)
 _APPS: List[Tuple[str, str, str, str]] = [
@@ -195,6 +198,35 @@ _APPS: List[Tuple[str, str, str, str]] = [
      "info says what was not imported). --no-system-fonts makes renders match on every computer. Use "
      "--automation-read-root DIR and --automation-write-root DIR to confine a run to one folder."),
 ]
+
+
+IDS = {a[0] for a in _APPS}
+
+
+def adapt(app_id: str, instructions: str) -> str:
+    """The skill's text plus the facts of this computer: quoting for its shell, and whether the app is installed."""
+    from . import artcraft, engines, tools
+    cli = app_id + "-cli"
+    try:
+        shell = tools._shells_here()[0]
+        installed = artcraft.cli_program(app_id) is not None
+        app_in = artcraft._app_info(app_id) is not None
+        mac = engines.this_platform()[0] == "macos"
+    except Exception:
+        return instructions
+    quote = _QUOTE_CMD if shell == "cmd" else _QUOTE_POSIX
+    text = instructions
+    if installed:
+        state = f"{cli} is installed and on the PATH."
+    elif app_in and mac:
+        state = (f"The app is installed but macOS downloads have no command-line program, so {cli} is not "
+                 "available: tell the user, and do not try other ways to run the app.")
+    elif app_in:
+        state = f"The app is installed but {cli} was not found in it: tell the user to update the app on the Art Craft page."
+    else:
+        state = (f"{cli} is not installed on this computer: do not run it. Tell the user to install the app on the "
+                 "Art Craft page (under Tools).")
+    return f"{text.rstrip()} {quote}{state}"
 
 
 def build() -> List[Dict[str, Any]]:
