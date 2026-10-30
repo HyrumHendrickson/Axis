@@ -17,7 +17,7 @@ import time
 import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path, PosixPath
+from pathlib import Path
 from unittest import mock
 
 from axis import artcraft, engines, jobs
@@ -478,15 +478,27 @@ class TestRust(ArtBase):
         vcvars.write_text("", encoding="utf-8")
         engine_root = Path(self.home) / "engines"
         result = mock.Mock(returncode=0, stdout="PATH=C:\\msvc\\bin\nVCToolsInstallDir=C:\\msvc\\\n")
-        with mock.patch.object(artcraft.os, "name", "nt"), mock.patch.object(artcraft, "Path", PosixPath), \
+        # Path is this system's own kind (the test also runs on Windows, where PosixPath cannot be made), and
+        # no real Visual Studio Installer is looked for: the folders named here do not exist.
+        nowhere = str(Path(self.home) / "no-program-files")
+        native = type(Path())      # looked up before os.name is changed, which would pick the wrong kind
+        with mock.patch.object(artcraft.os, "name", "nt"), mock.patch.object(artcraft, "Path", native), \
+                mock.patch.dict(os.environ, {"ProgramFiles(x86)": nowhere, "ProgramFiles": nowhere}), \
                 mock.patch.object(artcraft.engines, "root", return_value=engine_root), \
                 mock.patch.object(artcraft.subprocess, "run", return_value=result) as run:
             env = artcraft._vcvars_env()
+            again = artcraft._vcvars_env()
         self.assertEqual(env["VCToolsInstallDir"], "C:\\msvc\\")
+        self.assertEqual(again, env)
+        self.assertEqual(run.call_count, 1)     # a found environment is kept, not looked for again
+        # cmd.exe gets one finished command line: a list would reach it with backslash-escaped quotes
         command = run.call_args.args[0]
-        self.assertIn("call ", command[4])
-        self.assertIn("vcvarsall.bat", command[4])
-        self.assertIn("amd64", command[4])
+        self.assertIsInstance(command, str)
+        self.assertNotIn('\\"', command)
+        self.assertIn(" /s /c ", command)
+        self.assertIn('call "', command)
+        self.assertIn("vcvarsall.bat", command)
+        self.assertIn("amd64", command)
 
     @POSIX_ONLY
     def test_install_rust_into_its_own_folder_without_touching_the_path(self):

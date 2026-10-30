@@ -197,10 +197,28 @@ def cli_dirs() -> List[str]:
     return found
 
 
+_VC_CACHE: Dict[str, Dict[str, str]] = {}
+
+
 def _vcvars_env() -> Dict[str, str]:
-    """Return the MSVC build environment, or {} when C++ Build Tools are absent."""
+    """Return the MSVC build environment, or {} when C++ Build Tools are absent.
+
+    Finding it starts vswhere and cmd.exe, which takes seconds, and every program an agent starts asks for it.
+    A found environment is therefore kept for the rest of the run; "not found" is never kept, so installing the
+    tools is noticed at once.
+    """
     if os.name != "nt":
         return {}
+    key = str(engines.root())
+    if key not in _VC_CACHE:
+        found = _find_vcvars_env()
+        if not found:
+            return {}
+        _VC_CACHE[key] = found
+    return dict(_VC_CACHE[key])
+
+
+def _find_vcvars_env() -> Dict[str, str]:
     base = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or ""
     candidates = [Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"] if base else []
     candidates += [Path(os.environ.get("ProgramFiles", "")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"]
@@ -246,7 +264,11 @@ def _vcvars_env() -> Dict[str, str]:
                 # A batch file must be called so cmd.exe returns and executes
                 # `set` afterward.
                 command = f'call "{vcvars}"' + (" " + " ".join(args) if args else "") + " && set"
-                r = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command],
+                # Hand cmd.exe one finished command line. A list would be quoted by Python with backslash
+                # escapes (\"), which cmd.exe does not understand, so the script would never run. With /s the
+                # outer quotes are removed and the inner ones are kept.
+                comspec = os.environ.get("COMSPEC", "cmd.exe")
+                r = subprocess.run(f'"{comspec}" /d /s /c "{command}"',
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except (OSError, subprocess.SubprocessError):

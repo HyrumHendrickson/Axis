@@ -473,7 +473,7 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = 
     return result
 
 
-def _run_capped(cmd: List[str], code: str, cwd: str, env: Dict[str, str], timeout: float,
+def _run_capped(cmd: Union[str, List[str]], code: str, cwd: str, env: Dict[str, str], timeout: float,
                 kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Run cmd with code on its standard input. Returns {exit, stdout, stderr, timed_out}.
 
@@ -724,13 +724,15 @@ def _shell_executable(name: Any, env: Dict[str, str]) -> Tuple[str, str]:
     return program, requested
 
 
-def _shell_command(program: str, shell: str, script: Path) -> List[str]:
+def _shell_command(program: str, shell: str, script: Path) -> Union[str, List[str]]:
     if shell in ("bash", "sh"):
         return [program, str(script)]
     if shell in ("powershell", "pwsh"):
         return [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)]
     if shell == "cmd":
-        return [program, "/D", "/Q", "/C", f'call "{script}"']
+        # One finished command line: Python would quote a list entry holding quotes with backslash escapes,
+        # which cmd.exe cannot read. /S removes the outer quotes and keeps the inner ones (a path with spaces).
+        return f'"{program}" /D /Q /S /C "call "{script}""'
     raise ToolError("Unknown shell.")
 
 

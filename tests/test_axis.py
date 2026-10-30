@@ -2096,15 +2096,18 @@ class TestProgramTools(Base):
         self.all = list(tools.HANDLERS)
 
     def test_terminal_code_and_file(self):
-        ok, out = tools.execute(self.ws, "run_terminal", {"code": "printf 'terminal-ok\\n'"}, self.all)
+        # echo and a file named for the system's own shell work the same way everywhere
+        ok, out = tools.execute(self.ws, "run_terminal", {"code": "echo terminal-ok"}, self.all)
         self.assertTrue(ok, out)
         self.assertIn("terminal-ok", out)
-        (self.ws / "hello.sh").write_text("echo file-ok\n")
-        ok, out = tools.execute(self.ws, "run_terminal_file", {"path": "hello.sh"}, self.all)
+        name, text = ("hello.cmd", "@echo file-ok\r\n") if os.name == "nt" else ("hello.sh", "echo file-ok\n")
+        (self.ws / name).write_text(text)
+        ok, out = tools.execute(self.ws, "run_terminal_file", {"path": name}, self.all)
         self.assertTrue(ok, out)
-        self.assertIn("Ran hello.sh", out)
+        self.assertIn("Ran " + name, out)
         self.assertIn("file-ok", out)
 
+    @unittest.skipIf(os.name == "nt", "the stand-in compiler is a shell script, and Windows would install the C++ tools")
     def test_rust_code_and_file(self):
         fake_bin = self.ws / "fake-bin"
         fake_bin.mkdir()
@@ -2120,6 +2123,14 @@ class TestProgramTools(Base):
         self.assertTrue(ok, out)
         self.assertIn("Ran hello.rs", out)
         self.assertFalse((self.ws / ".axis-tmp").exists())
+
+    def test_cmd_gets_one_command_line_it_can_read(self):
+        # Python writes a list entry that holds quotes with backslash escapes, and cmd.exe cannot read them
+        line = tools._shell_command(r"C:\Windows\System32\cmd.exe", "cmd", Path(r"C:\My Files\ws\program.cmd"))
+        self.assertIsInstance(line, str)
+        self.assertNotIn('\\"', line)
+        self.assertEqual(line, r'"C:\Windows\System32\cmd.exe" /D /Q /S /C "call "C:\My Files\ws\program.cmd""')
+        self.assertEqual(tools._shell_command("/bin/bash", "bash", Path("/w/program.sh")), ["/bin/bash", "/w/program.sh"])
 
     def test_program_aliases_and_paths(self):
         self.assertEqual(tools.normalize_call("rust", {"code": "fn main() {}"}, ["run_rust"])[0], "run_rust")

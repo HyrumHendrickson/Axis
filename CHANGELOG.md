@@ -4,6 +4,14 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Fixed
+- On Windows, finding the Microsoft C++ build tools never worked: `cmd.exe` was given a command with backslash-escaped quotes, which it cannot read. Axis then reported Rust as not installed or unverifiable, and started the build tools installer again each time. `cmd.exe` now gets one command line it can read. The same fix makes the terminal action work with `cmd` on Windows.
+- A found C++ build environment is remembered for the rest of the run, so programs an agent starts no longer wait for it each time.
+- The Windows tests no longer fail: the build-tools test uses the system's own path type, the terminal test uses commands every shell has, and the Rust test (which needs a shell-script compiler) is skipped on Windows instead of starting a real installer.
+
+### Changed
+- The Models sub-tabs (Chat models, Image models, OCR models, Engine settings) are a column beside the page, like the file list in the Workspace, instead of at the bottom of the sidebar.
+
 ## [4.3.3] - 2026-10-29
 
 ### Fixed

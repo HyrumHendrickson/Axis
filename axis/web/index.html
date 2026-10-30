@@ -154,10 +154,21 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .msg-stats { color: var(--muted); font-size: 12px; }
 .msg-note { color: var(--muted); font-size: 12px; font-style: italic; }
 .nav-item.busy small { color: var(--panel-ink); }
-/* Models sub-tabs: shown under Models only while the Models page is open */
-.nav-sub { padding: 2px 0 6px 14px; margin-left: 10px; border-left: 1px solid var(--panel-line); }
-.nav-sub .nav-item { padding: 5px 10px; font-size: 14px; }
-.nav-sub .nav-item small { display: inline; margin-left: 6px; }
+/* Models sub-tabs: a column beside the Models page, like the file list in the Workspace */
+.models-split { display: grid; grid-template-columns: minmax(170px, 220px) minmax(0, 1fr); flex: 1; min-height: 0; }
+.models-tabs { overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); }
+.models-tab { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: var(--ink); padding: 11px 16px; cursor: pointer; font: inherit; }
+.models-tab:hover, .models-tab:focus-visible { background: var(--accent-soft); }
+.models-tab[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
+.models-tab .busy-dot { background: var(--ok); margin: 0; }
+.models-split > .editor { min-width: 0; }
+@media (max-width: 760px) {
+  .models-split { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .models-tabs { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .models-tab { width: auto; flex: none; border-bottom: 0; white-space: nowrap; }
+  .models-tab[aria-current="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
+}
 .busy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--panel-ink); margin-right: 6px; animation: pulse 1.2s infinite; vertical-align: middle; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin: 0 6px; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--ok); }
@@ -872,12 +883,6 @@ function renderNav() {
     item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
     item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
     item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
-    v.kind === "models" ? h("div", { class: "nav-sub", role: "group", "aria-label": "Models sections" },
-      MODEL_TABS.map(([key, label]) => {
-        const busy = runningJobs(S.manage).some((j) => jobTab(j) === key);
-        return h("button", { class: "nav-item" + (busy ? " busy" : ""), "aria-current": S.modelsTab === key ? "true" : "false",
-          onclick: () => openModelsTab(key) }, label, busy ? h("small", {}, h("span", { class: "busy-dot", "aria-hidden": "true" })) : null);
-      })) : null,
   );
 }
 
@@ -3447,7 +3452,7 @@ function keepPlace(draw) {
   if (id) { const el = $(id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (sel && el.setSelectionRange) try { el.setSelectionRange(sel[0], sel[1]); } catch { /* not a text field */ } } }
 }
 
-/* --- the Models page and its sub-tabs (listed in the sidebar under Models while this page is open) */
+/* --- the Models page and its sub-tabs (a column beside the page, like the Workspace file list) */
 const MODEL_TABS = [["chat", "Chat models"], ["image", "Image models"], ["ocr", "OCR models"], ["engines", "Engine settings"]];
 const OCR_ENGINES = ["tesseract", "pytorch"];
 function jobTab(j) {
@@ -3462,6 +3467,13 @@ function openModelsTab(key) {
   $("app").classList.remove("menu-open");
   renderNav(); renderModels();
   const sc = $("models-scroll"); if (sc) sc.scrollTop = 0;
+}
+function modelsTabs(current) {
+  return h("nav", { class: "models-tabs", "aria-label": "Models sections" }, MODEL_TABS.map(([key, label]) => {
+    const busy = runningJobs(S.manage).some((j) => jobTab(j) === key);
+    return h("button", { class: "models-tab", "aria-current": current === key ? "true" : "false", onclick: () => openModelsTab(key) },
+      label, busy ? h("span", { class: "busy-dot", title: "Working\u2026", "aria-hidden": "true" }) : null);
+  }));
 }
 function activity(m, tab) {
   // Engine installs started from a model tab are shown there too.
@@ -3481,7 +3493,8 @@ function renderModels() {
   if (!d) loadModels();
   if (!m || !m.llamacpp || !d) {
     const msg = m && m.error ? m.error : "Reading model details\u2026";
-    return fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, h("p", { class: "hint" }, msg))));
+    return fill($("main"), bar, h("div", { class: "models-split" }, modelsTabs(tab),
+      h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, h("p", { class: "hint" }, msg)))));
   }
   const body = [];
   if (S.manageError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.manageError, " ",
@@ -3508,7 +3521,8 @@ function renderModels() {
       h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")),
       ocrSettingsCard(m));
   }
-  keepPlace(() => fill($("main"), bar, h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body))));
+  keepPlace(() => fill($("main"), bar, h("div", { class: "models-split" }, modelsTabs(tab),
+    h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body)))));
   scheduleManage();
 }
 
