@@ -173,6 +173,36 @@ TOOL_SPECS["generate_image"] = {
         "required": ["prompt"],
     },
 }
+TOOL_SPECS["run_cas"] = {
+    "description": "Run code in a computer algebra system (CAS) for exact symbolic math: algebra, calculus, equations, "
+    "series, matrices and number theory. Maxima code is a list of Maxima commands, each ending in ; (show the result) "
+    "or $ (hide it). SymPy code is a complete Python program that imports sympy and prints its results. "
+    "Your folder is the working folder.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "The Maxima commands or the SymPy Python program to run"},
+            "system": {"type": "string", "enum": ["maxima", "sympy"],
+                       "description": "Which CAS to use (optional; the one chosen on the CAS page if omitted)"},
+        },
+        "required": ["code"],
+    },
+}
+TOOL_SPECS["read_text"] = {
+    "description": "Read the text in a picture (OCR) with a local OCR model and return it. The picture must be a PNG, "
+    "JPEG, BMP, TIFF or WebP file in your folder.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "The picture, relative to your folder, e.g. scans/page1.png"},
+            "model": {"type": "string", "description": "OCR model to use, e.g. tesseract:eng (optional; a sensible "
+                      "installed model if omitted)"},
+            "languages": {"type": "string", "description": "For Tesseract only: languages to read, e.g. eng+lat "
+                          "(optional; installed languages only)"},
+        },
+        "required": ["path"],
+    },
+}
 
 
 def specs(names: List[str]) -> List[Dict[str, Any]]:
@@ -460,12 +490,15 @@ def _find_python() -> str:
     return sys.executable
 
 
-def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "") -> Dict[str, Any]:
+def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "",
+             python: Optional[str] = None) -> Dict[str, Any]:
     """Run Python code under the guard. Returns {exit, stdout, stderr, timed_out}.
 
     The guard protects the personal folder (and the shared folder, when given);
     cwd, which must be inside one of them, is the working directory (the personal
     folder by default). script is the file name shown in tracebacks and sys.argv.
+    python is another interpreter to use (the CAS page's SymPy environment); by
+    default the user's own Python runs the code.
     """
     p = places(where)
     ws = p.personal
@@ -491,7 +524,7 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = 
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = None
     try:
-        for exe in dict.fromkeys([python_executable(), sys.executable]):
+        for exe in ([python] if python else dict.fromkeys([python_executable(), sys.executable])):
             try:
                 result = _run_capped([exe, "-c", BOOTSTRAP], code, str(cwd or ws), env, PYTHON_TIMEOUT, kwargs)
                 break
@@ -983,10 +1016,14 @@ TOOL_ALIASES = {
     "draw": "generate_image", "draw_image": "generate_image", "text_to_image": "generate_image",
     "txt2img": "generate_image", "image_generation": "generate_image", "generate_picture": "generate_image",
     "stable_diffusion": "generate_image", "paint": "generate_image",
+    "cas": "run_cas", "maxima": "run_cas", "sympy": "run_cas", "run_maxima": "run_cas", "run_sympy": "run_cas",
+    "computer_algebra": "run_cas", "symbolic_math": "run_cas", "algebra": "run_cas",
+    "ocr": "read_text", "read_image_text": "read_text", "image_to_text": "read_text", "extract_text": "read_text",
+    "read_text_from_image": "read_text", "run_ocr": "read_text", "tesseract": "read_text",
 }
 ARG_ALIASES = {
     "path": ("path", "filename", "file_name", "file", "file_path", "filepath", "name", "directory", "dir",
-             "folder", "folder_path", "folder_name", "dirname", "location"),
+             "folder", "folder_path", "folder_name", "dirname", "location", "image", "image_path", "picture"),
     "content": ("content", "contents", "text", "data", "body", "file_content", "value"),
     "code": ("code", "script", "source", "python_code", "program", "python", "source_code", "cmd", "command"),
     "query": ("query", "q", "search", "search_query", "search_term", "term", "terms", "keywords", "topic", "text"),
@@ -1001,6 +1038,8 @@ ARG_ALIASES = {
     "negative_prompt": ("negative_prompt", "negative", "neg_prompt", "avoid"),
     "steps": ("steps", "num_steps", "sampling_steps", "num_inference_steps"),
     "shell": ("shell", "terminal", "interpreter", "language"),
+    "system": ("system", "cas", "engine", "backend"),
+    "languages": ("languages", "language", "lang", "langs"),
 }
 
 
@@ -1066,11 +1105,49 @@ def generate_image(ws: Where, args: Dict[str, Any],
             "The user can see the picture.")
 
 
+def run_cas(where: Where, args: Dict[str, Any]) -> str:
+    """Run Maxima or SymPy code with the agent's folder as the working folder (see cas.py)."""
+    from . import cas
+    code = _require(args, "code")
+    system = args.get("system")
+    if isinstance(code, str) and not system and code.lstrip().startswith(("import ", "from ")):
+        system = "sympy" if cas.installed("sympy") else system   # Python code sent without saying so
+    try:
+        return cas.report(cas.run(where, system, code))
+    except cas.CasError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def read_text(where: Where, args: Dict[str, Any]) -> str:
+    """Read the text in a picture in the agent's folder with an OCR model (see ocr.py)."""
+    from . import ocr
+    rel = _require(args, "path")
+    root, path, prefix = locate(where, rel)
+    if not path.is_file():
+        raise ToolError(f"{rel} is not a file in your folder.")
+    body: Dict[str, Any] = {}
+    if isinstance(args.get("languages"), str) and args["languages"].strip():
+        body["languages"] = args["languages"]
+    try:
+        body["model"] = ocr.pick_model(args.get("model"))
+        result = ocr.run(body, path, lambda _event: None)
+    except ocr.OcrError as exc:
+        raise ToolError(str(exc)) from exc
+    facts = [f"{result.get('words')} words" if result.get("words") is not None else "",
+             f"confidence {round(result['confidence'])}%" if isinstance(result.get("confidence"), (int, float)) else "",
+             f"{result.get('seconds')} s"]
+    head = f"Read {_show(root, path, prefix)} with {result.get('name') or body['model']} ({', '.join(f for f in facts if f)})."
+    text = (result.get("text") or "").strip()
+    return head + ("\n" + _clip(text, MAX_READ) if text else "\nNo text was found in the picture.")
+
+
 # File management is intentionally not exposed as an agent skill. Agents can use
 # the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
 # to the user.
 FILE_TOOLS = ()
 EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file")
+# Actions that work in the agent's folder, so the agent is told about the folder.
+FOLDER_TOOLS = EXECUTION_TOOLS + ("run_cas", "read_text")
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     # These handlers remain available to the user-facing Workspace and to
     # compatibility code, but are no longer advertised by any agent skill.
@@ -1086,6 +1163,8 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "run_terminal": run_terminal,
     "run_terminal_file": run_terminal_file,
     "generate_image": generate_image,
+    "run_cas": run_cas,
+    "read_text": read_text,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }
 

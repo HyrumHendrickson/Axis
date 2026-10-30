@@ -98,6 +98,13 @@ Routes:
   POST   /api/artcraft/remove               delete an installed app (all its files), or Rust {app}
   POST   /api/artcraft/check                ask whether newer versions exist; answers like GET /api/artcraft
   POST   /api/artcraft/open                 start an installed app {app}; it keeps running if Axis stops
+  GET    /api/cas                           Maxima and SymPy: what is installed, settings, the default, and jobs
+  PUT    /api/cas/settings                  the Maxima path and the CAS agents use {maxima?, default?: maxima|sympy|""}
+  POST   /api/cas/install                   install Maxima or SymPy in the background {system: maxima|sympy}
+                                            (cancel it, or clear it from the list, with the /api/manage/jobs routes)
+  POST   /api/cas/remove                    delete the SymPy environment {system: sympy}
+  POST   /api/cas/run                       run code in the workspace folder {system?, code}; answers
+                                            {system, exit, stdout, stderr, timed_out, question}
 """
 
 from __future__ import annotations
@@ -118,7 +125,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
 from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -863,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
-                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError) as exc:
+                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -1096,6 +1103,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, artcraft.check_updates())
             if parts[2:] == ["open"] and method == "POST":
                 return self._json(200, artcraft.open_app(self._body()))
+
+        elif n >= 2 and parts[1] == "cas":
+            if n == 2 and method == "GET":
+                return self._json(200, cas.status())
+            if parts[2:] == ["settings"] and method == "PUT":
+                return self._json(200, cas.save_settings(self._body()))
+            if parts[2:] == ["install"] and method == "POST":
+                return self._json(202, cas.install(self._body()))
+            if parts[2:] == ["remove"] and method == "POST":
+                return self._json(200, cas.remove(self._body()))
+            if parts[2:] == ["run"] and method == "POST":
+                body = self._body()
+                if not isinstance(body, dict):
+                    raise cas.CasError("Request body must be a JSON object.")
+                root = workspace_root()
+                root.mkdir(parents=True, exist_ok=True)
+                # The user's own code, like the Workspace Run button: not checked the way an agent's is.
+                return self._json(200, cas.run(tools.Places(root), body.get("system"), body.get("code"), checked=False))
 
         elif n >= 2 and parts[1] == "skills":
             if n == 2 and method == "GET":

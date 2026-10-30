@@ -19,11 +19,13 @@ This page explains how Axis is put together, so you can find the right file befo
   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
   |     +-- craft_skills.py                          (one skill for each Craft app)      |
+  |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
   |     +-- artcraft.py                                  (Craft apps and Rust: install, open) |
+  |     +-- cas.py ------------------------------------> maxima / SymPy (cas-python)     |
   |     +-- procs.py                                     (programs Axis started)         |
   |     +-- terminal.py                                  (shells: Terminal, Workspace)   |
   |     +-- updates.py                                   (update check against GitHub)   |
@@ -68,6 +70,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 | Programs Axis started | `~/Axis/run/` | `procs.py`, `instances.py` |
 | Downloaded models | `~/Axis/models/` | `hub.py`, `manager.py`, `ocr.py` |
 | Engines | `~/Axis/engines/` | `engines.py`, `ocr.py` |
+| Computer algebra (SymPy environment, settings) | `~/Axis/engines/cas-python/`, `~/Axis/engines/cas.json`, `~/Axis/cas-settings.json` | `cas.py` |
 | Craft apps and portable Rust | `~/Axis/engines/artcraft/`, `~/Axis/engines/rust/`, `~/Axis/engines/artcraft.json` | `artcraft.py` |
 | Interface preferences (theme, drafts, open chat) | the browser's local storage | `web/index.html` |
 

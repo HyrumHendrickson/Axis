@@ -4,6 +4,15 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.5] - 2026-10-30
+
+### Added
+- **CAS page.** **Tools** has a new **CAS** page for exact math. **Install Maxima** installs Maxima on the computer (winget on Windows, Homebrew on macOS, the package manager on Linux); **Install SymPy** installs SymPy into a Python environment of Axis's own, `Axis/engines/cas-python`. **CAS agents use** chooses the one agents use, **Maxima path** points Axis at a copy it does not find, and **Try it** runs code in the workspace folder. Settings are kept in `Axis/cas-settings.json`.
+- **A skill for each tool.** Agents' settings have a **Tools** group with three built-in skills: **CAS** (the `run_cas` action), **Images** (`generate_image`, which no skill offered since 4.3.3) and **OCR** (the new `read_text` action, which reads a picture in the agent's folder). The Art Craft apps keep their own skills.
+- When Maxima stops to ask a question (“Is n positive?”), Axis stops it and reports the question, instead of letting it ask without end. A plot Maxima saves with a file name is put in the folder the code ran in, never replacing a file already there.
+- Maxima code from an agent is refused when it starts other programs, uses Lisp, or names a file outside the agent's folder. SymPy code runs under the Run Python guard.
+- API: `GET /api/cas`, `PUT /api/cas/settings`, `POST /api/cas/install`, `/remove` and `/run`. Environment variables `AXIS_MAXIMA` and `AXIS_CAS_TIMEOUT`.
+
 ## [4.3.4] - 2026-10-30
 
 ### Added

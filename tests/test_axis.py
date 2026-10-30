@@ -268,7 +268,7 @@ class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
         self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia",
-                               "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
+                               "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
                                "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
                                "figcraft"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})

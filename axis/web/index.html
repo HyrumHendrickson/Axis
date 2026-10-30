@@ -608,7 +608,7 @@ const S = {
   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
   imageSelected: null,          // the picture shown large in the Images tab
   imageError: null,
-  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR)
+  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR, CAS)
   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
   manageError: "",              // the last error from a Models page action
   install: null,                // the install form of the Models sub-tab that is open (one of installs)
@@ -627,6 +627,12 @@ const S = {
   artError: "",                 // the last error from an Art Craft button
   artChecked: false,            // update check done since this page opened
   artChecking: false,
+  cas: null,                    // last /api/cas result: Maxima, SymPy, settings and their install jobs
+  casError: "",                 // the last error from a CAS page button
+  casCode: "",                  // the code in the CAS page's Try it box
+  casSystem: "",                // the CAS the Try it box uses ("" = the default)
+  casResult: null,              // the last Try it result
+  casRunning: false,
 };
 S.install = S.installs.chat;
 
@@ -862,6 +868,7 @@ async function loadSkills() {
 }
 const skillById = (id) => S.skills.find((s) => s.id === id);
 const ART_CRAFT_GROUP = "Art Craft apps";
+const TOOLS_GROUP = "Tools";
 
 function go(view) {
   if (S.view.kind === "workspace" && view.kind !== "workspace" && !leaveEdit()) return;
@@ -870,6 +877,7 @@ function go(view) {
   $("app").classList.remove("menu-open");
   renderNav(); renderMain();
   if (view.kind === "art") loadArt().then(() => { if (!S.artChecked) checkArt(); });
+  if (view.kind === "cas") loadCas().then(() => { if (S.view.kind === "cas") renderCas(); });
 }
 
 function renderNav() {
@@ -889,20 +897,22 @@ function renderNav() {
     toolsGroup(item),
   );
 }
-const TOOL_VIEWS = ["images", "art", "ocr"];
-// Images, Art Craft and OCR sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
+const TOOL_VIEWS = ["images", "art", "ocr", "cas"];
+// Images, Art Craft, OCR and CAS sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
 function toolsGroup(item) {
-  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob };
+  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob,
+    cas: runningJobs(S.cas).length > 0 || S.casRunning };
   const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
   const anyBusy = Object.values(busy).some(Boolean);
   const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
     "aria-controls": "nav-tools", onclick: () => { S.toolsOpen = !open; store("axis.toolsOpen", S.toolsOpen); renderNav(); } },
-    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft and OCR")),
+    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft, OCR and CAS")),
     h("span", { class: "nav-chevron", "aria-hidden": "true" }));
   return [head, open ? h("div", { class: "nav-sub", id: "nav-tools" },
     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), busy.images),
     item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), busy.art),
-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr)) : null];
+    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr),
+    item("CAS", "Exact math with Maxima or SymPy", v.kind === "cas", () => go({ kind: "cas" }), busy.cas)) : null];
 }
 
 async function quitAxis() {
@@ -1011,6 +1021,7 @@ function renderMain() {
   if (S.view.kind === "images") return renderImages();
   if (S.view.kind === "ocr") return renderOcr();
   if (S.view.kind === "art") return renderArt();
+  if (S.view.kind === "cas") return renderCas();
   renderChat();
 }
 
@@ -1741,6 +1752,9 @@ function renderEditor() {
     h("div", { class: "subhead" }, "Actions"),
     h("p", { class: "hint" }, "Choose what this agent can do. File access is available through terminal commands, and the chat Location menu selects where those commands run."),
     pickList(true),
+    h("div", { class: "subhead" }, "Tools"),
+    h("p", { class: "hint" }, "Let this agent use what is set up under Tools: a computer algebra system from the CAS page, image models (Images) and OCR models (OCR)."),
+    pickList(true, TOOLS_GROUP),
     h("div", { class: "subhead" }, "Art Craft apps"),
     h("p", { class: "hint" }, "Let this agent use an app installed on the Art Craft page, through its command line. Each choice also gives the agent terminal commands."),
     pickList(true, ART_CRAFT_GROUP),
@@ -4455,6 +4469,170 @@ function renderArt() {
 
   fill($("main"), bar, h("div", { class: "editor", id: "art-scroll" }, h("div", { class: "form" }, body)));
   const sc = $("art-scroll"); if (sc && top !== null) sc.scrollTop = top;
+}
+
+/* ------------------------------------------------------------------ CAS */
+// Installs Maxima or SymPy for exact math, chooses the one agents use, and runs code to try it.
+let casTimer = null, casLoading = null;
+function loadCas() {
+  if (casLoading) return casLoading;
+  casLoading = api("/api/cas")
+    .then((d) => { const before = S.cas; S.cas = d; onCas(before, d); })
+    .catch((e) => { if (!S.cas || !S.cas.systems) S.cas = { error: e.message, systems: [], jobs: [] }; })
+    .finally(() => { casLoading = null; scheduleCas(); });
+  return casLoading;
+}
+function scheduleCas() {
+  clearTimeout(casTimer);
+  if (runningJobs(S.cas).length > 0) casTimer = setTimeout(loadCas, 1000);   // only while something is installing
+}
+const casSig = (d) => JSON.stringify(d && d.systems ? [d.systems.map((x) => [x.id, x.installed, x.version, x.path]), d.settings, d.default, jobSig(d)] : null);
+function onCas(before, d) {
+  let finished = false;
+  for (const j of d.jobs || []) {
+    if (j.state === "running" || jobsSeen.has(j.id)) continue;
+    jobsSeen.add(j.id);
+    if (!before) continue;
+    finished = true;
+    if (j.state === "done") toast(`Installed ${(j.result && j.result.model) || j.target}`);
+    else if (j.state === "failed") toast(j.label + " failed. Details are on the CAS page.");
+  }
+  if (casSig(before) !== casSig(d)) renderNav();
+  if (S.view.kind !== "cas") return;
+  if (finished || casSig(before) !== casSig(d)) renderCas();
+  else updateJobProgress(d);
+}
+async function casAction(path, body, done) {
+  S.casError = "";
+  try { const r = await api("/api/cas/" + path, { method: path === "settings" ? "PUT" : "POST", body }); if (done) done(r); }
+  catch (e) { S.casError = e.message; }
+  await loadCas();
+  renderNav(); if (S.view.kind === "cas") renderCas();
+}
+async function casJobAction(j, action) {
+  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}` + (action === "cancel" ? "/cancel" : ""), { method: action === "cancel" ? "POST" : "DELETE" }); }
+  catch (e) { S.casError = e.message; }
+  await loadCas();
+  renderNav(); if (S.view.kind === "cas") renderCas();
+}
+function casJobBlock(j) {
+  if (j.state === "running") {
+    return h("div", { class: "job-inline", "data-job": j.id }, progressBar(j),
+      h("div", { class: "job-head" }, h("span", { class: "job-meta job-phase" }, jobMeta(j)),
+        j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => casJobAction(j, "cancel") }, "Cancel") : null));
+  }
+  if (j.state !== "failed") return null;
+  return h("div", { class: "job failed", "data-job": j.id },
+    h("div", { class: "job-head" }, h("strong", {}, j.label + " failed"),
+      h("button", { class: "btn small", onclick: () => casJobAction(j, "dismiss") }, "Dismiss")),
+    h("div", { class: "job-meta job-phase", style: "white-space:pre-wrap" }, jobMeta(j)));
+}
+const CAS_WHAT = {
+  maxima: "A complete computer algebra system: algebra, calculus, equations, series, matrices and number theory. It is installed on your computer like other programs, so other programs can use it too.",
+  sympy: "A computer algebra library for Python. Code for it is a Python program that prints its results.",
+};
+const CAS_EXAMPLE = {
+  maxima: "f(x) := x^3 - 2*x$\nsolve(f(x) = 0, x);\nintegrate(f(x), x, 0, 2);\nfactor(x^4 - 1);",
+  sympy: "from sympy import *\nx = symbols('x')\nprint(solve(x**3 - 2*x, x))\nprint(integrate(sin(x)**2, x))",
+};
+async function runCas() {
+  const c = S.cas, system = S.casSystem || (c && c.default) || "";
+  if (!S.casCode.trim()) S.casCode = CAS_EXAMPLE[system] || "";
+  S.casRunning = true; S.casResult = null; S.casError = "";
+  renderNav(); renderCas();
+  try { S.casResult = await api("/api/cas/run", { method: "POST", body: { system, code: S.casCode } }); }
+  catch (e) { S.casError = e.message; }
+  S.casRunning = false;
+  renderNav(); if (S.view.kind === "cas") renderCas();
+}
+function renderCas() {
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "CAS"),
+    h("button", { class: "btn small", onclick: () => loadCas().then(() => { if (S.view.kind === "cas") renderCas(); }) }, "Refresh"));
+  const c = S.cas;
+  if (!c) {
+    loadCas().then(() => { if (S.view.kind === "cas") renderCas(); });
+    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
+  }
+  if (c.error && !c.systems.length) {
+    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "form-error", role: "alert" }, c.error))));
+  }
+  const before = $("cas-scroll"), top = before ? before.scrollTop : null;
+  const latest = (target) => (c.jobs || []).filter((j) => j.target === target).sort((x, y) => y.started - x.started)[0] || null;
+  const body = [];
+  if (S.casError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.casError, " ",
+    h("button", { class: "link", onclick: () => { S.casError = ""; renderCas(); } }, "Dismiss")));
+  body.push(h("p", { class: "hint" },
+    "A computer algebra system (CAS) does exact math: it solves equations, simplifies, differentiates and integrates with symbols instead of rounded numbers. ",
+    "Install Maxima, SymPy or both. Agents with the CAS skill use the one chosen below."));
+
+  // The two systems
+  const cards = c.systems.map((x) => {
+    const j = latest(x.id), job = j && (j.state === "running" || j.state === "failed") ? j : null;
+    const actions = [];
+    if (x.installed) {
+      actions.push(h("span", { class: "hint", style: "margin:0" }, [x.version ? `${x.name} ${x.version}` : x.name, x.path ? " \u00b7 " + x.path : ""].join("")));
+      if (x.removable) actions.push(h("button", { class: "btn", onclick: () => {
+        if (confirm(`Delete SymPy? Its Python environment is removed from disk. You can install it again later.`)) casAction("remove", { system: x.id }, () => toast("Deleted SymPy"));
+      } }, "Delete"));
+    } else if (x.plan && x.plan.how) {
+      actions.push(h("button", { class: "btn primary", onclick: () => casAction("install", { system: x.id }) }, `Install ${x.name}`));
+    } else if (x.plan && x.plan.command) {
+      actions.push(cmd(x.plan.command));
+    }
+    return h("div", { class: "model-card" },
+      h("h4", {}, x.name, h("span", { class: "chip" + (x.installed ? " on" : "") }, x.installed ? "Installed" : "Not installed")),
+      h("p", { class: "hint", style: "margin:6px 0 0" }, CAS_WHAT[x.id] || ""),
+      !x.installed && x.plan ? h("p", { class: "hint", style: "margin:6px 0 0" }, x.plan.note) : null,
+      job && job.state !== "running" ? casJobBlock(job) : null,
+      h("div", { class: "model-actions" }, job && job.state === "running" ? casJobBlock(job) : actions));
+  });
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Computer algebra systems"), cards));
+
+  // Settings
+  const installedOnes = c.systems.filter((x) => x.installed);
+  const choice = h("select", { "aria-label": "CAS agents use", onchange: (e) => casAction("settings", { default: e.target.value }) },
+    h("option", { value: "", selected: !c.settings.default }, "Automatic"),
+    c.systems.map((x) => h("option", { value: x.id, selected: c.settings.default === x.id }, x.name + (x.installed ? "" : " (not installed)"))));
+  const path = h("input", { type: "text", value: c.settings.maxima || "", placeholder: "Found automatically", autocomplete: "off" });
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Settings"),
+    h("div", { class: "field" }, h("label", {}, "CAS agents use"),
+      h("p", { class: "hint" }, c.default ? `Agents now use ${c.systems.find((x) => x.id === c.default).name} unless they ask for the other one.` : "Nothing is installed yet."), choice),
+    h("div", { class: "field" }, h("label", {}, "Maxima path"),
+      h("p", { class: "hint" }, "Leave empty to find Maxima on your PATH or where its installer puts it (or set AXIS_MAXIMA)."),
+      h("div", { class: "row" }, path, h("button", { class: "btn", onclick: () => casAction("settings", { maxima: path.value }, () => toast("Saved")) }, "Save")))));
+
+  // Try it
+  const system = S.casSystem || c.default || "";
+  if (!S.casCode) S.casCode = CAS_EXAMPLE[system] || "";
+  const code = h("textarea", { class: "ocr-text", style: "min-height:140px", spellcheck: "false", "aria-label": "Code to run",
+    oninput: (e) => { S.casCode = e.target.value; } });
+  code.value = S.casCode;
+  const pick = h("select", { "aria-label": "System", onchange: (e) => {
+    const was = S.casSystem || c.default || "";
+    if (S.casCode === (CAS_EXAMPLE[was] || "")) S.casCode = "";   // swap an untouched example for the other system's
+    S.casSystem = e.target.value; S.casResult = null; renderCas();
+  } }, installedOnes.map((x) => h("option", { value: x.id, selected: x.id === system }, x.name)));
+  const r = S.casResult;
+  let out = null;
+  if (r) {
+    const lines = [];
+    if (r.timed_out) lines.push("Stopped: it ran longer than allowed.");
+    if (r.stdout) lines.push(r.stdout);
+    if (r.stderr) lines.push(r.stderr);
+    if (r.question !== null && r.question !== undefined) lines.push(`Maxima stopped to ask: ${r.question || "a question"} State it first, for example assume(n > 0), and run again.`);
+    if (!lines.length) lines.push("Nothing was printed. End a command with ; to show its result, or use print().");
+    out = h("pre", { class: "ocr-text", style: "min-height:0", "aria-live": "polite" }, lines.join("\n"));
+  }
+  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Try it"),
+    installedOnes.length ? [
+      h("p", { class: "hint" }, "Runs in the workspace folder, so files it saves (a plot, for example) appear in the Workspace."),
+      h("div", { class: "row", style: "margin-bottom:8px" }, pick,
+        h("button", { class: "btn primary", disabled: S.casRunning, onclick: runCas }, S.casRunning ? "Running\u2026" : "Run")),
+      code, out]
+      : h("p", { class: "hint" }, "Install Maxima or SymPy above to try it here.")));
+
+  fill($("main"), bar, h("div", { class: "editor", id: "cas-scroll" }, h("div", { class: "form" }, body)));
+  const sc = $("cas-scroll"); if (sc && top !== null) sc.scrollTop = top;
 }
 
 /* ------------------------------------------------------------------ OCR */

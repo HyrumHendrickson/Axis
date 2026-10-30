@@ -68,7 +68,9 @@ Choose an agent's skills in its settings (**Edit agent**). Every agent chooses f
 | Delete files | Delete files and empty folders |
 | Web search | `web_search` and `fetch_page` |
 | Wikipedia | `wikipedia_search` and `wikipedia_article` |
-| Image generation | `generate_image` with a local Stable Diffusion model |
+| CAS | `run_cas`: exact math with Maxima or SymPy from the **CAS** page. Listed under **Tools**. |
+| Images | `generate_image` with a local Stable Diffusion model, as on the **Images** page. Listed under **Tools**. |
+| OCR | `read_text`: reads the text in a picture in the agent's folder with an OCR model, as on the **OCR** page. Listed under **Tools**. |
 | Shared folder | Lets file actions reach `shared/`, a folder common to all agents with this skill |
 
 | Art Craft apps | One skill for each Craft app (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft). See below. |
@@ -83,6 +85,8 @@ Notes:
 - Web search uses DuckDuckGo by default. If it rate-limits you, set `AXIS_SEARCH_URL` to a [SearXNG](https://docs.searxng.org/) server. `fetch_page` refuses links to your own machine and local network (including private, link-local, and shared addresses such as Tailscale's `100.x.x.x`), checks the address it actually connects to, and gives up on a site that sends its answer too slowly.
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
+
+**Tools skills.** Each page under **Tools** has a skill, listed under **Tools** in an agent's settings: **CAS**, **Images** and **OCR** (the Craft apps have their own, below). Each gives the agent one action that uses what you set up on that page, so set it up there first. The CAS skill uses the system chosen under **CAS agents use** on the CAS page unless the agent asks for the other one. Maxima code from an agent is read before it runs and refused when it starts other programs (`system`), uses Lisp, or names a file outside the agent's folder; SymPy code runs under the same guard as Run Python. Neither is a sandbox. The OCR skill reads pictures in the agent's folder only, with a running PyTorch OCR model if one is on, otherwise Tesseract English, unless the agent names another installed model.
 
 **Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in its folder, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. If a newer app release changes a command, edit the skill's file in `Axis/skills/built-in`.
 
@@ -279,6 +283,18 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 
 **Settings**, at the top right of every page next to **Quit Axis**, chooses the appearance: **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
 
+## CAS
+
+Open **Tools** in the sidebar, then **CAS**, to set up a computer algebra system: a program that does exact math with symbols (solving equations, simplifying, derivatives, integrals, series, matrices) instead of rounded numbers. Agents use it with the **CAS** skill.
+
+- **Maxima** is a complete computer algebra system. **Install Maxima** installs it on your computer: with winget on Windows (which checks the installer before it runs; Windows may ask for permission), with Homebrew on macOS, and with your package manager on Linux (your system asks for your password). Where Axis cannot install it, the card says how to do it yourself. Axis finds an installed Maxima on your PATH or where its installer puts it, or at the **Maxima path** you give. Because Maxima is installed like any other program, Axis does not delete it; remove it the way you remove other programs.
+- **SymPy** is a computer algebra library for Python. **Install SymPy** makes a Python environment of its own in `Axis/engines/cas-python` and installs SymPy into it with pip. No administrator rights are needed. **Delete** removes that environment.
+- **CAS agents use** chooses which one agents use when both are installed. **Automatic** uses Maxima if it is installed, otherwise SymPy.
+- **Try it** runs code in the workspace folder and shows the result. Maxima code is a list of commands, each ending in `;` (show the result) or `$` (hide it). SymPy code is a Python program that prints its results.
+- Maxima sometimes stops to ask a question, such as whether a number is positive. Nobody can answer it here, so Axis stops Maxima and shows the question; tell Maxima the answer first, for example `assume(n > 0)`, and run the code again.
+- A plot saved with a file name, such as `plot2d(sin(x), [x, 0, 6], [png_file, "plot.png"])`, is put in the folder the code ran in. If a file of that name is already there, the new one is called `plot-2.png`; nothing is replaced.
+- Each run may take up to 60 seconds (`AXIS_CAS_TIMEOUT`).
+
 ## Where Axis keeps your data
 
 Everything Axis stores is in one folder on your computer. Nothing is sent anywhere.
@@ -290,8 +306,9 @@ Axis/                       in your home folder (override with AXIS_HOME)
 │       ├── agent.json      the agent's settings
 ├── chats/                  saved conversations, one .json file each
 ├── engine-settings.json    llama-server path, context size, extra arguments
+├── cas-settings.json       the Maxima path and the CAS agents use
 ├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
-│                           artcraft/ (the Craft apps) and rust/ (portable Rust)
+│                           artcraft/ (the Craft apps), rust/ (portable Rust) and cas-python/ (SymPy)
 ├── image-models/           image model definitions, one .json file each
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
 ├── images/                 every picture Axis makes (Images page and agents)

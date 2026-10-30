@@ -1483,6 +1483,26 @@ def _run_torch(mid: str, path: Path, emit: Callable[[Dict[str, Any]], None]) -> 
     return {**result, "name": _display_name(engine, model), "kept_on": False}
 
 
+def pick_model(wanted: Any = None) -> str:
+    """The OCR model an agent uses: the one it named (by id, name or language), else a running PyTorch
+    model, else Tesseract English, else the first usable one."""
+    usable = [m for m in list_models() if m["usable"]]
+    if isinstance(wanted, str) and wanted.strip():
+        w = wanted.strip().lower()
+        for m in usable:
+            if w in (m["id"].lower(), m["model"].lower(), m["name"].lower()):
+                return m["id"]
+        names = ", ".join(m["id"] for m in usable) or "none"
+        raise OcrError(f"There is no usable OCR model called '{wanted}'. Installed: {names}.")
+    if not usable:
+        raise OcrError("No OCR model is installed. Install one on the Models page (OCR models).")
+    run = running_model()
+    for m in usable:
+        if run is not None and run.ready and m["id"] == run.target:
+            return m["id"]
+    return next((m["id"] for m in usable if m["id"] == "tesseract:eng"), usable[0]["id"])
+
+
 def run(body: Dict[str, Any], path: Path, emit: Callable[[Dict[str, Any]], None]) -> Dict[str, Any]:
     """Read the text in a picture. emit receives {"phase"} and {"elapsed"} events while it works."""
     mid = body.get("model")

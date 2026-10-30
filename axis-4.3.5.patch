@@ -1,0 +1,1861 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 64d767e..469b796 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -40,6 +40,7 @@ Run the full suite before you finish. It must pass.
+ | Installing, starting, or stopping models | `axis/manager.py`, `axis/jobs.py`, `axis/procs.py`, `axis/hub.py`, `axis/catalog.py` |
+ | Engine downloads | `axis/engines.py` |
+ | Images or OCR | `axis/images.py`, `axis/ocr.py`, `axis/ocr_worker.py` |
++| Computer algebra (CAS page, `run_cas`) | `axis/cas.py` |
+ | Command-line commands | `axis/cli.py` |
+ 
+ ## Conventions
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 84ed8cf..9e3d4ad 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,15 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++## [4.3.5] - 2026-10-30
++
++### Added
++- **CAS page.** **Tools** has a new **CAS** page for exact math. **Install Maxima** installs Maxima on the computer (winget on Windows, Homebrew on macOS, the package manager on Linux); **Install SymPy** installs SymPy into a Python environment of Axis's own, `Axis/engines/cas-python`. **CAS agents use** chooses the one agents use, **Maxima path** points Axis at a copy it does not find, and **Try it** runs code in the workspace folder. Settings are kept in `Axis/cas-settings.json`.
++- **A skill for each tool.** Agents' settings have a **Tools** group with three built-in skills: **CAS** (the `run_cas` action), **Images** (`generate_image`, which no skill offered since 4.3.3) and **OCR** (the new `read_text` action, which reads a picture in the agent's folder). The Art Craft apps keep their own skills.
++- When Maxima stops to ask a question (“Is n positive?”), Axis stops it and reports the question, instead of letting it ask without end. A plot Maxima saves with a file name is put in the folder the code ran in, never replacing a file already there.
++- Maxima code from an agent is refused when it starts other programs, uses Lisp, or names a file outside the agent's folder. SymPy code runs under the Run Python guard.
++- API: `GET /api/cas`, `PUT /api/cas/settings`, `POST /api/cas/install`, `/remove` and `/run`. Environment variables `AXIS_MAXIMA` and `AXIS_CAS_TIMEOUT`.
++
+ ## [4.3.4] - 2026-10-30
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index 5e843b5..5ee86a5 100644
+--- a/README.md
++++ b/README.md
+@@ -34,7 +34,8 @@ Axis runs a small web app on your computer and opens it in a window of its own.
+ - **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
+ - **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Choose them in each agent's settings.
+ - **Past chats** are saved automatically and can be resumed at any time. Any message you sent can be edited and sent again.
+-- **Tools** in the sidebar holds Images, Art Craft and OCR.
++- **Tools** in the sidebar holds Images, Art Craft, OCR and CAS. Each has a skill for agents.
++- **CAS** installs Maxima or SymPy for exact math (equations, calculus, algebra), for you and for agents.
+ - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp) and saved in `Axis/images`.
+ - **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
+ - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
+diff --git a/axis/VERSION b/axis/VERSION
+index eda862a..e198586 100644
+--- a/axis/VERSION
++++ b/axis/VERSION
+@@ -1 +1 @@
+-4.3.4
++4.3.5
+diff --git a/axis/agents.py b/axis/agents.py
+index 2ab11df..6b488f0 100644
+--- a/axis/agents.py
++++ b/axis/agents.py
+@@ -327,7 +327,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
+         return messages
+ 
+     names = tool_names(agent)
+-    uses_files = any(t in names for t in tool_lib.EXECUTION_TOOLS)
++    uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
+     shared = shared_folder(agent) is not None if uses_files else False
+     system = agent.system_prompt + skills_prompt(agent.skills, names, shared)
+ 
+@@ -347,7 +347,7 @@ def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False)
+     shared folder. build_messages and skill_preview both use this, so what the Skills page shows is
+     exactly what is sent.
+     """
+-    uses_files = any(t in names for t in tool_lib.EXECUTION_TOOLS)
++    uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
+     chosen = [skill_lib.get(i) for i in skill_ids if skill_lib.exists(i)]
+     # A skill that only changes how file actions work means nothing without them.
+     needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
+diff --git a/axis/cas.py b/axis/cas.py
+new file mode 100644
+index 0000000..da7792e
+--- /dev/null
++++ b/axis/cas.py
+@@ -0,0 +1,661 @@
++"""Computer algebra (CAS) for agents and the CAS page: Maxima and SymPy.
++
++Systems
++  * Maxima is a program. Axis uses a copy it finds (the path on the CAS page, AXIS_MAXIMA,
++    the PATH, or the usual install folders) and can install it: on Windows with winget
++    (package MaximaTeam.Maxima; winget checks the installer against the SHA-256 in its
++    manifest), on macOS with Homebrew, and on Linux with the system's package manager
++    (pkexec asks for the password). Axis never removes a system-wide Maxima.
++  * SymPy is a Python library. Axis installs it with pip into a Python environment of its
++    own, ~/Axis/engines/cas-python, made with venv. Axis itself stays standard-library only.
++
++Running code
++  Maxima reads the code on its standard input with --very-quiet, so each result is printed
++  as one line (display2d is off) and an error does not stop the commands after it. When
++  Maxima stops to ask a question ("Is n positive?"), Axis stops it and says so, because
++  nobody is there to answer. SymPy code is Python and runs under the same guard as Run Python.
++
++  Code from an agent is read before it runs: Maxima code that starts programs (system), drops
++  into Lisp, or names a file outside the agent's folder is refused. Like the other guards in
++  tools.py, this keeps ordinary code in its folder; it is not a sandbox.
++
++Files
++    ~/Axis/cas-settings.json       the Maxima path and the CAS agents use by default
++    ~/Axis/engines/cas.json        what Axis installed
++    ~/Axis/engines/cas-python/     the SymPy environment
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++import shutil
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++from pathlib import Path
++from typing import Any, Dict, List, Optional, Tuple
++
++from . import engines, jobs
++from .paths import axis_home, remove_tree
++
++SYSTEMS = ("maxima", "sympy")
++LABELS = {"maxima": "Maxima", "sympy": "SymPy"}
++RUN_TIMEOUT = float(os.environ.get("AXIS_CAS_TIMEOUT", "60"))
++MAX_CODE = 100_000
++MAX_OUTPUT = 1024 * 1024
++WINGET_ID = "MaximaTeam.Maxima"
++QUESTION = "Acceptable answers are"
++
++
++class CasError(Exception):
++    """A problem with the CAS that the user (or an agent) can act on."""
++
++    user_facing = True
++
++
++# ------------------------------------------------------------------ files and settings
++
++
++def _read_json(path: Path, default: Any) -> Any:
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError):
++        return default
++    return data if isinstance(data, type(default)) else default
++
++
++def _write_json(path: Path, data: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_name(path.name + ".tmp")
++    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
++    os.replace(tmp, path)
++
++
++def _settings_path() -> Path:
++    return axis_home() / "cas-settings.json"
++
++
++def _record_path() -> Path:
++    return engines.root() / "cas.json"
++
++
++def env_dir() -> Path:
++    return engines.root() / "cas-python"
++
++
++_LOCK = threading.RLock()
++
++
++def load_settings() -> Dict[str, Any]:
++    data = _read_json(_settings_path(), {})
++    default = data.get("default") if data.get("default") in SYSTEMS else ""
++    return {"maxima": str(data.get("maxima") or ""), "default": default}
++
++
++def save_settings(body: Any) -> Dict[str, Any]:
++    if not isinstance(body, dict):
++        raise CasError("Settings must be a JSON object.")
++    current = load_settings()
++    if "maxima" in body:
++        value = body["maxima"] if body["maxima"] is not None else ""
++        if not isinstance(value, str):
++            raise CasError("The Maxima path must be text.")
++        value = value.strip().strip('"').strip()
++        if len(value) > 1000:
++            raise CasError("The Maxima path is too long.")
++        current["maxima"] = value
++    if "default" in body:
++        if body["default"] not in SYSTEMS + ("", None):
++            raise CasError("Choose Maxima or SymPy.")
++        current["default"] = body["default"] or ""
++    with _LOCK:
++        _write_json(_settings_path(), current)
++    _PROBE.clear()
++    return status()
++
++
++def _remember(key: str, record: Optional[Dict[str, Any]]) -> None:
++    with _LOCK:
++        data = _read_json(_record_path(), {})
++        if record is None:
++            data.pop(key, None)
++        else:
++            data[key] = record
++        _write_json(_record_path(), data)
++
++
++# ------------------------------------------------------------------ Maxima: finding it
++
++
++def _usual_maxima() -> List[Path]:
++    if os.name == "nt":
++        bases: List[Path] = [Path(os.environ.get("SystemDrive", "C:") + "\\")]
++        for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
++            if os.environ.get(var):
++                bases.append(Path(os.environ[var]))
++                if var == "LOCALAPPDATA":
++                    bases.append(Path(os.environ[var]) / "Programs")
++        found: List[Path] = []
++        for base in bases:
++            try:
++                dirs = sorted(base.glob("[Mm]axima*"), reverse=True)   # the newest version first
++            except OSError:
++                continue
++            found += [d / "bin" / "maxima.bat" for d in dirs]
++        return found
++    return [Path(p) for p in ("/opt/homebrew/bin/maxima", "/usr/local/bin/maxima", "/opt/local/bin/maxima",
++                              "/usr/bin/maxima")]
++
++
++def maxima_binary() -> Optional[Path]:
++    """Maxima from the settings, AXIS_MAXIMA, the PATH, or a usual install location."""
++    for value in (load_settings()["maxima"], os.environ.get("AXIS_MAXIMA", "")):
++        if value:
++            p = Path(value).expanduser()
++            if p.is_dir():
++                for cand in (p / "maxima", p / "maxima.bat", p / "bin" / "maxima", p / "bin" / "maxima.bat"):
++                    if cand.is_file():
++                        return cand.resolve()
++            if p.is_file():
++                return p.resolve()
++            found = shutil.which(value)
++            return Path(found).resolve() if found else None
++    found = shutil.which("maxima")
++    if found:
++        return Path(found).resolve()
++    for p in _usual_maxima():
++        try:
++            if p.is_file():
++                return p.resolve()
++        except OSError:
++            pass
++    return None
++
++
++_PROBE: Dict[str, Any] = {}
++_PROBE_TTL = 60.0
++
++
++def maxima_info(binary: Optional[Path] = None) -> Optional[Dict[str, Any]]:
++    """{version, works} for a Maxima program, remembered for a minute."""
++    binary = binary or maxima_binary()
++    if binary is None:
++        return None
++    key = str(binary)
++    hit = _PROBE.get(key)
++    if hit and time.time() - hit[0] < _PROBE_TTL:
++        return hit[1]
++    code, out = engines._quiet_run([str(binary), "--version"], timeout=60)
++    m = re.search(r"Maxima\s+(\d+(?:\.\d+)+\S*)", out)
++    info = {"version": m.group(1) if m else "", "works": code == 0 and bool(m)}
++    _PROBE[key] = (time.time(), info)
++    return info
++
++
++# ------------------------------------------------------------------ Maxima: installing it
++
++
++def _linux_install_command() -> Optional[List[str]]:
++    for prog, cmd in (("apt-get", ["apt-get", "install", "-y", "maxima"]),
++                      ("dnf", ["dnf", "install", "-y", "maxima"]),
++                      ("pacman", ["pacman", "-S", "--noconfirm", "--needed", "maxima"]),
++                      ("zypper", ["zypper", "--non-interactive", "install", "maxima"])):
++        if shutil.which(prog):
++            return cmd
++    return None
++
++
++def _brew() -> Optional[str]:
++    found = shutil.which("brew")
++    if found:
++        return found
++    for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
++        if Path(p).is_file():
++            return p
++    return None
++
++
++def _winget_command() -> List[str]:
++    return [shutil.which("winget") or "winget", "install", "--id", WINGET_ID, "--exact", "--silent",
++            "--accept-package-agreements", "--accept-source-agreements"]
++
++
++def maxima_install_plan() -> Dict[str, Any]:
++    """How Axis would install Maxima here: {how, note, command?}."""
++    osname, _ = engines.this_platform()
++    if osname == "windows":
++        if shutil.which("winget"):
++            return {"how": "winget", "command": "winget install --id " + WINGET_ID + " --exact",
++                    "note": "Axis installs Maxima with winget, which checks the installer before it runs. "
++                            "Windows may ask for permission."}
++        return {"how": None, "note": "Install Maxima from maxima.sourceforge.io, or get App Installer (winget) from "
++                                     "the Microsoft Store, then click Refresh."}
++    if osname == "macos":
++        if _brew():
++            return {"how": "brew", "command": "brew install maxima",
++                    "note": "Axis installs Maxima with Homebrew (brew install maxima)."}
++        return {"how": None, "note": "Install Homebrew from brew.sh, then click Install Maxima. Or install Maxima "
++                                     "yourself and set its path below."}
++    cmd = _linux_install_command()
++    if cmd is None:
++        return {"how": None, "note": "Install Maxima with your system's package manager, then click Refresh."}
++    root = hasattr(os, "geteuid") and os.geteuid() == 0
++    gui = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
++    if root:
++        return {"how": "package", "command": " ".join(cmd), "note": f"Axis runs {' '.join(cmd)}."}
++    if shutil.which("pkexec") and gui:
++        return {"how": "package", "command": "sudo " + " ".join(cmd),
++                "note": f"Axis runs {' '.join(cmd)}; your system asks for your password."}
++    return {"how": None, "command": "sudo " + " ".join(cmd),
++            "note": f"Run this in a terminal, then click Refresh: sudo {' '.join(cmd)}"}
++
++
++def _run_install(cmd: List[str], job: jobs.Job, env: Dict[str, str], what: str) -> None:
++    from . import ocr   # its program runner stops the program when the job is cancelled
++    job.progress(phase="Running " + " ".join(Path(cmd[0]).name if i == 0 else c for i, c in enumerate(cmd)))
++    try:
++        code, lines = ocr._run(cmd, job, on_line=lambda line: job.progress(phase=line[:160]), env=env, timeout=3600)
++    except ocr.OcrError as exc:
++        raise CasError(str(exc)) from exc
++    if code != 0:
++        tail = lines.tail(30)
++        hint = ""
++        if code in (126, 127) and cmd[0] == "pkexec":
++            hint = "The password was not given. "
++        elif "unable to locate package" in tail.lower():
++            hint = "Your package list is out of date: run sudo apt-get update in a terminal first. "
++        elif "no package found" in tail.lower():
++            hint = "winget could not find Maxima. Run winget source update in a terminal, then try again. "
++        raise CasError(f"{hint}Installing {what} failed (code {code}).\n{lines.tail()}")
++
++
++def install_maxima(job: jobs.Job) -> Dict[str, Any]:
++    plan = maxima_install_plan()
++    if plan["how"] is None:
++        raise CasError(plan["note"])
++    if plan["how"] == "winget":
++        job.cancellable = False   # the installer cannot be stopped halfway safely
++        _run_install(_winget_command(), job, {}, "Maxima")
++    elif plan["how"] == "brew":
++        _run_install([_brew() or "brew", "install", "maxima"], job, {"HOMEBREW_NO_ENV_HINTS": "1"}, "Maxima")
++    else:
++        cmd = _linux_install_command() or []
++        if not (hasattr(os, "geteuid") and os.geteuid() == 0):
++            cmd = ["pkexec"] + cmd
++        _run_install(cmd, job, {"DEBIAN_FRONTEND": "noninteractive"}, "Maxima")
++    _PROBE.clear()
++    binary = maxima_binary()
++    if binary is None:
++        raise CasError("Maxima was installed but Axis cannot find it. Set its path on the CAS page.")
++    info = maxima_info(binary) or {}
++    _remember("maxima", {"method": plan["how"], "binary": str(binary), "version": info.get("version"),
++                         "installed": time.strftime("%Y-%m-%dT%H:%M:%S")})
++    return {"system": "maxima", "model": "Maxima " + (info.get("version") or "")}
++
++
++# ------------------------------------------------------------------ SymPy
++
++
++def env_python() -> Optional[Path]:
++    folder = env_dir()
++    for cand in (folder / "Scripts" / "python.exe", folder / "bin" / "python3", folder / "bin" / "python"):
++        if cand.is_file():
++            return cand
++    return None
++
++
++def sympy_info() -> Optional[Dict[str, Any]]:
++    py = env_python()
++    record = _read_json(_record_path(), {}).get("sympy")
++    if py is None or not isinstance(record, dict) or not record.get("version"):
++        return None
++    return {**record, "python": str(py)}
++
++
++def _base_python() -> str:
++    from . import tools
++    return tools.python_executable()
++
++
++def install_sympy(job: jobs.Job) -> Dict[str, Any]:
++    folder = env_dir()
++    folder.parent.mkdir(parents=True, exist_ok=True)
++    py = env_python()
++    if py is None:
++        job.progress(phase="Making a Python environment for SymPy")
++        code, out = engines._quiet_run([_base_python(), "-m", "venv", str(folder)], timeout=600)
++        py = env_python()
++        if code != 0 or py is None:
++            remove_tree(folder)
++            hint = ""
++            if "ensurepip" in out or "venv" in out.lower():
++                hint = ("This Python cannot make environments. On Debian and Ubuntu install python3-venv "
++                        "(sudo apt install python3-venv). ")
++            raise CasError(f"{hint}Making the SymPy environment failed.\n{out.strip()[-800:]}")
++    job.check()
++    _run_install([str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--upgrade", "sympy"],
++                 job, {"PIP_NO_INPUT": "1", "PYTHONUTF8": "1"}, "SymPy")
++    job.progress(phase="Checking that SymPy works")
++    code, out = engines._quiet_run([str(py), "-c", "import sympy; print(sympy.__version__)"], timeout=120)
++    version = out.strip().splitlines()[-1] if code == 0 and out.strip() else ""
++    if not version:
++        raise CasError("SymPy was installed but cannot be loaded.\n" + out.strip()[-800:])
++    _remember("sympy", {"version": version, "installed": time.strftime("%Y-%m-%dT%H:%M:%S")})
++    return {"system": "sympy", "model": "SymPy " + version}
++
++
++# ------------------------------------------------------------------ what the page asks for
++
++
++def _system(body: Any) -> str:
++    if not isinstance(body, dict) or body.get("system") not in SYSTEMS:
++        raise CasError("Choose Maxima or SymPy.")
++    return body["system"]
++
++
++def installed(system: str) -> bool:
++    if system == "maxima":
++        info = maxima_info()
++        return bool(info and info.get("works"))
++    return sympy_info() is not None
++
++
++def install(body: Any) -> Dict[str, Any]:
++    system = _system(body)
++    if installed(system):
++        raise CasError(f"{LABELS[system]} is already installed.")
++    work = install_maxima if system == "maxima" else install_sympy
++    job = jobs.submit("install", "cas", system, f"Installing {LABELS[system]}", work)
++    return {"job": job.public()}
++
++
++def remove(body: Any) -> Dict[str, Any]:
++    """Delete the SymPy environment. A Maxima installed on the system is the user's to remove."""
++    system = _system(body)
++    if system == "maxima":
++        raise CasError("Maxima is installed on your computer, not inside Axis. Remove it the way you remove other "
++                       "programs.")
++    if jobs.busy("cas", system):
++        raise CasError("SymPy is being installed. Wait for it to finish, or cancel it.")
++    remove_tree(env_dir())
++    if env_dir().exists():
++        raise CasError("Some files of the SymPy environment are in use. Try again in a moment.")
++    _remember("sympy", None)
++    return status()
++
++
++def default_system() -> Optional[str]:
++    """The CAS agents use when they do not name one: the chosen one if installed, else the first installed."""
++    chosen = load_settings()["default"]
++    if chosen and installed(chosen):
++        return chosen
++    return next((s for s in SYSTEMS if installed(s)), None)
++
++
++def status() -> Dict[str, Any]:
++    binary = maxima_binary()
++    info = maxima_info(binary) if binary else None
++    record = _read_json(_record_path(), {})
++    sym = sympy_info()
++    return {
++        "systems": [
++            {"id": "maxima", "name": "Maxima", "installed": bool(info and info.get("works")),
++             "version": (info or {}).get("version") or None, "path": str(binary) if binary else None,
++             "by_axis": isinstance(record.get("maxima"), dict), "plan": maxima_install_plan(), "removable": False},
++            {"id": "sympy", "name": "SymPy", "installed": sym is not None, "version": (sym or {}).get("version"),
++             "path": str(env_dir()) if sym else None, "by_axis": True,
++             "plan": {"how": "pip", "note": "Axis makes a Python environment of its own and installs SymPy into "
++                                           "it with pip. No administrator rights are needed."},
++             "removable": sym is not None},
++        ],
++        "settings": load_settings(),
++        "default": default_system(),
++        "jobs": [j for j in jobs.listing() if j["engine"] == "cas"],
++    }
++
++
++# ------------------------------------------------------------------ running code
++
++
++_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
++_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.DOTALL)
++_REFUSED = (
++    (re.compile(r"\bsystem\s*\("), "system() starts other programs"),
++    (re.compile(r":lisp\b|\bto_lisp\b"), "Lisp code can do anything on the computer"),
++    (re.compile(r"(?:^|[^\w?])\?\s*[A-Za-z%*\\]"), "?name reaches Lisp directly (use describe(name) for help)"),
++)
++
++
++def check_maxima_code(where: Any, code: str, cwd: Optional[Path] = None) -> None:
++    """Refuse Maxima code that starts programs, uses Lisp, or names a file outside the folder."""
++    from . import tools
++    p = tools.places(where)
++    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
++    text = _COMMENT.sub(" ", code)
++    bare = _STRING.sub('""', text)
++    for pattern, why in _REFUSED:
++        if pattern.search(bare):
++            raise CasError(f"The code was not run: {why}. Use plain Maxima commands.")
++    base = Path(cwd or p.personal).resolve()
++    for m in _STRING.finditer(text):
++        literal = m.group(1).replace("\\\\", "\\")
++        if literal.strip().lower().endswith((".lisp", ".lsp", ".fasl", ".fas")):
++            raise CasError("The code was not run: Lisp files can do anything on the computer. Use plain Maxima commands.")
++        bad = tools._outside_in(literal, roots, base)
++        if bad:
++            raise CasError(f"The code names '{bad}', which is outside your folder. Only {roots[0]} and the folders "
++                           "inside it can be used. Use paths inside your folder.")
++
++
++def _maxima_program(code: str) -> str:
++    body = code.rstrip()
++    bare = _COMMENT.sub("", body).rstrip()
++    if bare and bare[-1] not in ";$":
++        body += ";"   # without a final ; Maxima waits for more and then reports the end of the input
++    return "display2d:false$ linel:10000$\n" + body + "\n"
++
++
++def _clean_maxima(out: str) -> Tuple[str, Optional[str]]:
++    """Maxima's output without its start-up warnings, cut where it asked a question (returned too)."""
++    lines = out.replace("\r\n", "\n").split("\n")
++    kept: List[str] = []
++    skip = False
++    for line in lines:
++        if "unable to set up the help system" in line:
++            skip = True
++            continue
++        if skip and (line.startswith("(Details:") or not line.strip()):
++            skip = line.startswith("(Details:")
++            continue
++        skip = False
++        kept.append(line)
++    question = None
++    for i, line in enumerate(kept):
++        if QUESTION in line:
++            j = i - 1
++            while j >= 0 and not kept[j].strip():
++                j -= 1
++            question = kept[j].strip() if j >= 0 else ""
++            kept = kept[:max(j, 0)]
++            break
++    return "\n".join(kept).strip("\n"), question
++
++
++def run_maxima(code: str, folder: Path, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
++    """Run Maxima code in folder. Returns {exit, stdout, stderr, timed_out, question}."""
++    from . import ocr, tools
++    binary = maxima_binary()
++    if binary is None or not installed("maxima"):
++        raise CasError("Maxima is not installed. Install it on the CAS page (Tools, CAS).")
++    folder.mkdir(parents=True, exist_ok=True)
++    base = folder / ".axis-tmp"
++    with tools._TMP_LOCK:
++        base.mkdir(exist_ok=True)
++        temp = Path(tempfile.mkdtemp(dir=str(base)))
++    run_env = dict(env or os.environ)
++    run_env.update({"MAXIMA_TEMPDIR": str(temp), "TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp)})
++    kept = bytearray()
++    asked = threading.Event()
++    try:
++        try:
++            proc = ocr._popen([str(binary), "--very-quiet"], env=run_env, cwd=folder, stdin=subprocess.PIPE)
++        except OSError as exc:
++            raise CasError(f"Could not start Maxima: {exc.strerror or exc}") from exc
++
++        def read() -> None:
++            try:
++                while True:
++                    chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(65536)
++                    if not chunk:
++                        break
++                    if len(kept) < MAX_OUTPUT:
++                        kept.extend(chunk[:MAX_OUTPUT - len(kept)])
++                    if QUESTION.encode() in kept[-len(chunk) - 64:]:
++                        asked.set()
++            except (OSError, ValueError):
++                pass
++
++        reader = threading.Thread(target=read, daemon=True)
++        reader.start()
++        try:
++            proc.stdin.write(_maxima_program(code).encode("utf-8"))
++            proc.stdin.close()
++        except OSError:
++            pass
++        deadline = time.time() + RUN_TIMEOUT
++        timed_out = False
++        while proc.poll() is None:
++            if asked.is_set():
++                break
++            if time.time() > deadline:
++                timed_out = True
++                break
++            time.sleep(0.05)
++        if proc.poll() is None:
++            ocr._kill(proc)
++        else:
++            _settle(proc)   # a plot is drawn by gnuplot, which can still be running
++            ocr._kill(proc)
++        reader.join(5)
++        ocr._close(proc)
++        saved = _collect(temp, folder)
++    finally:
++        with tools._TMP_LOCK:
++            shutil.rmtree(temp, ignore_errors=True)
++            try:
++                base.rmdir()   # only succeeds when no other run is using it
++            except OSError:
++                pass
++    text, question = _clean_maxima(bytes(kept).decode("utf-8", "replace"))
++    if len(kept) >= MAX_OUTPUT:
++        text += f"\n... (output cut off after {MAX_OUTPUT // 1024} KB)"
++    for old_name, new_name in saved:
++        text = text.replace(str(temp / old_name), new_name)   # Maxima prints the full scratch path of a plot
++    return {"exit": None if timed_out else proc.returncode, "stdout": text, "stderr": "", "timed_out": timed_out,
++            "question": question, "saved": [n for _, n in saved]}
++
++
++SETTLE_TIMEOUT = 15.0
++
++
++def _settle(proc: subprocess.Popen) -> None:
++    """Wait (a little) for programs Maxima started, such as gnuplot, which finish after Maxima itself."""
++    if os.name == "nt":
++        time.sleep(0.5)
++        return
++    deadline = time.time() + SETTLE_TIMEOUT
++    while time.time() < deadline:
++        try:
++            os.killpg(proc.pid, 0)   # is anything left in Maxima's process group?
++        except OSError:
++            return
++        time.sleep(0.1)
++
++
++def _collect(temp: Path, folder: Path) -> List[Tuple[str, str]]:
++    """Move files Maxima wrote to its scratch folder (plots with a relative name land there) into the folder.
++
++    Maxima's own scratch files are left behind. An existing file is never replaced: the new one gets a
++    number (plot-2.png). Returns (name in scratch, name in folder) pairs.
++    """
++    moved: List[Tuple[str, str]] = []
++    try:
++        entries = sorted(temp.iterdir())
++    except OSError:
++        return moved
++    for f in entries:
++        if not f.is_file() or f.name.startswith("maxout") or f.suffix.lower() in (".gnuplot", ".gnuplot_pipes"):
++            continue
++        dest, n = folder / f.name, 2
++        while dest.exists():
++            dest, n = folder / f"{f.stem}-{n}{f.suffix}", n + 1
++        try:
++            shutil.move(str(f), str(dest))
++        except OSError:
++            continue
++        moved.append((f.name, dest.name))
++    return moved
++
++
++def run(where: Any, system: Optional[str], code: Any, checked: bool = True) -> Dict[str, Any]:
++    """Run CAS code with the agent's folder (or the workspace) as the working folder.
++
++    checked=True (an agent's code) refuses Maxima code that leaves the folder first. Returns
++    {system, exit, stdout, stderr, timed_out, question}.
++    """
++    from . import tools
++    if not isinstance(code, str) or not code.strip():
++        raise CasError("Give some code to run.")
++    if len(code) > MAX_CODE:
++        raise CasError(f"The code is too long (limit {MAX_CODE // 1000} KB).")
++    if system in (None, "", "auto"):
++        system = default_system()
++        if system is None:
++            raise CasError("No computer algebra system is installed. Install Maxima or SymPy on the CAS page "
++                           "(Tools, CAS).")
++    system = str(system).strip().lower()
++    if system not in SYSTEMS:
++        raise CasError("system must be maxima or sympy.")
++    if not installed(system):
++        raise CasError(f"{LABELS[system]} is not installed. Install it on the CAS page (Tools, CAS).")
++    folder = tools.places(where).personal
++    if system == "maxima":
++        if checked:
++            check_maxima_code(where, code)
++        result = run_maxima(code, folder, tools._run_env(where))
++    else:
++        py = env_python()
++        assert py is not None
++        try:
++            result = tools.run_code(where, tools.fix_escaped_code(code), python=str(py))
++        except tools.ToolError as exc:
++            raise CasError(str(exc)) from exc
++        result["question"] = None
++    return {"system": system, **result}
++
++
++def report(result: Dict[str, Any]) -> str:
++    """The result as an agent reads it."""
++    label = LABELS[result["system"]]
++    if result["timed_out"]:
++        return f"Stopped: {label} ran longer than {int(RUN_TIMEOUT)} seconds." + (
++            "\nOutput so far:\n" + result["stdout"] if result["stdout"] else "")
++    parts = [f"{label} finished." if result["system"] == "maxima" else f"{label} exit code: {result['exit']}"]
++    if result["stdout"]:
++        parts.append("Output:\n" + result["stdout"].rstrip())
++    if result["stderr"]:
++        parts.append("Errors:\n" + result["stderr"].rstrip())
++    if result.get("saved"):
++        parts.append("Saved in your folder: " + ", ".join(result["saved"]))
++    if result.get("question") is not None:
++        parts.append(f"Maxima stopped to ask: {result['question'] or 'a question'} Nobody can answer it here, so "
++                     "state the facts first with assume() or declare() (for example assume(n > 0)) and run the "
++                     "code again.")
++    if not result["stdout"] and not result["stderr"] and result.get("question") is None and not result.get("saved"):
++        parts.append("(Nothing was printed. End a command with ; to show its result, or use print().)")
++    text = "\n".join(parts)
++    return text if len(text) <= 8000 else text[:8000] + f"\n... ({len(text) - 8000} more characters not shown)"
+diff --git a/axis/manager.py b/axis/manager.py
+index df8dce8..7fdd987 100644
+--- a/axis/manager.py
++++ b/axis/manager.py
+@@ -1087,7 +1087,7 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
+         "ocr": ocr.status(),
+         "catalog": catalog.public(),
+         "hf_token": bool(hub.token()),
+-        "jobs": [j for j in jobs.listing() if j["engine"] != "artcraft"],   # the Art Craft tab shows its own
++        "jobs": [j for j in jobs.listing() if j["engine"] not in ("artcraft", "cas")],   # the Art Craft and CAS pages show their own
+     }
+ 
+ 
+diff --git a/axis/ocr.py b/axis/ocr.py
+index e7b67c9..922805d 100644
+--- a/axis/ocr.py
++++ b/axis/ocr.py
+@@ -1483,6 +1483,26 @@ def _run_torch(mid: str, path: Path, emit: Callable[[Dict[str, Any]], None]) ->
+     return {**result, "name": _display_name(engine, model), "kept_on": False}
+ 
+ 
++def pick_model(wanted: Any = None) -> str:
++    """The OCR model an agent uses: the one it named (by id, name or language), else a running PyTorch
++    model, else Tesseract English, else the first usable one."""
++    usable = [m for m in list_models() if m["usable"]]
++    if isinstance(wanted, str) and wanted.strip():
++        w = wanted.strip().lower()
++        for m in usable:
++            if w in (m["id"].lower(), m["model"].lower(), m["name"].lower()):
++                return m["id"]
++        names = ", ".join(m["id"] for m in usable) or "none"
++        raise OcrError(f"There is no usable OCR model called '{wanted}'. Installed: {names}.")
++    if not usable:
++        raise OcrError("No OCR model is installed. Install one on the Models page (OCR models).")
++    run = running_model()
++    for m in usable:
++        if run is not None and run.ready and m["id"] == run.target:
++            return m["id"]
++    return next((m["id"] for m in usable if m["id"] == "tesseract:eng"), usable[0]["id"])
++
++
+ def run(body: Dict[str, Any], path: Path, emit: Callable[[Dict[str, Any]], None]) -> Dict[str, Any]:
+     """Read the text in a picture. emit receives {"phase"} and {"elapsed"} events while it works."""
+     mid = body.get("model")
+diff --git a/axis/runner.py b/axis/runner.py
+index db955c7..7b9c0dc 100644
+--- a/axis/runner.py
++++ b/axis/runner.py
+@@ -151,8 +151,8 @@ IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
+ # Actions that read or change this computer's files. After one of them succeeds, the remembered results of
+ # earlier ones may be out of date, so they are forgotten (see Session.run).
+ FILE_HANDLERS = {"list_files", "read_file", "write_file", "make_folder", "delete_file"}   # no longer a skill, still callable
+-LOCAL_TOOLS = FILE_HANDLERS | set(tools.EXECUTION_TOOLS) | {"generate_image"}
+-CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image"}
++LOCAL_TOOLS = FILE_HANDLERS | set(tools.EXECUTION_TOOLS) | {"generate_image", "run_cas", "read_text"}
++CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image", "run_cas"}
+ 
+ 
+ class Session:
+diff --git a/axis/server.py b/axis/server.py
+index 28f0d36..e4abed5 100644
+--- a/axis/server.py
++++ b/axis/server.py
+@@ -98,6 +98,13 @@ Routes:
+   POST   /api/artcraft/remove               delete an installed app (all its files), or Rust {app}
+   POST   /api/artcraft/check                ask whether newer versions exist; answers like GET /api/artcraft
+   POST   /api/artcraft/open                 start an installed app {app}; it keeps running if Axis stops
++  GET    /api/cas                           Maxima and SymPy: what is installed, settings, the default, and jobs
++  PUT    /api/cas/settings                  the Maxima path and the CAS agents use {maxima?, default?: maxima|sympy|""}
++  POST   /api/cas/install                   install Maxima or SymPy in the background {system: maxima|sympy}
++                                            (cancel it, or clear it from the list, with the /api/manage/jobs routes)
++  POST   /api/cas/remove                    delete the SymPy environment {system: sympy}
++  POST   /api/cas/run                       run code in the workspace folder {system?, code}; answers
++                                            {system, exit, stdout, stderr, timed_out, question}
+ """
+ 
+ from __future__ import annotations
+@@ -118,7 +125,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+ from typing import Any, Dict, List, Optional, Union
+ 
+-from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
++from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+ from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
+ 
+ WEB_DIR = Path(__file__).resolve().parent / "web"
+@@ -863,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
+             return self._dispatch(method, parts, param)
+         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
+                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
+-                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError) as exc:
++                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError) as exc:
+             missing = "does not exist" in str(exc)
+             return self._error(404 if missing else 400, str(exc))
+         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+@@ -1097,6 +1104,24 @@ class Handler(BaseHTTPRequestHandler):
+             if parts[2:] == ["open"] and method == "POST":
+                 return self._json(200, artcraft.open_app(self._body()))
+ 
++        elif n >= 2 and parts[1] == "cas":
++            if n == 2 and method == "GET":
++                return self._json(200, cas.status())
++            if parts[2:] == ["settings"] and method == "PUT":
++                return self._json(200, cas.save_settings(self._body()))
++            if parts[2:] == ["install"] and method == "POST":
++                return self._json(202, cas.install(self._body()))
++            if parts[2:] == ["remove"] and method == "POST":
++                return self._json(200, cas.remove(self._body()))
++            if parts[2:] == ["run"] and method == "POST":
++                body = self._body()
++                if not isinstance(body, dict):
++                    raise cas.CasError("Request body must be a JSON object.")
++                root = workspace_root()
++                root.mkdir(parents=True, exist_ok=True)
++                # The user's own code, like the Workspace Run button: not checked the way an agent's is.
++                return self._json(200, cas.run(tools.Places(root), body.get("system"), body.get("code"), checked=False))
++
+         elif n >= 2 and parts[1] == "skills":
+             if n == 2 and method == "GET":
+                 return self._json(200, skills.list_all())
+diff --git a/axis/skills.py b/axis/skills.py
+index 53446f4..98b07c0 100644
+--- a/axis/skills.py
++++ b/axis/skills.py
+@@ -4,7 +4,8 @@ Built-in skills give an agent actions (tools): working with files in its own
+ folder, running programs, searching the web and reading Wikipedia. The Shared
+ folder skill adds no tools of its own; it lets the file actions an agent already
+ has also reach ~/Axis/shared, which every agent with that skill can use. There is also
+-one skill for each Art Craft app (see craft_skills.py).
++one skill for each page under Tools: CAS, Images and OCR (see tool_skills.py), and one
++for each Art Craft app (see craft_skills.py).
+ Custom skills are named instructions written by the user; they are stored as
+ ~/Axis/skills/<id>.json. Agents choose skills by id.
+ 
+@@ -23,7 +24,7 @@ from datetime import datetime
+ from pathlib import Path
+ from typing import Any, Dict, List, Optional
+ 
+-from . import craft_skills
++from . import craft_skills, tool_skills
+ from .paths import axis_home
+ 
+ MAX_TEXT = 20000
+@@ -101,6 +102,7 @@ BUILTIN: List[Dict[str, Any]] = [
+         "tools": ["wikipedia_search", "wikipedia_article"],
+     },
+ ]
++BUILTIN += tool_skills.build()    # CAS, Images and OCR, the pages under Tools
+ BUILTIN += craft_skills.build()   # one skill for each Art Craft app
+ BUILTIN_IDS = {s["id"] for s in BUILTIN}
+ EDITABLE = ("name", "description", "instructions")   # what a user may change on a built-in skill
+diff --git a/axis/tool_skills.py b/axis/tool_skills.py
+new file mode 100644
+index 0000000..719b1fa
+--- /dev/null
++++ b/axis/tool_skills.py
+@@ -0,0 +1,64 @@
++"""One built-in skill for each page under Tools that is not a Craft app: CAS, Images and OCR.
++
++Each skill gives an agent the action that uses what the user set up on that page:
++run_cas (Maxima or SymPy, from the CAS page), generate_image (an image model from the
++Models page, as on the Images page) and read_text (an OCR model, as on the OCR page).
++The Craft apps have their own skills (see craft_skills.py).
++"""
++
++from __future__ import annotations
++
++from typing import Any, Dict, List
++
++GROUP = "Tools"
++
++_SKILLS: List[Dict[str, Any]] = [
++    {
++        "id": "cas",
++        "name": "CAS",
++        "description": "Do exact symbolic math (algebra, calculus, equations, matrices) with Maxima or SymPy, "
++        "installed on the CAS page.",
++        "instructions": "Use run_cas for exact symbolic math: simplifying, factoring, solving equations, derivatives, "
++        "integrals, limits, series, sums, matrices and number theory, and to check algebra you did yourself. Leave "
++        "system out to use the CAS chosen on the CAS page; if the action says none is installed, tell the user to "
++        "install Maxima or SymPy there. Maxima: end each command with ; to show its result or $ to hide it, assign "
++        "with :, define functions with :=, and use % for the last result, for example "
++        "`f(x) := x^3 - 2*x$ solve(f(x) = 0, x); integrate(f(x), x, 0, 2); float(%);`. Nobody can answer Maxima's "
++        "questions here, so when a result depends on a sign or type, state it first with assume(n > 0) or "
++        "declare(n, integer). Save a plot as a file in your folder with "
++        "plot2d(sin(x), [x, 0, 6], [png_file, \"plot.png\"]). SymPy: send a complete Python program and print the "
++        "results, for example `from sympy import *` then `x = symbols('x')` then `print(integrate(sin(x)**2, x))`. "
++        "Report exact results, and add a decimal value (float() in Maxima, N() in SymPy) when it helps.",
++        "tools": ["run_cas"],
++    },
++    {
++        "id": "images",
++        "name": "Images",
++        "description": "Make pictures from a text description with a local Stable Diffusion model, as on the Images page.",
++        "instructions": "Use generate_image when the user asks for a picture. Write a detailed prompt: the subject, "
++        "the setting, the style, the lighting, the colours and the composition; put what to keep out in "
++        "negative_prompt. Leave width, height, steps and model out unless the user asks for them, so the model's "
++        "own defaults are used. The picture is saved in Axis's images folder, not in your folder, and the user sees "
++        "it in the chat; say in a sentence what you made. If the action says no image model is set up, tell the "
++        "user to add one on the Models page (Image models).",
++        "tools": ["generate_image"],
++    },
++    {
++        "id": "ocr",
++        "name": "OCR",
++        "description": "Read the text in pictures in the agent's folder with a local OCR model, as on the OCR page.",
++        "instructions": "Use read_text to read the text in a picture (PNG, JPEG, BMP, TIFF or WebP) in your folder. "
++        "Leave model out to use a sensible installed model; name one (for example tesseract:eng) only when the "
++        "user asks, or when the text is in another language and that model is installed. For Tesseract, "
++        "languages takes installed languages joined with +, for example eng+lat. OCR makes mistakes, especially "
++        "with handwriting, small print and unusual fonts: say so when the confidence is low, and do not invent "
++        "words that were not read. Other files must be turned into a picture first. If the action says no OCR "
++        "model is installed, tell the user to install one on the Models page (OCR models).",
++        "tools": ["read_text"],
++    },
++]
++
++
++def build() -> List[Dict[str, Any]]:
++    """The skill definitions, in the form skills.BUILTIN holds."""
++    return [{**s, "group": GROUP, "tools": list(s["tools"])} for s in _SKILLS]
+diff --git a/axis/tools.py b/axis/tools.py
+index cc38454..35bdbe3 100644
+--- a/axis/tools.py
++++ b/axis/tools.py
+@@ -173,6 +173,36 @@ TOOL_SPECS["generate_image"] = {
+         "required": ["prompt"],
+     },
+ }
++TOOL_SPECS["run_cas"] = {
++    "description": "Run code in a computer algebra system (CAS) for exact symbolic math: algebra, calculus, equations, "
++    "series, matrices and number theory. Maxima code is a list of Maxima commands, each ending in ; (show the result) "
++    "or $ (hide it). SymPy code is a complete Python program that imports sympy and prints its results. "
++    "Your folder is the working folder.",
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "code": {"type": "string", "description": "The Maxima commands or the SymPy Python program to run"},
++            "system": {"type": "string", "enum": ["maxima", "sympy"],
++                       "description": "Which CAS to use (optional; the one chosen on the CAS page if omitted)"},
++        },
++        "required": ["code"],
++    },
++}
++TOOL_SPECS["read_text"] = {
++    "description": "Read the text in a picture (OCR) with a local OCR model and return it. The picture must be a PNG, "
++    "JPEG, BMP, TIFF or WebP file in your folder.",
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "path": {"type": "string", "description": "The picture, relative to your folder, e.g. scans/page1.png"},
++            "model": {"type": "string", "description": "OCR model to use, e.g. tesseract:eng (optional; a sensible "
++                      "installed model if omitted)"},
++            "languages": {"type": "string", "description": "For Tesseract only: languages to read, e.g. eng+lat "
++                          "(optional; installed languages only)"},
++        },
++        "required": ["path"],
++    },
++}
+ 
+ 
+ def specs(names: List[str]) -> List[Dict[str, Any]]:
+@@ -460,12 +490,15 @@ def _find_python() -> str:
+     return sys.executable
+ 
+ 
+-def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "") -> Dict[str, Any]:
++def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = "",
++             python: Optional[str] = None) -> Dict[str, Any]:
+     """Run Python code under the guard. Returns {exit, stdout, stderr, timed_out}.
+ 
+     The guard protects the personal folder (and the shared folder, when given);
+     cwd, which must be inside one of them, is the working directory (the personal
+     folder by default). script is the file name shown in tracebacks and sys.argv.
++    python is another interpreter to use (the CAS page's SymPy environment); by
++    default the user's own Python runs the code.
+     """
+     p = places(where)
+     ws = p.personal
+@@ -491,7 +524,7 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str =
+         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+     result = None
+     try:
+-        for exe in dict.fromkeys([python_executable(), sys.executable]):
++        for exe in ([python] if python else dict.fromkeys([python_executable(), sys.executable])):
+             try:
+                 result = _run_capped([exe, "-c", BOOTSTRAP], code, str(cwd or ws), env, PYTHON_TIMEOUT, kwargs)
+                 break
+@@ -983,10 +1016,14 @@ TOOL_ALIASES = {
+     "draw": "generate_image", "draw_image": "generate_image", "text_to_image": "generate_image",
+     "txt2img": "generate_image", "image_generation": "generate_image", "generate_picture": "generate_image",
+     "stable_diffusion": "generate_image", "paint": "generate_image",
++    "cas": "run_cas", "maxima": "run_cas", "sympy": "run_cas", "run_maxima": "run_cas", "run_sympy": "run_cas",
++    "computer_algebra": "run_cas", "symbolic_math": "run_cas", "algebra": "run_cas",
++    "ocr": "read_text", "read_image_text": "read_text", "image_to_text": "read_text", "extract_text": "read_text",
++    "read_text_from_image": "read_text", "run_ocr": "read_text", "tesseract": "read_text",
+ }
+ ARG_ALIASES = {
+     "path": ("path", "filename", "file_name", "file", "file_path", "filepath", "name", "directory", "dir",
+-             "folder", "folder_path", "folder_name", "dirname", "location"),
++             "folder", "folder_path", "folder_name", "dirname", "location", "image", "image_path", "picture"),
+     "content": ("content", "contents", "text", "data", "body", "file_content", "value"),
+     "code": ("code", "script", "source", "python_code", "program", "python", "source_code", "cmd", "command"),
+     "query": ("query", "q", "search", "search_query", "search_term", "term", "terms", "keywords", "topic", "text"),
+@@ -1001,6 +1038,8 @@ ARG_ALIASES = {
+     "negative_prompt": ("negative_prompt", "negative", "neg_prompt", "avoid"),
+     "steps": ("steps", "num_steps", "sampling_steps", "num_inference_steps"),
+     "shell": ("shell", "terminal", "interpreter", "language"),
++    "system": ("system", "cas", "engine", "backend"),
++    "languages": ("languages", "language", "lang", "langs"),
+ }
+ 
+ 
+@@ -1066,11 +1105,49 @@ def generate_image(ws: Where, args: Dict[str, Any],
+             "The user can see the picture.")
+ 
+ 
++def run_cas(where: Where, args: Dict[str, Any]) -> str:
++    """Run Maxima or SymPy code with the agent's folder as the working folder (see cas.py)."""
++    from . import cas
++    code = _require(args, "code")
++    system = args.get("system")
++    if isinstance(code, str) and not system and code.lstrip().startswith(("import ", "from ")):
++        system = "sympy" if cas.installed("sympy") else system   # Python code sent without saying so
++    try:
++        return cas.report(cas.run(where, system, code))
++    except cas.CasError as exc:
++        raise ToolError(str(exc)) from exc
++
++
++def read_text(where: Where, args: Dict[str, Any]) -> str:
++    """Read the text in a picture in the agent's folder with an OCR model (see ocr.py)."""
++    from . import ocr
++    rel = _require(args, "path")
++    root, path, prefix = locate(where, rel)
++    if not path.is_file():
++        raise ToolError(f"{rel} is not a file in your folder.")
++    body: Dict[str, Any] = {}
++    if isinstance(args.get("languages"), str) and args["languages"].strip():
++        body["languages"] = args["languages"]
++    try:
++        body["model"] = ocr.pick_model(args.get("model"))
++        result = ocr.run(body, path, lambda _event: None)
++    except ocr.OcrError as exc:
++        raise ToolError(str(exc)) from exc
++    facts = [f"{result.get('words')} words" if result.get("words") is not None else "",
++             f"confidence {round(result['confidence'])}%" if isinstance(result.get("confidence"), (int, float)) else "",
++             f"{result.get('seconds')} s"]
++    head = f"Read {_show(root, path, prefix)} with {result.get('name') or body['model']} ({', '.join(f for f in facts if f)})."
++    text = (result.get("text") or "").strip()
++    return head + ("\n" + _clip(text, MAX_READ) if text else "\nNo text was found in the picture.")
++
++
+ # File management is intentionally not exposed as an agent skill. Agents can use
+ # the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
+ # to the user.
+ FILE_TOOLS = ()
+ EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file")
++# Actions that work in the agent's folder, so the agent is told about the folder.
++FOLDER_TOOLS = EXECUTION_TOOLS + ("run_cas", "read_text")
+ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
+     # These handlers remain available to the user-facing Workspace and to
+     # compatibility code, but are no longer advertised by any agent skill.
+@@ -1086,6 +1163,8 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
+     "run_terminal": run_terminal,
+     "run_terminal_file": run_terminal_file,
+     "generate_image": generate_image,
++    "run_cas": run_cas,
++    "read_text": read_text,
+     **{n: _web(n) for n in web_tools.HANDLERS},
+ }
+ 
+diff --git a/axis/web/index.html b/axis/web/index.html
+index 6f3418a..190dfa7 100644
+--- a/axis/web/index.html
++++ b/axis/web/index.html
+@@ -608,7 +608,7 @@ const S = {
+   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
+   imageSelected: null,          // the picture shown large in the Images tab
+   imageError: null,
+-  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR)
++  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR, CAS)
+   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
+   manageError: "",              // the last error from a Models page action
+   install: null,                // the install form of the Models sub-tab that is open (one of installs)
+@@ -627,6 +627,12 @@ const S = {
+   artError: "",                 // the last error from an Art Craft button
+   artChecked: false,            // update check done since this page opened
+   artChecking: false,
++  cas: null,                    // last /api/cas result: Maxima, SymPy, settings and their install jobs
++  casError: "",                 // the last error from a CAS page button
++  casCode: "",                  // the code in the CAS page's Try it box
++  casSystem: "",                // the CAS the Try it box uses ("" = the default)
++  casResult: null,              // the last Try it result
++  casRunning: false,
+ };
+ S.install = S.installs.chat;
+ 
+@@ -862,6 +868,7 @@ async function loadSkills() {
+ }
+ const skillById = (id) => S.skills.find((s) => s.id === id);
+ const ART_CRAFT_GROUP = "Art Craft apps";
++const TOOLS_GROUP = "Tools";
+ 
+ function go(view) {
+   if (S.view.kind === "workspace" && view.kind !== "workspace" && !leaveEdit()) return;
+@@ -870,6 +877,7 @@ function go(view) {
+   $("app").classList.remove("menu-open");
+   renderNav(); renderMain();
+   if (view.kind === "art") loadArt().then(() => { if (!S.artChecked) checkArt(); });
++  if (view.kind === "cas") loadCas().then(() => { if (S.view.kind === "cas") renderCas(); });
+ }
+ 
+ function renderNav() {
+@@ -889,20 +897,22 @@ function renderNav() {
+     toolsGroup(item),
+   );
+ }
+-const TOOL_VIEWS = ["images", "art", "ocr"];
+-// Images, Art Craft and OCR sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
++const TOOL_VIEWS = ["images", "art", "ocr", "cas"];
++// Images, Art Craft, OCR and CAS sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
+ function toolsGroup(item) {
+-  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob };
++  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob,
++    cas: runningJobs(S.cas).length > 0 || S.casRunning };
+   const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
+   const anyBusy = Object.values(busy).some(Boolean);
+   const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
+     "aria-controls": "nav-tools", onclick: () => { S.toolsOpen = !open; store("axis.toolsOpen", S.toolsOpen); renderNav(); } },
+-    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft and OCR")),
++    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft, OCR and CAS")),
+     h("span", { class: "nav-chevron", "aria-hidden": "true" }));
+   return [head, open ? h("div", { class: "nav-sub", id: "nav-tools" },
+     item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), busy.images),
+     item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), busy.art),
+-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr)) : null];
++    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr),
++    item("CAS", "Exact math with Maxima or SymPy", v.kind === "cas", () => go({ kind: "cas" }), busy.cas)) : null];
+ }
+ 
+ async function quitAxis() {
+@@ -1011,6 +1021,7 @@ function renderMain() {
+   if (S.view.kind === "images") return renderImages();
+   if (S.view.kind === "ocr") return renderOcr();
+   if (S.view.kind === "art") return renderArt();
++  if (S.view.kind === "cas") return renderCas();
+   renderChat();
+ }
+ 
+@@ -1741,6 +1752,9 @@ function renderEditor() {
+     h("div", { class: "subhead" }, "Actions"),
+     h("p", { class: "hint" }, "Choose what this agent can do. File access is available through terminal commands, and the chat Location menu selects where those commands run."),
+     pickList(true),
++    h("div", { class: "subhead" }, "Tools"),
++    h("p", { class: "hint" }, "Let this agent use what is set up under Tools: a computer algebra system from the CAS page, image models (Images) and OCR models (OCR)."),
++    pickList(true, TOOLS_GROUP),
+     h("div", { class: "subhead" }, "Art Craft apps"),
+     h("p", { class: "hint" }, "Let this agent use an app installed on the Art Craft page, through its command line. Each choice also gives the agent terminal commands."),
+     pickList(true, ART_CRAFT_GROUP),
+@@ -4457,6 +4471,170 @@ function renderArt() {
+   const sc = $("art-scroll"); if (sc && top !== null) sc.scrollTop = top;
+ }
+ 
++/* ------------------------------------------------------------------ CAS */
++// Installs Maxima or SymPy for exact math, chooses the one agents use, and runs code to try it.
++let casTimer = null, casLoading = null;
++function loadCas() {
++  if (casLoading) return casLoading;
++  casLoading = api("/api/cas")
++    .then((d) => { const before = S.cas; S.cas = d; onCas(before, d); })
++    .catch((e) => { if (!S.cas || !S.cas.systems) S.cas = { error: e.message, systems: [], jobs: [] }; })
++    .finally(() => { casLoading = null; scheduleCas(); });
++  return casLoading;
++}
++function scheduleCas() {
++  clearTimeout(casTimer);
++  if (runningJobs(S.cas).length > 0) casTimer = setTimeout(loadCas, 1000);   // only while something is installing
++}
++const casSig = (d) => JSON.stringify(d && d.systems ? [d.systems.map((x) => [x.id, x.installed, x.version, x.path]), d.settings, d.default, jobSig(d)] : null);
++function onCas(before, d) {
++  let finished = false;
++  for (const j of d.jobs || []) {
++    if (j.state === "running" || jobsSeen.has(j.id)) continue;
++    jobsSeen.add(j.id);
++    if (!before) continue;
++    finished = true;
++    if (j.state === "done") toast(`Installed ${(j.result && j.result.model) || j.target}`);
++    else if (j.state === "failed") toast(j.label + " failed. Details are on the CAS page.");
++  }
++  if (casSig(before) !== casSig(d)) renderNav();
++  if (S.view.kind !== "cas") return;
++  if (finished || casSig(before) !== casSig(d)) renderCas();
++  else updateJobProgress(d);
++}
++async function casAction(path, body, done) {
++  S.casError = "";
++  try { const r = await api("/api/cas/" + path, { method: path === "settings" ? "PUT" : "POST", body }); if (done) done(r); }
++  catch (e) { S.casError = e.message; }
++  await loadCas();
++  renderNav(); if (S.view.kind === "cas") renderCas();
++}
++async function casJobAction(j, action) {
++  try { await api(`/api/manage/jobs/${encodeURIComponent(j.id)}` + (action === "cancel" ? "/cancel" : ""), { method: action === "cancel" ? "POST" : "DELETE" }); }
++  catch (e) { S.casError = e.message; }
++  await loadCas();
++  renderNav(); if (S.view.kind === "cas") renderCas();
++}
++function casJobBlock(j) {
++  if (j.state === "running") {
++    return h("div", { class: "job-inline", "data-job": j.id }, progressBar(j),
++      h("div", { class: "job-head" }, h("span", { class: "job-meta job-phase" }, jobMeta(j)),
++        j.cancellable && !j.cancel_requested ? h("button", { class: "btn small", onclick: () => casJobAction(j, "cancel") }, "Cancel") : null));
++  }
++  if (j.state !== "failed") return null;
++  return h("div", { class: "job failed", "data-job": j.id },
++    h("div", { class: "job-head" }, h("strong", {}, j.label + " failed"),
++      h("button", { class: "btn small", onclick: () => casJobAction(j, "dismiss") }, "Dismiss")),
++    h("div", { class: "job-meta job-phase", style: "white-space:pre-wrap" }, jobMeta(j)));
++}
++const CAS_WHAT = {
++  maxima: "A complete computer algebra system: algebra, calculus, equations, series, matrices and number theory. It is installed on your computer like other programs, so other programs can use it too.",
++  sympy: "A computer algebra library for Python. Code for it is a Python program that prints its results.",
++};
++const CAS_EXAMPLE = {
++  maxima: "f(x) := x^3 - 2*x$\nsolve(f(x) = 0, x);\nintegrate(f(x), x, 0, 2);\nfactor(x^4 - 1);",
++  sympy: "from sympy import *\nx = symbols('x')\nprint(solve(x**3 - 2*x, x))\nprint(integrate(sin(x)**2, x))",
++};
++async function runCas() {
++  const c = S.cas, system = S.casSystem || (c && c.default) || "";
++  if (!S.casCode.trim()) S.casCode = CAS_EXAMPLE[system] || "";
++  S.casRunning = true; S.casResult = null; S.casError = "";
++  renderNav(); renderCas();
++  try { S.casResult = await api("/api/cas/run", { method: "POST", body: { system, code: S.casCode } }); }
++  catch (e) { S.casError = e.message; }
++  S.casRunning = false;
++  renderNav(); if (S.view.kind === "cas") renderCas();
++}
++function renderCas() {
++  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "CAS"),
++    h("button", { class: "btn small", onclick: () => loadCas().then(() => { if (S.view.kind === "cas") renderCas(); }) }, "Refresh"));
++  const c = S.cas;
++  if (!c) {
++    loadCas().then(() => { if (S.view.kind === "cas") renderCas(); });
++    return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
++  }
++  if (c.error && !c.systems.length) {
++    return fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" }, h("p", { class: "form-error", role: "alert" }, c.error))));
++  }
++  const before = $("cas-scroll"), top = before ? before.scrollTop : null;
++  const latest = (target) => (c.jobs || []).filter((j) => j.target === target).sort((x, y) => y.started - x.started)[0] || null;
++  const body = [];
++  if (S.casError) body.push(h("p", { class: "form-error", role: "alert", style: "white-space:pre-wrap" }, S.casError, " ",
++    h("button", { class: "link", onclick: () => { S.casError = ""; renderCas(); } }, "Dismiss")));
++  body.push(h("p", { class: "hint" },
++    "A computer algebra system (CAS) does exact math: it solves equations, simplifies, differentiates and integrates with symbols instead of rounded numbers. ",
++    "Install Maxima, SymPy or both. Agents with the CAS skill use the one chosen below."));
++
++  // The two systems
++  const cards = c.systems.map((x) => {
++    const j = latest(x.id), job = j && (j.state === "running" || j.state === "failed") ? j : null;
++    const actions = [];
++    if (x.installed) {
++      actions.push(h("span", { class: "hint", style: "margin:0" }, [x.version ? `${x.name} ${x.version}` : x.name, x.path ? " \u00b7 " + x.path : ""].join("")));
++      if (x.removable) actions.push(h("button", { class: "btn", onclick: () => {
++        if (confirm(`Delete SymPy? Its Python environment is removed from disk. You can install it again later.`)) casAction("remove", { system: x.id }, () => toast("Deleted SymPy"));
++      } }, "Delete"));
++    } else if (x.plan && x.plan.how) {
++      actions.push(h("button", { class: "btn primary", onclick: () => casAction("install", { system: x.id }) }, `Install ${x.name}`));
++    } else if (x.plan && x.plan.command) {
++      actions.push(cmd(x.plan.command));
++    }
++    return h("div", { class: "model-card" },
++      h("h4", {}, x.name, h("span", { class: "chip" + (x.installed ? " on" : "") }, x.installed ? "Installed" : "Not installed")),
++      h("p", { class: "hint", style: "margin:6px 0 0" }, CAS_WHAT[x.id] || ""),
++      !x.installed && x.plan ? h("p", { class: "hint", style: "margin:6px 0 0" }, x.plan.note) : null,
++      job && job.state !== "running" ? casJobBlock(job) : null,
++      h("div", { class: "model-actions" }, job && job.state === "running" ? casJobBlock(job) : actions));
++  });
++  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Computer algebra systems"), cards));
++
++  // Settings
++  const installedOnes = c.systems.filter((x) => x.installed);
++  const choice = h("select", { "aria-label": "CAS agents use", onchange: (e) => casAction("settings", { default: e.target.value }) },
++    h("option", { value: "", selected: !c.settings.default }, "Automatic"),
++    c.systems.map((x) => h("option", { value: x.id, selected: c.settings.default === x.id }, x.name + (x.installed ? "" : " (not installed)"))));
++  const path = h("input", { type: "text", value: c.settings.maxima || "", placeholder: "Found automatically", autocomplete: "off" });
++  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Settings"),
++    h("div", { class: "field" }, h("label", {}, "CAS agents use"),
++      h("p", { class: "hint" }, c.default ? `Agents now use ${c.systems.find((x) => x.id === c.default).name} unless they ask for the other one.` : "Nothing is installed yet."), choice),
++    h("div", { class: "field" }, h("label", {}, "Maxima path"),
++      h("p", { class: "hint" }, "Leave empty to find Maxima on your PATH or where its installer puts it (or set AXIS_MAXIMA)."),
++      h("div", { class: "row" }, path, h("button", { class: "btn", onclick: () => casAction("settings", { maxima: path.value }, () => toast("Saved")) }, "Save")))));
++
++  // Try it
++  const system = S.casSystem || c.default || "";
++  if (!S.casCode) S.casCode = CAS_EXAMPLE[system] || "";
++  const code = h("textarea", { class: "ocr-text", style: "min-height:140px", spellcheck: "false", "aria-label": "Code to run",
++    oninput: (e) => { S.casCode = e.target.value; } });
++  code.value = S.casCode;
++  const pick = h("select", { "aria-label": "System", onchange: (e) => {
++    const was = S.casSystem || c.default || "";
++    if (S.casCode === (CAS_EXAMPLE[was] || "")) S.casCode = "";   // swap an untouched example for the other system's
++    S.casSystem = e.target.value; S.casResult = null; renderCas();
++  } }, installedOnes.map((x) => h("option", { value: x.id, selected: x.id === system }, x.name)));
++  const r = S.casResult;
++  let out = null;
++  if (r) {
++    const lines = [];
++    if (r.timed_out) lines.push("Stopped: it ran longer than allowed.");
++    if (r.stdout) lines.push(r.stdout);
++    if (r.stderr) lines.push(r.stderr);
++    if (r.question !== null && r.question !== undefined) lines.push(`Maxima stopped to ask: ${r.question || "a question"} State it first, for example assume(n > 0), and run again.`);
++    if (!lines.length) lines.push("Nothing was printed. End a command with ; to show its result, or use print().");
++    out = h("pre", { class: "ocr-text", style: "min-height:0", "aria-live": "polite" }, lines.join("\n"));
++  }
++  body.push(h("div", { class: "skill-group" }, h("h3", {}, "Try it"),
++    installedOnes.length ? [
++      h("p", { class: "hint" }, "Runs in the workspace folder, so files it saves (a plot, for example) appear in the Workspace."),
++      h("div", { class: "row", style: "margin-bottom:8px" }, pick,
++        h("button", { class: "btn primary", disabled: S.casRunning, onclick: runCas }, S.casRunning ? "Running\u2026" : "Run")),
++      code, out]
++      : h("p", { class: "hint" }, "Install Maxima or SymPy above to try it here.")));
++
++  fill($("main"), bar, h("div", { class: "editor", id: "cas-scroll" }, h("div", { class: "form" }, body)));
++  const sc = $("cas-scroll"); if (sc && top !== null) sc.scrollTop = top;
++}
++
+ /* ------------------------------------------------------------------ OCR */
+ // Reads the text in a picture with an OCR model (Models page, OCR models).
+ const OCR_RE = /\.(png|jpe?g|bmp|tiff?|webp)$/i;      // what every OCR engine reads; others are converted first
+diff --git a/docs/api.md b/docs/api.md
+index df2c15d..dca5522 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -148,6 +148,18 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ 
+ These jobs are not listed by `GET /api/manage`. Cancel one, or clear a finished one, with the `/api/manage/jobs/<id>` routes above.
+ 
++## CAS
++
++| Method | Path | Purpose |
++|--------|------|---------|
++| `GET` | `/api/cas` | Maxima and SymPy (`systems`: installed, version, path, how Axis would install it), `settings`, the `default` agents use, and the CAS install jobs |
++| `PUT` | `/api/cas/settings` | `{"maxima": "path"}` and/or `{"default": "maxima" \| "sympy" \| ""}`; answers like `GET /api/cas` |
++| `POST` | `/api/cas/install` | install Maxima or SymPy in the background: `{"system": "maxima"}`. Answers `202` with `{"job": ...}`; refuses what is already installed |
++| `POST` | `/api/cas/remove` | delete the SymPy environment: `{"system": "sympy"}`. A system-wide Maxima is never removed |
++| `POST` | `/api/cas/run` | run code in the workspace folder: `{"system"?: "maxima" \| "sympy", "code": "..."}`. Answers `{system, exit, stdout, stderr, timed_out, question, saved?}`; `question` is what Maxima stopped to ask, and `saved` the files a run moved into the folder |
++
++These jobs are not listed by `GET /api/manage` either; use the `/api/manage/jobs/<id>` routes.
++
+ ## Example
+ 
+ ```bash
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 7db3cb2..f225c9d 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -19,11 +19,13 @@ This page explains how Axis is put together, so you can find the right file befo
+   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
+   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
+   |     +-- craft_skills.py                          (one skill for each Craft app)      |
++  |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
+   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
+   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
+   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
+   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
+   |     +-- artcraft.py                                  (Craft apps and Rust: install, open) |
++  |     +-- cas.py ------------------------------------> maxima / SymPy (cas-python)     |
+   |     +-- procs.py                                     (programs Axis started)         |
+   |     +-- terminal.py                                  (shells: Terminal, Workspace)   |
+   |     +-- updates.py                                   (update check against GitHub)   |
+@@ -68,6 +70,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
+ | Programs Axis started | `~/Axis/run/` | `procs.py`, `instances.py` |
+ | Downloaded models | `~/Axis/models/` | `hub.py`, `manager.py`, `ocr.py` |
+ | Engines | `~/Axis/engines/` | `engines.py`, `ocr.py` |
++| Computer algebra (SymPy environment, settings) | `~/Axis/engines/cas-python/`, `~/Axis/engines/cas.json`, `~/Axis/cas-settings.json` | `cas.py` |
+ | Craft apps and portable Rust | `~/Axis/engines/artcraft/`, `~/Axis/engines/rust/`, `~/Axis/engines/artcraft.json` | `artcraft.py` |
+ | Interface preferences (theme, drafts, open chat) | the browser's local storage | `web/index.html` |
+ 
+diff --git a/docs/configuration.md b/docs/configuration.md
+index ccc6218..3099761 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -103,6 +103,8 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
+ | `AXIS_TESSERACT` | Path to the `tesseract` program | Found on PATH or where its installer puts it |
+ | `AXIS_OCR_PYTHON` | Python the OCR environment for PyTorch models is made from | The Python Axis was installed with |
+ | `AXIS_OCR_TIMEOUT` | Longest time reading one picture may take, in seconds | 900 |
++| `AXIS_MAXIMA` | Path to the `maxima` program (or its folder) for the CAS page and agents | Found on PATH or where its installer puts it |
++| `AXIS_CAS_TIMEOUT` | Longest time one run of CAS code may take, in seconds | 60 |
+ | `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |
+ 
+ Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
+diff --git a/docs/user-guide.md b/docs/user-guide.md
+index 3f4ad3f..32c0f05 100644
+--- a/docs/user-guide.md
++++ b/docs/user-guide.md
+@@ -68,7 +68,9 @@ Choose an agent's skills in its settings (**Edit agent**). Every agent chooses f
+ | Delete files | Delete files and empty folders |
+ | Web search | `web_search` and `fetch_page` |
+ | Wikipedia | `wikipedia_search` and `wikipedia_article` |
+-| Image generation | `generate_image` with a local Stable Diffusion model |
++| CAS | `run_cas`: exact math with Maxima or SymPy from the **CAS** page. Listed under **Tools**. |
++| Images | `generate_image` with a local Stable Diffusion model, as on the **Images** page. Listed under **Tools**. |
++| OCR | `read_text`: reads the text in a picture in the agent's folder with an OCR model, as on the **OCR** page. Listed under **Tools**. |
+ | Shared folder | Lets file actions reach `shared/`, a folder common to all agents with this skill |
+ 
+ | Art Craft apps | One skill for each Craft app (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft). See below. |
+@@ -84,6 +86,8 @@ Notes:
+ - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
+ - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
+ 
++**Tools skills.** Each page under **Tools** has a skill, listed under **Tools** in an agent's settings: **CAS**, **Images** and **OCR** (the Craft apps have their own, below). Each gives the agent one action that uses what you set up on that page, so set it up there first. The CAS skill uses the system chosen under **CAS agents use** on the CAS page unless the agent asks for the other one. Maxima code from an agent is read before it runs and refused when it starts other programs (`system`), uses Lisp, or names a file outside the agent's folder; SymPy code runs under the same guard as Run Python. Neither is a sandbox. The OCR skill reads pictures in the agent's folder only, with a running PyTorch OCR model if one is on, otherwise Tesseract English, unless the agent names another installed model.
++
+ **Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in its folder, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. If a newer app release changes a command, edit the skill's file in `Axis/skills/built-in`.
+ 
+ **Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). **Edit** and **Delete** are on each card. Deleting a skill removes it from every agent that used it.
+@@ -279,6 +283,18 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
+ 
+ **Settings**, at the top right of every page next to **Quit Axis**, chooses the appearance: **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
+ 
++## CAS
++
++Open **Tools** in the sidebar, then **CAS**, to set up a computer algebra system: a program that does exact math with symbols (solving equations, simplifying, derivatives, integrals, series, matrices) instead of rounded numbers. Agents use it with the **CAS** skill.
++
++- **Maxima** is a complete computer algebra system. **Install Maxima** installs it on your computer: with winget on Windows (which checks the installer before it runs; Windows may ask for permission), with Homebrew on macOS, and with your package manager on Linux (your system asks for your password). Where Axis cannot install it, the card says how to do it yourself. Axis finds an installed Maxima on your PATH or where its installer puts it, or at the **Maxima path** you give. Because Maxima is installed like any other program, Axis does not delete it; remove it the way you remove other programs.
++- **SymPy** is a computer algebra library for Python. **Install SymPy** makes a Python environment of its own in `Axis/engines/cas-python` and installs SymPy into it with pip. No administrator rights are needed. **Delete** removes that environment.
++- **CAS agents use** chooses which one agents use when both are installed. **Automatic** uses Maxima if it is installed, otherwise SymPy.
++- **Try it** runs code in the workspace folder and shows the result. Maxima code is a list of commands, each ending in `;` (show the result) or `$` (hide it). SymPy code is a Python program that prints its results.
++- Maxima sometimes stops to ask a question, such as whether a number is positive. Nobody can answer it here, so Axis stops Maxima and shows the question; tell Maxima the answer first, for example `assume(n > 0)`, and run the code again.
++- A plot saved with a file name, such as `plot2d(sin(x), [x, 0, 6], [png_file, "plot.png"])`, is put in the folder the code ran in. If a file of that name is already there, the new one is called `plot-2.png`; nothing is replaced.
++- Each run may take up to 60 seconds (`AXIS_CAS_TIMEOUT`).
++
+ ## Where Axis keeps your data
+ 
+ Everything Axis stores is in one folder on your computer. Nothing is sent anywhere.
+@@ -290,8 +306,9 @@ Axis/                       in your home folder (override with AXIS_HOME)
+ │       ├── agent.json      the agent's settings
+ ├── chats/                  saved conversations, one .json file each
+ ├── engine-settings.json    llama-server path, context size, extra arguments
++├── cas-settings.json       the Maxima path and the CAS agents use
+ ├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
+-│                           artcraft/ (the Craft apps) and rust/ (portable Rust)
++│                           artcraft/ (the Craft apps), rust/ (portable Rust) and cas-python/ (SymPy)
+ ├── image-models/           image model definitions, one .json file each
+ ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
+ ├── images/                 every picture Axis makes (Images page and agents)
+diff --git a/tests/test_axis.py b/tests/test_axis.py
+index d22c6aa..042e81c 100644
+--- a/tests/test_axis.py
++++ b/tests/test_axis.py
+@@ -268,7 +268,7 @@ class TestSkillsAndAgents(Base):
+     def test_skill_library(self):
+         ids = [s["id"] for s in skills.list_all()]
+         self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia",
+-                               "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
++                               "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
+                                "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
+                                "figcraft"])
+         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
+diff --git a/tests/test_cas.py b/tests/test_cas.py
+new file mode 100644
+index 0000000..ece293a
+--- /dev/null
++++ b/tests/test_cas.py
+@@ -0,0 +1,322 @@
++"""Tests for the CAS page and actions (cas.py), and the run_cas and read_text actions an agent uses.
++
++Maxima is replaced by a small shell script that behaves like `maxima --very-quiet`: it answers
++--version, echoes each command it reads, prints Maxima's help-system warning, and asks a question
++without end when the code contains ASK. SymPy's environment is the Python running the tests. No
++CAS, OCR model or network is needed.
++
++Run with:  python -m unittest discover -s tests -v
++"""
++
++from __future__ import annotations
++
++import os
++import shutil
++import sys
++import threading
++import time
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from axis import agents, cas, jobs, ocr, server, skills, tool_skills, tools
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++from test_manage import POSIX_ONLY, Base, request
++
++FAKE_MAXIMA = r'''#!/bin/sh
++if [ "$1" = "--version" ]; then echo "Maxima 5.47.0"; exit 0; fi
++echo "Warning: SIMPLE-WARNING: Maxima is unable to set up the help system." >&2
++echo "(Details: no index)" >&2
++echo "" >&2
++echo ""
++pwd > where.txt
++echo "$MAXIMA_TEMPDIR" > tempdir.txt
++while IFS= read -r line || [ -n "$line" ]; do
++  case "$line" in
++    display2d*) ;;
++    *ASK*) while true; do printf 'Is n equal to -1?\n\nAcceptable answers are yes, y, Y, no, n, N. \n'; done ;;
++    *SLEEP*) sleep 30 ;;
++    *PLOT*) echo png > "$MAXIMA_TEMPDIR/plot.png"; echo png > "$MAXIMA_TEMPDIR/maxout_1.gnuplot"; echo "[$MAXIMA_TEMPDIR/plot.png]" ;;
++    *) echo "out: $line" ;;
++  esac
++done
++'''
++
++
++class CasBase(Base):
++    def setUp(self):
++        super().setUp()
++        self.addCleanup(cas._PROBE.clear)
++        cas._PROBE.clear()
++        os.environ.pop("AXIS_MAXIMA", None)
++        # Nothing on this computer is found unless a test puts it there.
++        patch = mock.patch.object(cas, "_usual_maxima", return_value=[])
++        patch.start()
++        self.addCleanup(patch.stop)
++        which = shutil.which
++        patch = mock.patch.object(cas.shutil, "which", side_effect=lambda n, *a, **k: None if n == "maxima" else which(n, *a, **k))
++        patch.start()
++        self.addCleanup(patch.stop)
++        self.ws = Path(self.home) / "ws"
++        self.ws.mkdir()
++
++    def fake_maxima(self) -> Path:
++        prog = Path(self.home) / "bin" / "maxima"
++        prog.parent.mkdir(exist_ok=True)
++        prog.write_text(FAKE_MAXIMA)
++        prog.chmod(0o755)
++        os.environ["AXIS_MAXIMA"] = str(prog)
++        return prog
++
++    def fake_sympy(self) -> None:
++        folder = cas.env_dir() / "bin"
++        folder.mkdir(parents=True)
++        os.symlink(sys.executable, folder / "python3")
++        cas._remember("sympy", {"version": "1.13.3", "installed": "now"})
++
++
++class TestSkills(unittest.TestCase):
++    def test_one_skill_for_each_tool(self):
++        built = tool_skills.build()
++        self.assertEqual([s["id"] for s in built], ["cas", "images", "ocr"])
++        self.assertEqual([s["tools"] for s in built], [["run_cas"], ["generate_image"], ["read_text"]])
++        for s in built:
++            self.assertEqual(s["group"], tool_skills.GROUP)
++            self.assertIn(s["id"], skills.BUILTIN_IDS)
++            self.assertLess(len(s["instructions"]), 3000)
++            self.assertLessEqual(len(s["description"]), 300)
++            for t in s["tools"]:
++                self.assertIn(t, tools.TOOL_SPECS)
++
++    def test_agent_gets_the_actions_and_the_folder_note(self):
++        with mock.patch.dict(os.environ, {"AXIS_HOME": __import__("tempfile").mkdtemp()}):
++            agent = agents.create({"name": "mathy", "skills": ["cas", "ocr"]})
++            self.assertEqual(agents.tool_names(agent), ["run_cas", "read_text"])
++            system = agents.build_messages(agent, [{"role": "user", "content": "hi"}])[0]["content"]
++            self.assertIn("## CAS", system)
++            self.assertIn("folder", system)   # these actions work in the agent's folder
++
++    def test_aliases(self):
++        self.assertEqual(tools.normalize_call("maxima", {"code": "1+1;"}, ["run_cas"])[0], "run_cas")
++        self.assertEqual(tools.normalize_call("ocr", {"image": "a.png"}, ["read_text"]), ("read_text", {"path": "a.png"}))
++
++
++class TestMaximaCodeCheck(CasBase):
++    def check(self, code):
++        cas.check_maxima_code(tools.Places(self.ws), code)
++
++    def test_refused(self):
++        for code, why in (('system("ls");', "starts other programs"), (":lisp (print 1)", "Lisp"),
++                          ("to_lisp();", "Lisp"), ("?print(1);", "Lisp"), ('load("x.lisp");', "Lisp files"),
++                          ('stringout("/etc/x.txt", 1);', "outside your folder"),
++                          ('batch("../up.mac");', "outside your folder"), ('load("~/init.mac");', "outside your folder")):
++            with self.subTest(code=code):
++                with self.assertRaisesRegex(cas.CasError, why):
++                    self.check(code)
++
++    def test_allowed(self):
++        for code in ("integrate(x^2, x);", 'print("1 / 2 is a half")$', 'plot2d(x, [x,0,1], [png_file, "p.png"])$',
++                     "/* system(\"ls\") in a comment */ 2+2;", 'print("system(x) as text")$', "a: [1,2]$ a[1];"):
++            with self.subTest(code=code):
++                self.check(code)
++
++    def test_program_and_cleaning(self):
++        self.assertTrue(cas._maxima_program("2+3").endswith("2+3;\n"))
++        self.assertTrue(cas._maxima_program("2+3$ /* note */").endswith("/* note */\n"))
++        text, question = cas._clean_maxima(
++            "Warning: SIMPLE-WARNING: Maxima is unable to set up the help system.\n(Details: x)\n\n5\n"
++            "Is n equal to -1?\n\nAcceptable answers are yes, y, Y, no, n, N.\nIs n equal to -1?\n")
++        self.assertEqual(text, "5")
++        self.assertEqual(question, "Is n equal to -1?")
++
++
++@POSIX_ONLY
++class TestRunning(CasBase):
++    def test_nothing_installed(self):
++        self.assertIsNone(cas.default_system())
++        with self.assertRaisesRegex(cas.CasError, "CAS page"):
++            cas.run(tools.Places(self.ws), None, "1+1;")
++        ok, out = tools.execute(self.ws, "run_cas", {"code": "1+1;"}, ["run_cas"])
++        self.assertFalse(ok)
++        self.assertIn("CAS page", out)
++
++    def test_maxima(self):
++        self.fake_maxima()
++        st = cas.status()
++        maxima = st["systems"][0]
++        self.assertTrue(maxima["installed"])
++        self.assertEqual(maxima["version"], "5.47.0")
++        self.assertEqual(st["default"], "maxima")
++        ok, out = tools.execute(self.ws, "run_cas", {"code": "diff(x^3, x);\nfactor(x^2-1)"}, ["run_cas"])
++        self.assertTrue(ok, out)
++        self.assertIn("out: diff(x^3, x);", out)
++        self.assertIn("out: factor(x^2-1);", out)       # the missing ; was added
++        self.assertNotIn("help system", out)
++        self.assertEqual((self.ws / "where.txt").read_text().strip(), str(self.ws.resolve()))
++        temp = Path((self.ws / "tempdir.txt").read_text().strip())
++        self.assertEqual(temp.parent, self.ws / ".axis-tmp")   # scratch files stay in the folder ...
++        self.assertFalse(temp.exists())                       # ... and are removed afterwards
++        ok, out = tools.execute(self.ws, "run_cas", {"code": 'system("rm -rf x");'}, ["run_cas"])
++        self.assertFalse(ok)
++        self.assertIn("other programs", out)
++
++    def test_a_question_stops_maxima(self):
++        self.fake_maxima()
++        started = time.time()
++        result = cas.run(tools.Places(self.ws), "maxima", "1;\nintegrate(x^n, x); /* ASK */\n2;")
++        self.assertLess(time.time() - started, 15)
++        self.assertEqual(result["question"], "Is n equal to -1?")
++        self.assertIn("out: 1;", result["stdout"])
++        self.assertNotIn("Acceptable", result["stdout"])
++        self.assertIn("assume(", cas.report(result))
++
++    def test_plots_are_moved_into_the_folder_without_replacing_anything(self):
++        self.fake_maxima()
++        (self.ws / "plot.png").write_text("mine")
++        ok, out = tools.execute(self.ws, "run_cas", {"code": "PLOT;"}, ["run_cas"])
++        self.assertTrue(ok, out)
++        self.assertIn("Saved in your folder: plot-2.png", out)
++        self.assertIn("[plot-2.png]", out)          # the scratch path is not shown
++        self.assertEqual((self.ws / "plot.png").read_text(), "mine")
++        self.assertTrue((self.ws / "plot-2.png").is_file())
++        self.assertFalse(list(self.ws.glob("maxout*")))
++
++    def test_timeout(self):
++        self.fake_maxima()
++        with mock.patch.object(cas, "RUN_TIMEOUT", 1):
++            result = cas.run(tools.Places(self.ws), "maxima", "SLEEP;")
++        self.assertTrue(result["timed_out"])
++        self.assertIn("Stopped", cas.report(result))
++
++    def test_sympy_runs_under_the_python_guard(self):
++        self.fake_sympy()
++        self.assertEqual(cas.default_system(), "sympy")
++        ok, out = tools.execute(self.ws, "run_cas", {"code": "print(6 * 7)"}, ["run_cas"])
++        self.assertTrue(ok, out)
++        self.assertIn("42", out)
++        ok, out = tools.execute(self.ws, "run_cas", {"code": "open('/etc/hostname-x', 'w')", "system": "sympy"}, ["run_cas"])
++        self.assertTrue(ok, out)
++        self.assertIn("outside", out)   # the Run Python guard refused it
++
++    def test_the_default_can_be_chosen(self):
++        self.fake_maxima()
++        self.fake_sympy()
++        self.assertEqual(cas.default_system(), "maxima")
++        cas.save_settings({"default": "sympy"})
++        self.assertEqual(cas.default_system(), "sympy")
++        with self.assertRaisesRegex(cas.CasError, "Maxima or SymPy"):
++            cas.save_settings({"default": "mathematica"})
++        # Python sent without naming the system goes to SymPy.
++        self.assertIn("42", tools.run_cas(tools.Places(self.ws), {"code": "import math\nprint(42)"}))
++
++    def test_settings_path(self):
++        prog = self.fake_maxima()
++        os.environ.pop("AXIS_MAXIMA")
++        self.assertIsNone(cas.maxima_binary())
++        cas.save_settings({"maxima": str(prog.parent)})
++        self.assertEqual(cas.maxima_binary(), prog.resolve())
++
++
++class TestInstalling(CasBase):
++    def test_refusals(self):
++        with self.assertRaisesRegex(cas.CasError, "not inside Axis"):
++            cas.remove({"system": "maxima"})
++        with self.assertRaisesRegex(cas.CasError, "Maxima or SymPy"):
++            cas.install({"system": "mathematica"})
++
++    def test_plans(self):
++        with mock.patch.object(cas.engines, "this_platform", return_value=("windows", "x64")), \
++                mock.patch.object(cas.shutil, "which", return_value="C:/winget.exe"):
++            plan = cas.maxima_install_plan()
++        self.assertEqual(plan["how"], "winget")
++        self.assertIn(cas.WINGET_ID, plan["command"])
++        with mock.patch.object(cas.engines, "this_platform", return_value=("windows", "x64")), \
++                mock.patch.object(cas.shutil, "which", return_value=None):
++            self.assertIsNone(cas.maxima_install_plan()["how"])
++
++    @POSIX_ONLY
++    def test_install_sympy_and_delete(self):
++        def fake_run(cmd, job, on_line=None, env=None, cwd=None, timeout=None, beat=None):
++            self.assertEqual(cmd[1:4], ["-m", "pip", "install"])
++            self.assertIn("sympy", cmd)
++            return 0, mock.Mock(tail=lambda n=12: "")
++
++        def fake_quiet(cmd, timeout=20.0):
++            if "venv" in cmd:
++                (Path(cmd[-1]) / "bin").mkdir(parents=True)
++                os.symlink(sys.executable, Path(cmd[-1]) / "bin" / "python3")
++                return 0, ""
++            return 0, "1.13.3\n"
++
++        with mock.patch.object(ocr, "_run", side_effect=fake_run), mock.patch.object(cas.engines, "_quiet_run", side_effect=fake_quiet):
++            job = jobs.wait(jobs.get(cas.install({"system": "sympy"})["job"]["id"]), 30)
++        self.assertEqual(job.state, "done", job.error)
++        self.assertEqual(cas.status()["systems"][1]["version"], "1.13.3")
++        with self.assertRaisesRegex(cas.CasError, "already installed"):
++            cas.install({"system": "sympy"})
++        st = cas.remove({"system": "sympy"})
++        self.assertFalse(st["systems"][1]["installed"])
++        self.assertFalse(cas.env_dir().exists())
++
++
++class TestReadText(CasBase):
++    def test_pick_model(self):
++        models = [{"id": "tesseract:eng", "model": "eng", "name": "Tesseract eng", "usable": True},
++                  {"id": "tesseract:lat", "model": "lat", "name": "Tesseract lat", "usable": True},
++                  {"id": "easyocr:en", "model": "en", "name": "EasyOCR en", "usable": False}]
++        with mock.patch.object(ocr, "list_models", return_value=models), mock.patch.object(ocr, "running_model", return_value=None):
++            self.assertEqual(ocr.pick_model(), "tesseract:eng")
++            self.assertEqual(ocr.pick_model("lat"), "tesseract:lat")
++            with self.assertRaisesRegex(ocr.OcrError, "no usable OCR model"):
++                ocr.pick_model("easyocr:en")
++        with mock.patch.object(ocr, "list_models", return_value=[]), mock.patch.object(ocr, "running_model", return_value=None):
++            with self.assertRaisesRegex(ocr.OcrError, "Models page"):
++                ocr.pick_model()
++
++    def test_action(self):
++        (self.ws / "scan.png").write_bytes(b"\x89PNG")
++        seen = {}
++
++        def fake_run(body, path, emit):
++            seen.update(body=body, path=path)
++            return {"text": "Gallia est omnis divisa", "words": 4, "confidence": 91.4, "seconds": 0.2,
++                    "name": "Tesseract lat"}
++
++        with mock.patch.object(ocr, "pick_model", return_value="tesseract:lat"), mock.patch.object(ocr, "run", side_effect=fake_run):
++            ok, out = tools.execute(self.ws, "read_text", {"path": "scan.png", "languages": "lat"}, ["read_text"])
++        self.assertTrue(ok, out)
++        self.assertIn("Gallia est omnis divisa", out)
++        self.assertIn("confidence 91%", out)
++        self.assertEqual(seen["body"], {"model": "tesseract:lat", "languages": "lat"})
++        ok, out = tools.execute(self.ws, "read_text", {"path": "../outside.png"}, ["read_text"])
++        self.assertFalse(ok)
++        ok, out = tools.execute(self.ws, "read_text", {"path": "missing.png"}, ["read_text"])
++        self.assertFalse(ok)
++        self.assertIn("not a file", out)
++
++
++@POSIX_ONLY
++class TestRoutes(CasBase):
++    def test_routes(self):
++        self.fake_maxima()
++        srv = server.make_server(0, None)
++        threading.Thread(target=srv.serve_forever, daemon=True).start()
++        self.addCleanup(srv.server_close)
++        self.addCleanup(srv.shutdown)
++        status, st = request(srv.url + "/api/cas")
++        self.assertEqual(status, 200)
++        self.assertEqual([s["id"] for s in st["systems"]], ["maxima", "sympy"])
++        status, r = request(srv.url + "/api/cas/run", "POST", {"code": "2+2;"})
++        self.assertEqual(status, 200, r)
++        self.assertEqual(r["system"], "maxima")
++        self.assertIn("out: 2+2;", r["stdout"])
++        status, r = request(srv.url + "/api/cas/settings", "PUT", {"default": "nope"})
++        self.assertEqual(status, 400)
++        status, r = request(srv.url + "/api/cas/remove", "POST", {"system": "maxima"})
++        self.assertEqual(status, 400)
++        self.assertIn("not inside Axis", r["error"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_craftskills.py b/tests/test_craftskills.py
+index 2080402..6c792ce 100644
+--- a/tests/test_craftskills.py
++++ b/tests/test_craftskills.py
+@@ -14,7 +14,7 @@ import unittest
+ from pathlib import Path
+ from unittest import mock
+ 
+-from axis import agents, artcraft, craft_skills, skills, tools
++from axis import agents, artcraft, craft_skills, skills, tool_skills, tools
+ 
+ POSIX_ONLY = unittest.skipIf(os.name == "nt", "uses a shell script as the stand-in program")
+ 
+@@ -53,11 +53,14 @@ class TestCraftSkillDefinitions(unittest.TestCase):
+     def test_the_library_lists_them_after_the_older_built_ins(self):
+         ids = [s["id"] for s in skills.list_all() if s["builtin"]]
+         self.assertEqual(ids[:5], ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia"])
+-        self.assertEqual(ids[5:], artcraft.APP_IDS)
++        self.assertEqual(ids[5:8], ["cas", "images", "ocr"])   # the Tools skills
++        self.assertEqual(ids[8:], artcraft.APP_IDS)
+ 
+-    def test_only_craft_skills_have_a_group(self):
++    def test_only_craft_and_tools_skills_have_a_group(self):
++        tool_ids = {s["id"] for s in tool_skills.build()}
+         for s in skills.list_all():
+-            self.assertEqual(s["group"], craft_skills.GROUP if s["id"] in artcraft.APP_IDS else "")
++            want = craft_skills.GROUP if s["id"] in artcraft.APP_IDS else tool_skills.GROUP if s["id"] in tool_ids else ""
++            self.assertEqual(s["group"], want)
+ 
+ 
+ class Home(unittest.TestCase):

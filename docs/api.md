@@ -148,6 +148,18 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 These jobs are not listed by `GET /api/manage`. Cancel one, or clear a finished one, with the `/api/manage/jobs/<id>` routes above.
 
+## CAS
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/cas` | Maxima and SymPy (`systems`: installed, version, path, how Axis would install it), `settings`, the `default` agents use, and the CAS install jobs |
+| `PUT` | `/api/cas/settings` | `{"maxima": "path"}` and/or `{"default": "maxima" \| "sympy" \| ""}`; answers like `GET /api/cas` |
+| `POST` | `/api/cas/install` | install Maxima or SymPy in the background: `{"system": "maxima"}`. Answers `202` with `{"job": ...}`; refuses what is already installed |
+| `POST` | `/api/cas/remove` | delete the SymPy environment: `{"system": "sympy"}`. A system-wide Maxima is never removed |
+| `POST` | `/api/cas/run` | run code in the workspace folder: `{"system"?: "maxima" \| "sympy", "code": "..."}`. Answers `{system, exit, stdout, stderr, timed_out, question, saved?}`; `question` is what Maxima stopped to ask, and `saved` the files a run moved into the folder |
+
+These jobs are not listed by `GET /api/manage` either; use the `/api/manage/jobs/<id>` routes.
+
 ## Example
 
 ```bash

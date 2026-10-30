@@ -1087,7 +1087,7 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
         "ocr": ocr.status(),
         "catalog": catalog.public(),
         "hf_token": bool(hub.token()),
-        "jobs": [j for j in jobs.listing() if j["engine"] != "artcraft"],   # the Art Craft tab shows its own
+        "jobs": [j for j in jobs.listing() if j["engine"] not in ("artcraft", "cas")],   # the Art Craft and CAS pages show their own
     }
 
 

@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from axis import agents, artcraft, craft_skills, skills, tools
+from axis import agents, artcraft, craft_skills, skills, tool_skills, tools
 
 POSIX_ONLY = unittest.skipIf(os.name == "nt", "uses a shell script as the stand-in program")
 
@@ -53,11 +53,14 @@ class TestCraftSkillDefinitions(unittest.TestCase):
     def test_the_library_lists_them_after_the_older_built_ins(self):
         ids = [s["id"] for s in skills.list_all() if s["builtin"]]
         self.assertEqual(ids[:5], ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia"])
-        self.assertEqual(ids[5:], artcraft.APP_IDS)
+        self.assertEqual(ids[5:8], ["cas", "images", "ocr"])   # the Tools skills
+        self.assertEqual(ids[8:], artcraft.APP_IDS)
 
-    def test_only_craft_skills_have_a_group(self):
+    def test_only_craft_and_tools_skills_have_a_group(self):
+        tool_ids = {s["id"] for s in tool_skills.build()}
         for s in skills.list_all():
-            self.assertEqual(s["group"], craft_skills.GROUP if s["id"] in artcraft.APP_IDS else "")
+            want = craft_skills.GROUP if s["id"] in artcraft.APP_IDS else tool_skills.GROUP if s["id"] in tool_ids else ""
+            self.assertEqual(s["group"], want)
 
 
 class Home(unittest.TestCase):

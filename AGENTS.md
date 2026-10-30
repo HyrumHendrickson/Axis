@@ -40,6 +40,7 @@ Run the full suite before you finish. It must pass.
 | Installing, starting, or stopping models | `axis/manager.py`, `axis/jobs.py`, `axis/procs.py`, `axis/hub.py`, `axis/catalog.py` |
 | Engine downloads | `axis/engines.py` |
 | Images or OCR | `axis/images.py`, `axis/ocr.py`, `axis/ocr_worker.py` |
+| Computer algebra (CAS page, `run_cas`) | `axis/cas.py` |
 | Command-line commands | `axis/cli.py` |
 
 ## Conventions

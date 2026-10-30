@@ -103,6 +103,8 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `AXIS_TESSERACT` | Path to the `tesseract` program | Found on PATH or where its installer puts it |
 | `AXIS_OCR_PYTHON` | Python the OCR environment for PyTorch models is made from | The Python Axis was installed with |
 | `AXIS_OCR_TIMEOUT` | Longest time reading one picture may take, in seconds | 900 |
+| `AXIS_MAXIMA` | Path to the `maxima` program (or its folder) for the CAS page and agents | Found on PATH or where its installer puts it |
+| `AXIS_CAS_TIMEOUT` | Longest time one run of CAS code may take, in seconds | 60 |
 | `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |
 
 Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).

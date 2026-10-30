@@ -34,7 +34,8 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
 - **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Choose them in each agent's settings.
 - **Past chats** are saved automatically and can be resumed at any time. Any message you sent can be edited and sent again.
-- **Tools** in the sidebar holds Images, Art Craft and OCR.
+- **Tools** in the sidebar holds Images, Art Craft, OCR and CAS. Each has a skill for agents.
+- **CAS** installs Maxima or SymPy for exact math (equations, calculus, algebra), for you and for agents.
 - **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp) and saved in `Axis/images`.
 - **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
 - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
