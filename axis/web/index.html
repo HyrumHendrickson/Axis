@@ -571,11 +571,12 @@ const S = {
   msgEdit: null,                // { target, chatId, index, text } while one of your earlier messages is being edited
   wsDrag: null,                 // { agent, path, isDir } while a Workspace file or folder is being dragged
   runOut: null,                 // the Workspace program run: { place, path, running, result | error }
-  term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", history: [], hpos: -1, draft: "" },   // terminals (Terminal tab and the Workspace's bottom panel)
-  ide: { side: false, agent: "", dock: false, tab: "terminal", dockH: 260 },   // Workspace: agent panel, bottom panel (terminals and run output)
+  term: { sessions: [], active: "", buf: {}, loaded: false, side: true, agent: "", terminalTool: false, history: [], hpos: -1, draft: "" },   // terminals (Terminal tab and the Workspace's bottom panel)
+  ide: { side: false, agent: "", terminalTool: false, dock: false, tab: "terminal", dockH: 260 },   // Workspace: agent panel, bottom panel (terminals and run output)
   nameEdit: null,               // { mode: "new" | "rename", ... } while a file or folder name is being typed in the Workspace list
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
+  chatLocation: {},             // target -> selected terminal/workspace location
   streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
   drafts: {},                   // target -> unsent text in the message box
   errors: {},                   // target -> the last error, shown until the next message
@@ -863,13 +864,13 @@ function renderNav() {
     item("Agents", S.agents.length ? `${S.agents.length} agent${S.agents.length === 1 ? "" : "s"}: chat, edit or make one` : "Make agents with their own skills",
       v.kind === "agents" || v.kind === "edit" || (v.kind === "chat" && v.agent !== DIRECT), () => go({ kind: "agents" }),
       Object.keys(S.streams).some((k) => k !== DIRECT)),
-    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
-    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
-    item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
+    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
+    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
+    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
+    item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
     v.kind === "models" ? h("div", { class: "nav-sub", role: "group", "aria-label": "Models sections" },
       MODEL_TABS.map(([key, label]) => {
         const busy = runningJobs(S.manage).some((j) => jobTab(j) === key);
@@ -948,6 +949,15 @@ function currentModel(target) {
   const agent = target ? agentByName(target) : null;
   return matchModel(S.modelChoice[target], models) || matchModel(agent && agent.model, models) || models[0] || "";
 }
+function chatLocation(target) {
+  const agent = target && agentByName(target);
+  return agent && S.chatLocation[target] === SHARED ? SHARED : (agent ? agent.name : "");
+}
+function terminalToolFor(target) {
+  if (S.view.kind === "terminal" && S.term.side && S.term.agent === target) return !!S.term.terminalTool;
+  if (S.view.kind === "workspace" && S.ide.side && S.ide.agent === target) return !!S.ide.terminalTool;
+  return false;
+}
 
 function menuButton() {
   return h("button", { class: "btn small menu-btn", "aria-label": "Open menu", onclick: () => $("app").classList.toggle("menu-open") }, "Menu");
@@ -1008,6 +1018,11 @@ function renderChat() {
   const select = h("select", { "aria-label": "Model", disabled: !ready() || !!stream,
     onchange: (e) => { S.modelChoice[target] = e.target.value; renderChat(); } },
     models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
+  const location = h("select", { "aria-label": "Agent location", disabled: !!stream,
+    onchange: (e) => { S.chatLocation[target] = e.target.value; renderChat(); } },
+    [[agent ? agent.name : "", agent ? "Agent folder" : "No agent folder"], [SHARED, "Shared folder"]].map(([v, label]) => {
+      const o = h("option", { value: v }, label); o.selected = chatLocation(target) === v; return o;
+    }));
   const hasHistory = getHistory(target).length > 0;
 
   const bar = h("div", { class: "bar" },
@@ -1015,6 +1030,7 @@ function renderChat() {
     h("h2", {}, agent ? agent.name : "Direct chat",
       chat && hasHistory ? h("small", { class: "chat-sub" }, chatTitle(chat)) : null),
     ready() ? h("label", {}, "Model", select) : null,
+    agent ? h("label", {}, "Location", location) : null,
     agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
     hasHistory ? h("button", { class: "btn small", title: "Download this conversation as a Markdown file", onclick: () => exportChat(target) }, "Export") : null,
     h("button", { class: "btn small", title: "Earlier conversations" + (agent ? " with " + agent.name : ""),
@@ -1586,7 +1602,9 @@ async function send(target, { resend = false, terminal, workspace } = {}) {
     const history = msgs.map(forModel);
     const res = await fetch("/api/chat", { method: "POST", signal: stream.controller.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview, terminal: terminal || null, workspace: workspace || null }) });
+      body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview,
+        terminal: terminal || null, workspace: workspace || null, terminal_tool: terminalToolFor(target),
+        location: chatLocation(target) || null }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -1672,7 +1690,7 @@ function renderEditor() {
   const custom = pickList(false);
   const skillPicker = h("div", {},
     h("div", { class: "subhead" }, "Actions"),
-    h("p", { class: "hint" }, "Let the agent work with files in its own folder, run Python, run Rust, run terminal code, search the web, read Wikipedia or make pictures. Shared folder lets its file actions also reach a folder every agent with that skill can use."),
+    h("p", { class: "hint" }, "Choose what this agent can do. File access is available through terminal commands, and the chat Location menu selects where those commands run."),
     pickList(true),
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
@@ -1941,8 +1959,8 @@ function renderWorkspace() {
       if (!leaveEdit()) { e.target.value = f.agent; return; }
       S.workspace = { agent: e.target.value, dir: "", file: "" }; renderWorkspace(); } },
     names.map((n) => { const o = h("option", { value: n }, label(n)); o.selected = n === f.agent; return o; }));
+  bar.querySelector("h2").append(" ", pick);
   bar.append(
-    h("label", {}, "Folder", pick),
     h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
       h("button", { class: "btn small", id: "ide-dock-btn", title: "Show or hide a terminal under the files", onclick: () => setDock(!S.ide.dock) }, "Terminal"),
       h("button", { class: "btn small", id: "ide-side-btn", title: "Show or hide a chat with an agent that can see this folder", onclick: toggleSide }, "Agent")));
@@ -2096,6 +2114,7 @@ function drawDock() {
 
 function toggleSide() {
   S.ide.side = !S.ide.side; saveIde();
+  if (!S.ide.side) S.ide.terminalTool = false;
   const ide = $("ide"); if (!ide) return;
   ide.classList.toggle("with-side", S.ide.side);
   const old = $("ide-side"); if (old) old.remove();
@@ -2593,7 +2612,7 @@ function renderTerminal() {
     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
     t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
     h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
-      title: "A panel where an agent can see this terminal and help", onclick: () => { T.side = !T.side; store("axis.termSide", T.side); renderTerminal(); } },
+      title: "A panel where an agent can see this terminal and help", onclick: () => { T.side = !T.side; if (!T.side) T.terminalTool = false; store("axis.termSide", T.side); renderTerminal(); } },
       T.side ? "Hide agent" : "Show agent"));
   const tabs = T.sessions.length ? h("div", { class: "term-tabs", role: "tablist", "aria-label": "Open terminals" },
     T.sessions.map((x) => h("span", { class: "term-tab" + (x.alive ? "" : " closed"), role: "presentation", "aria-selected": x.id === T.active ? "true" : "false" },
@@ -2831,7 +2850,10 @@ function renderSideChat(cfg) {
   const pick = h("select", { "aria-label": "Agent", disabled: !!S.streams[target],
     onchange: (e) => { st.agent = e.target.value; cfg.save(); renderSideChat(cfg); } },
     S.agents.map((a) => { const o = h("option", { value: a.name }, a.name); o.selected = a.name === target; return o; }));
-  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick),
+  const terminalAccess = cfg.terminalAccess ? h("label", { class: "check", title: "Temporarily let this agent run terminal commands" },
+    h("input", { type: "checkbox", checked: !!cfg.terminalAccess(), onchange: (e) => { cfg.setTerminalAccess(e.target.checked); renderSideChat(cfg); } }),
+    "Allow terminal commands") : null;
+  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), terminalAccess,
     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
       onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
     h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
@@ -2882,6 +2904,8 @@ const TERM_CHAT = {
     ? `Each message shows ${t} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
     : `Open a terminal and ${t} will see its output with each message.`,
   ask: () => askFrom(S.term.agent, "term-ask"),
+  terminalAccess: () => S.term.terminalTool,
+  setTerminalAccess: (on) => { S.term.terminalTool = on; },
 };
 const IDE_CHAT = {
   host: "ide-side", askId: "ide-ask", hintId: "ide-hint",
@@ -2892,6 +2916,8 @@ const IDE_CHAT = {
   placeholder: (t) => `Ask ${t} about this folder`,
   hint: (t, model) => ideHint(t, model),
   ask: () => askFrom(S.ide.agent, "ide-ask"),
+  terminalAccess: () => S.ide.terminalTool,
+  setTerminalAccess: (on) => { S.ide.terminalTool = on; },
   headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
 };
 const renderTermChat = () => renderSideChat(TERM_CHAT);
@@ -4578,7 +4604,7 @@ function renderSkills() {
         h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
         custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent act: files, Python, Rust, terminal code, web search, Wikipedia and image generation. File actions reach only the agent\u2019s own folder, plus the shared folder for agents given Shared folder. Edit changes what a skill tells the model; Reset to default undoes it."),
+        h("p", { class: "hint" }, "These let an agent act: Python, Rust, terminal code, web search and Wikipedia. Edit changes what a skill tells the model; Reset to default undoes it."),
         builtin.map(skillCard)))));
 }
 

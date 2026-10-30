@@ -1171,7 +1171,15 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
         agent = agents.load(body["agent"]) if body.get("agent") else None
-        messages = attach_images(with_workspace(with_terminal(agents.build_messages(agent, body.get("messages")), body.get("terminal")),
+        messages = agents.build_messages(agent, body.get("messages"))
+        if body.get("terminal_tool") and agent:
+            messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
+                            "\n\nThe user temporarily granted you the run_terminal tool for this conversation. "
+                            "Use it only when needed and explain what you ran."}
+        if agent and body.get("location") == SHARED_NAME:
+            messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
+                            "\n\nThe selected command location is the Shared folder."}
+        messages = attach_images(with_workspace(with_terminal(messages, body.get("terminal")),
                                                 body.get("workspace"), agent))
 
         self.send_response(200)
@@ -1191,9 +1199,17 @@ class Handler(BaseHTTPRequestHandler):
             requested = body.get("model") or (agent.model if agent else "") or None
             conn, model = backend.pick(self.server.model_url, requested)
             emit({"model": model})
+            allowed = agents.tool_names(agent)
+            if body.get("terminal_tool") and agent and "run_terminal" not in allowed:
+                allowed = allowed + ["run_terminal"]
+            execution_workspace = agent.workspace if agent else None
+            execution_shared = agents.shared_folder(agent)
+            if agent and body.get("location") == SHARED_NAME:
+                execution_workspace = shared_root()
+                execution_shared = None
             runner.reply(conn, model, messages, emit,
-                         tool_names=agents.tool_names(agent), workspace=agent.workspace if agent else None,
-                         shared=agents.shared_folder(agent), image_preview=body.get("image_preview") is True)
+                         tool_names=allowed, workspace=execution_workspace,
+                         shared=execution_shared, image_preview=body.get("image_preview") is True)
             emit({"done": True})
         except ClientGone:
             return

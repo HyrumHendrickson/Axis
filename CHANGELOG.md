@@ -87,3 +87,9 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 ## Earlier versions
 
 Changes before 4.1.1 were not recorded in a changelog. The Git history (`git log`) lists them, including saved chats, web search, image generation, model management, the Axis window and app, the update check, image editing, and OCR.
+## 4.2.3
+
+- Streamlined agent skills by removing the file-management, image-generation, and shared-folder skills. Agents can use terminal commands when enabled, while the Images tab remains available for image work.
+- Reordered the sidebar tabs: Direct chat, Past chats, Agents, Workspace, Terminal, Images, Models, Art Craft, OCR, Skills.
+- Added a temporary “Allow terminal commands” checkbox to Terminal and Workspace agent sidebars.
+- Added a per-chat Location selector for the agent folder or Shared folder, and moved the Workspace folder selector beside the Workspace title.

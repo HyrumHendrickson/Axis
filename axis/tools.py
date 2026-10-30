@@ -914,9 +914,14 @@ def generate_image(ws: Where, args: Dict[str, Any],
             f"model {rec['model']}, {rec['seconds']} s). The user can see the picture.")
 
 
-FILE_TOOLS = ("list_files", "read_file", "write_file", "make_folder", "delete_file")
+# File management is intentionally not exposed as an agent skill. Agents can use
+# the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
+# to the user.
+FILE_TOOLS = ()
 EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file")
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
+    # These handlers remain available to the user-facing Workspace and to
+    # compatibility code, but are no longer advertised by any agent skill.
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,

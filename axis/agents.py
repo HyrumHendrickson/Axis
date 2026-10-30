@@ -278,7 +278,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
         return messages
 
     names = tool_names(agent)
-    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + tool_lib.EXECUTION_TOOLS)
+    uses_files = any(t in names for t in tool_lib.EXECUTION_TOOLS)
     shared = shared_folder(agent) is not None if uses_files else False
     system = agent.system_prompt + skills_prompt(agent.skills, names, shared)
 
@@ -298,7 +298,7 @@ def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False) 
     shared folder. build_messages and skill_preview both use this, so what the Skills page shows is
     exactly what is sent.
     """
-    uses_files = any(t in names for t in tool_lib.FILE_TOOLS + tool_lib.EXECUTION_TOOLS)
+    uses_files = any(t in names for t in tool_lib.EXECUTION_TOOLS)
     chosen = [skill_lib.get(i) for i in skill_ids if skill_lib.exists(i)]
     # A skill that only changes how file actions work means nothing without them.
     needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}

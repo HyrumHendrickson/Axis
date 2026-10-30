@@ -80,35 +80,6 @@ BUILTIN: List[Dict[str, Any]] = [
         "tools": ["run_terminal", "run_terminal_file"],
     },
     {
-        "id": "list-files",
-        "name": "List files",
-        "description": "See which files and folders are in the agent's folder.",
-        "instructions": "Use list_files to see what is in your folder before reading or changing files.",
-        "tools": ["list_files"],
-    },
-    {
-        "id": "read-files",
-        "name": "Read files",
-        "description": "Open and read text files in the agent's folder.",
-        "instructions": "Use read_file to read a file before summarizing or editing it.",
-        "tools": ["read_file"],
-    },
-    {
-        "id": "write-files",
-        "name": "Make files",
-        "description": "Create and overwrite text files and folders in the agent's folder.",
-        "instructions": "Use write_file to save work (notes, code, reports) and make_folder to organize it. "
-        "Tell the user the file names you created.",
-        "tools": ["write_file", "make_folder"],
-    },
-    {
-        "id": "delete-files",
-        "name": "Delete files",
-        "description": "Delete files and empty folders in the agent's folder.",
-        "instructions": "Use delete_file only when the user asks you to remove something.",
-        "tools": ["delete_file"],
-    },
-    {
         "id": "web-search",
         "name": "Web search",
         "description": "Search the web and read web pages. The agent chooses how much text to get back.",
@@ -126,30 +97,6 @@ BUILTIN: List[Dict[str, Any]] = [
         "Set intro_only to true when a summary is enough. Use max_chars to limit how much text comes back and "
         "start to continue a long article. Mention the article you used.",
         "tools": ["wikipedia_search", "wikipedia_article"],
-    },
-    {
-        "id": "image-generation",
-        "name": "Image generation",
-        "description": "Make pictures from text with a local Stable Diffusion model. Pictures are saved in "
-        "images/ in the agent's folder.",
-        "instructions": "When the user asks for a picture, illustration, drawing or photo, call generate_image with a "
-        "detailed prompt (subject, setting, style, lighting, composition). Leave width, height, steps and model out "
-        "unless the user asks for them. Afterwards, say briefly what you made and give the file name; do not "
-        "describe the picture at length, since the user can see it.",
-        "tools": ["generate_image"],
-    },
-    {
-        "id": SHARED_SKILL,
-        "name": "Shared folder",
-        "description": "Let the agent's file actions also reach a folder shared by every agent with this skill, "
-        "so agents can pass files and messages to each other.",
-        "instructions": "There is a shared folder that other agents can read and change. Put paths in it under "
-        "shared/ (for example shared/notes.md). Use it to leave files or messages for other agents and to pick "
-        "up theirs. Other agents may change shared files at any time, so read a shared file again before "
-        "relying on it, and do not overwrite another agent's file unless asked. Name messages clearly, "
-        "for example shared/inbox/to-writer.md.",
-        "tools": [],
-        "needs_files": True,
     },
 ]
 BUILTIN_IDS = {s["id"] for s in BUILTIN}
