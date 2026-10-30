@@ -9,7 +9,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 - **Bodies** are JSON (`Content-Type: application/json`), up to 5 MB, except uploads and saves, which send the file's bytes.
 - **Errors** are `{"error": "message"}` with status `400`, or `404` when something does not exist. The message is written for the user and is shown as-is.
 - **Streams.** `/api/chat`, `/api/images/generate` and `/api/ocr/run` answer with newline-delimited JSON: one event per line, sent as soon as it happens.
-- **Places.** File routes take `<name>`, which is an agent's name or `_shared` for the shared folder. Paths in `path` and `to` are relative to that folder and can never leave it.
+- **Places.** File routes take `<name>`, which is an agent's name or `_shared` for the shared folder. Paths in `path` and `to` are relative to that folder and can never leave it. `_folder` with `&folder=<full path>` is the folder one chat was given (the same folders you may choose for a chat); only `raw` and `reveal` work there, which is how a file an agent shared with `share_file` is downloaded.
 - **Source of truth.** The route list at the top of `axis/server.py`. When you add or change a route, update both.
 
 ## Axis itself
@@ -30,7 +30,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's newest commands and their output, and "terminal_commands": n how many (0 to 100, 0 for none, default 5); "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only; "folder": a full path keeps the agent in that folder for this chat instead of the workspace folder) |
+| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's newest commands and their output, and "terminal_commands": n how many (0 to 100, 0 for none, default 5); "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only; "folder": a full path keeps the agent in that folder for this chat instead of the workspace folder). A `tool_result` event for `share_file` also carries `file`: {name, size, place, path} (and `folder` when `place` is `_folder`), which the page turns into a download |
 | `GET` | `/api/workspace` | the workspace folder {folder, default, is_default, missing} (missing names a chosen folder that is gone) |
 | `PUT` | `/api/workspace` | use another folder as the workspace {folder}; `""` goes back to `Axis/shared`. The top of a drive and folders inside `Axis` (except `Axis/shared`) are refused |
 | `GET` | `/api/folders?path=p` | the folders inside p, for choosing a folder {path, parent, folders: [{name, path}], more, roots, home, usable}; without path, the home folder. Folder names only, never files |
@@ -39,8 +39,8 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `GET` | `/api/agents` | list agents |
-| `POST` | `/api/agents` | create an agent |
+| `GET` | `/api/agents` | list agents. Each has `name`, `system_prompt`, `model`, `config`, `skills`, `max_actions` (actions one reply may use, 1 to 100, default 10) and `can_call` (`[{name, description}]`: the agents it may call with the Call agents skill, and your note on when to call each) |
+| `POST` | `/api/agents` | create an agent (the same fields) |
 | `GET` | `/api/agents/<name>` | one agent |
 | `PUT` | `/api/agents/<name>` | update (or rename) an agent |
 | `DELETE` | `/api/agents/<name>` | delete an agent and its folder |
@@ -53,7 +53,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 |--------|------|--------------|
 | `GET` | `/api/files/<name>?path=dir` | one folder of an agent's folder (the Workspace tab) (<name> "_shared" means the workspace folder, "_images" the folder of pictures Axis made) |
 | `GET` | `/api/files/<name>/view?path=file` | a file prepared for preview |
-| `GET` | `/api/files/<name>/raw?path=file` | the file itself (images, downloads) |
+| `GET` | `/api/files/<name>/raw?path=file` | the file itself (images, downloads; `&download=1` saves it instead of showing it) |
 | `POST` | `/api/files/<name>/reveal?path=x` | select the file in Explorer/Finder |
 | `POST` | `/api/files/<name>/upload?path=dir&name=f` | save the request body as a file (&mkdirs=1 makes the folder first when it is missing) |
 | `POST` | `/api/files/<name>/mkdir?path=dir` | make a folder |

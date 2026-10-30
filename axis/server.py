@@ -22,8 +22,11 @@ Routes:
                                             (<name> "_shared" means the workspace folder shared by agents,
                                             and "_images" the folder of pictures Axis made)
   GET    /api/files/<name>/view?path=file   a file prepared for preview
-  GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
+  GET    /api/files/<name>/raw?path=file    the file itself (images, downloads; &download=1 saves it)
   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
+                                            (<name> "_folder" with &folder=<full path> is the folder one chat was
+                                            given, and only raw and reveal work there: it is how a file an agent
+                                            shared with share_file is downloaded)
   POST   /api/files/<name>/upload?path=dir&name=f   save the request body as a file
                                             (&mkdirs=1 makes the folder first when it is missing)
   POST   /api/files/<name>/mkdir?path=dir   make a folder
@@ -40,7 +43,7 @@ Routes:
   DELETE /api/skills/<id>                   delete a custom skill (and remove it from agents)
   GET    /api/skills/<id>/sends             exactly what the skill sends to the model: system text and actions
   POST   /api/skills/<id>/reset             put a built-in skill back to its default text
-  POST   /api/chat                          stream a reply as newline-delimited JSON
+  POST   /api/chat                          stream a reply as newline-delimited JSON (a share_file result carries "file")
                                             (a user message may carry "images": [{place, path}] for
                                             models that read pictures; "terminal": id shows the agent
                                             that terminal's recent commands and output, "terminal_commands": n
@@ -179,10 +182,32 @@ class ImagesPlace:
         return images_folder()
 
 
-Place = Union[agents.Agent, SharedPlace, ImagesPlace]
+FOLDER_NAME = tools.FOLDER_PLACE   # "_folder": the one folder a chat was given, named in the request as &folder=
 
 
-def place(name: str) -> Place:
+class FolderPlace:
+    """The folder a chat keeps its agent in. It exists only so a file the agent shared (share_file) can be downloaded
+    and shown in its folder; the routes refuse everything else for it."""
+
+    name = FOLDER_NAME
+
+    def __init__(self, folder: Path):
+        self.folder = folder
+
+    @property
+    def workspace(self) -> Path:
+        return self.folder
+
+
+Place = Union[agents.Agent, SharedPlace, ImagesPlace, FolderPlace]
+
+
+def place(name: str, folder: str = "") -> Place:
+    if name == FOLDER_NAME:
+        try:
+            return FolderPlace(check_work_folder(folder))   # the same rule as for choosing the folder
+        except FolderError as exc:
+            raise agents.AgentError(str(exc)) from exc
     if name == SHARED_NAME:
         workspace_root().mkdir(parents=True, exist_ok=True)
         return SharedPlace()
@@ -197,6 +222,8 @@ def _owner(agent: Place) -> str:
         return "the workspace folder"
     if isinstance(agent, ImagesPlace):
         return "the images folder"
+    if isinstance(agent, FolderPlace):
+        return "the chat's folder"
     return f"{agent.name}'s folder"
 
 
@@ -968,8 +995,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"opened": str(agent.workspace)})
 
         elif n >= 3 and parts[1] == "files":
-            agent = place(parts[2])
+            agent = place(parts[2], param("folder"))
             action = parts[3] if n == 4 else ""
+            if isinstance(agent, FolderPlace) and not (action == "raw" and method == "GET" or action == "reveal" and method == "POST"):
+                raise agents.AgentError("A chat's folder can only be used to download a file or show it in its folder.")
             if n == 3 and method == "GET":
                 return self._json(200, folder_listing(agent, param("path")))
             if n == 3 and method == "DELETE":
@@ -1391,13 +1420,15 @@ class Handler(BaseHTTPRequestHandler):
                 execution_workspace = folder
                 execution_shared = None
             caller = None
+            may_call = agents.callable_agents(agent)   # the only agents this one is told about, and may call
             if agent and tools.CALL_AGENT in allowed and execution_workspace is not None:
                 caller = subagents.make_caller(self.server.model_url, conn, model, agent.name,
-                                               execution_workspace, execution_shared)
+                                               execution_workspace, execution_shared, [c["name"] for c in may_call])
             extra = {"agent_caller": caller} if caller is not None else {}
             runner.reply(conn, model, messages, emit,
                          tool_names=allowed, workspace=execution_workspace,
-                         shared=execution_shared, image_preview=body.get("image_preview") is True, **extra)
+                         shared=execution_shared, image_preview=body.get("image_preview") is True,
+                         max_actions=agent.max_actions if agent else None, callable_agents=may_call, **extra)
             emit({"done": True})
         except ClientGone:
             return

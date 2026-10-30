@@ -1,7 +1,7 @@
 """The skill library shared by all agents.
 
 Built-in skills give an agent actions (tools): running programs, searching the web, reading
-Wikipedia and calling other agents. There is also one skill for each page under Tools: CAS,
+Wikipedia, sharing a file with the user and calling other agents. There is also one skill for each page under Tools: CAS,
 Images and OCR (see tool_skills.py), and one for each Art Craft app (see craft_skills.py).
 Custom skills are named instructions written by the user; they are stored as
 ~/Axis/skills/<id>.json. Agents choose skills by id.
@@ -48,6 +48,7 @@ SHARED_PYTHON_NOTE = (
 )
 SHARED_SKILL = "shared-folder"
 CALL_AGENT_SKILL = "call-agent"
+SHARE_FILE_SKILL = "share-file"
 
 BUILTIN: List[Dict[str, Any]] = [
     {
@@ -99,11 +100,23 @@ BUILTIN: List[Dict[str, Any]] = [
 BUILTIN.append({
     "id": CALL_AGENT_SKILL,
     "name": "Call agents",
-    "description": "Hand a task to another agent and get its answer back. An agent that is called this way cannot call agents itself.",
-    "instructions": "Use call_agent when another agent suits part of a task, or for a second opinion. It cannot see this "
-    "conversation, so write the whole task in message, with any file names. It works in the same folder. Check what comes "
-    "back and tell the user which agent did what. Do not call an agent for something you can do yourself, or yourself.",
+    "description": "Hand a task to another agent and get its answer back. The agents it may call are chosen in its settings. "
+    "An agent that is called this way cannot call agents itself.",
+    "instructions": "Use call_agent when one of the agents it lists suits part of a task, or for a second opinion. You may call "
+    "only the agents the action lists; each comes with a note on when to call it. It cannot see this conversation, so write "
+    "the whole task in message, with any file names. It works in the same folder. Check what comes back and tell the user "
+    "which agent did what. Do not call an agent for something you can do yourself, or yourself.",
     "tools": ["call_agent"],
+})
+BUILTIN.append({
+    "id": SHARE_FILE_SKILL,
+    "name": "Share files",
+    "description": "Give the user a file from the agent's folder to download, or to open in its folder.",
+    "instructions": "Use share_file when the user asks for a file, or when a file you made is the result they want "
+    "(a report, a document, a picture, a data file). Make the file first, then call share_file with its path. The file "
+    "appears in the chat with buttons to download it or open its folder. Say in a sentence what the file is. Share only "
+    "files the user needs, not every file you made along the way.",
+    "tools": ["share_file"],
 })
 BUILTIN += tool_skills.build()    # CAS, Images and OCR, the pages under Tools
 BUILTIN += craft_skills.build()   # one skill for each Art Craft app

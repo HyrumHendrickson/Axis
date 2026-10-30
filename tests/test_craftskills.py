@@ -52,9 +52,10 @@ class TestCraftSkillDefinitions(unittest.TestCase):
 
     def test_the_library_lists_them_after_the_older_built_ins(self):
         ids = [s["id"] for s in skills.list_all() if s["builtin"]]
-        self.assertEqual(ids[:6], ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia", "call-agent"])
-        self.assertEqual(ids[6:9], ["cas", "images", "ocr"])   # the Tools skills
-        self.assertEqual(ids[9:], artcraft.APP_IDS)
+        self.assertEqual(ids[:7], ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia", "call-agent",
+                                  "share-file"])
+        self.assertEqual(ids[7:10], ["cas", "images", "ocr"])   # the Tools skills
+        self.assertEqual(ids[10:], artcraft.APP_IDS)
 
     def test_only_craft_and_tools_skills_have_a_group(self):
         tool_ids = {s["id"] for s in tool_skills.build()}

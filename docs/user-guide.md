@@ -23,6 +23,8 @@ Open **Agents** in the sidebar and click **New agent**. The Agents page lists ev
 | System prompt | Who the agent is and how it behaves. Sent at the start of every conversation. |
 | Config | Instructions appended to **every message** you send, for rules the agent must not forget. |
 | Skills | Which skills the agent may use. |
+| Actions per reply | How many times the agent may use a skill in one reply, from 1 to 100. The default is 10. When it reaches the number it is asked for its final answer. |
+| Agents it can call | Shown when the Call agents skill is chosen. Which of your other agents this one may call, with a short note for each on when to call it. |
 | Folder | Where the agent's files are kept. **Open folder** shows it in Explorer or Finder. |
 
 **The agent's folder.** Agents work in the workspace folder (see [Workspace](#workspace)). In an agent's chat, the **Folder** menu can keep that chat's agent in another folder instead: choose **Choose a folder…**, open any folder on the computer, and click **Use this folder**. The choice is saved with the chat; a new chat starts in the workspace folder again. Either way the agent cannot leave its folder: its Python code cannot read, write, list, or change to anything outside it (it may still read Python's own files and the system's program folders, which code needs to run), and terminal or Rust code that names a place outside the folder (a full path, a `..` that climbs out, the home folder, or a bare `cd`) is refused before it runs. These guards catch mistakes; they are not a sandbox against code written to get around them. Pictures an agent makes always go to `Axis/images`.
@@ -72,6 +74,7 @@ Choose an agent's skills in its settings (**Edit agent**). Every agent chooses f
 | Images | `generate_image` with a local Stable Diffusion model, as on the **Images** page. Listed under **Tools**. |
 | OCR | `read_text`: reads the text in a picture in the agent's folder with an OCR model, as on the **OCR** page. Listed under **Tools**. |
 | Shared folder | Lets file actions reach `shared/`, a folder common to all agents with this skill |
+| Share files | `share_file`: the agent gives you a file from its folder. The file appears in the chat with **Download** and **Open folder** buttons. |
 
 | Art Craft apps | One skill for each Craft app (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft). See below. |
 
@@ -86,7 +89,11 @@ Notes:
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
 
-**Call agents.** With this skill an agent can give a task to another of your agents and get the answer back. The other agent cannot see your conversation, so the agent writes out the whole task; it works in the same folder and uses its own skills and model. An agent that is called this way never has the Call agents skill, so agents cannot call agents in a chain, and an agent cannot call itself. One reply makes at most 5 calls.
+**Share files.** With this skill an agent can hand you a file it made, such as a report, a document or a data file. It gives `share_file` the file's path in its folder, and the chat shows the file with its size and two buttons: **Download** saves it through your browser, and **Open folder** shows it in Explorer or Finder (on Linux, the folder it is in). The file must already exist and must be in the agent's own folder, or in the chat's own folder if you chose one. A folder cannot be shared, and the file is not copied or moved. The card is kept with the chat, so it is there when you open the chat later, as long as the file is. An agent that was called by another agent cannot share files, because you would not see them; the agent that called it can.
+
+**Actions per reply.** One reply may use at most this many actions (each use of a skill is one). The default is 10, and an agent's settings can change it to anything from 1 to 100. When the number is reached the agent is told no more actions are allowed and is asked for its final answer; send another message to let it go on. A called agent works under its own number. Calls to other agents also count, and one reply still makes at most 5 of those.
+
+**Call agents.** With this skill an agent can give a task to another of your agents and get the answer back. In the agent's settings, **Agents it can call** appears once the skill is chosen: tick the agents it may call, and write a short note for each on when to call it (for example, "Checks sums and units"). The agent is told the name of each ticked agent and your note, and nothing else about them: never their skills or system prompt. It cannot call any other agent, and with none ticked it has no way to call anyone, so the skill does nothing until you choose some. Renaming an agent keeps it in the lists that name it, and deleting one removes it. The other agent cannot see your conversation, so the agent writes out the whole task; it works in the same folder and uses its own skills, model and actions-per-reply number. An agent that is called this way never has the Call agents skill, so agents cannot call agents in a chain, and an agent cannot call itself. One reply makes at most 5 calls.
 
 **Tools skills.** Each page under **Tools** has a skill, listed under **Tools** in an agent's settings: **CAS**, **Images** and **OCR** (the Craft apps have their own, below). Each gives the agent one action that uses what you set up on that page, so set it up there first. The CAS skill uses the system chosen under **CAS agents use** on the CAS page unless the agent asks for the other one. Maxima code from an agent is read before it runs and refused when it starts other programs (`system`), uses Lisp, or names a file outside the agent's folder; SymPy code runs under the same guard as Run Python. Neither is a sandbox. The OCR skill reads pictures in the agent's folder only, with a running PyTorch OCR model if one is on, otherwise Tesseract English, unless the agent names another installed model.
 
@@ -113,7 +120,7 @@ Axis is tuned for Llama 3 behavior:
 - **Steadier actions.** Agent turns that can use actions run at temperature 0.2.
 - **Text tool-call recovery.** When a model writes a tool call as plain text instead of making a real call, Axis detects it, runs the action, and replaces the raw text.
 - **Forgiving names.** Common variants (`python`, `ls`, `mkdir`, `create_file`, `filename`, `text`, `script`) are mapped to the correct action and argument. Python sent with literal `\n` is repaired before running.
-- **Loop protection.** Repeated identical actions are not re-run; after a few repeats or 10 actions in one reply, the agent is asked for its final answer.
+- **Loop protection.** Repeated identical actions are not re-run; after a few repeats or after the agent's **Actions per reply** number (10 unless you change it) of actions in one reply, the agent is asked for its final answer.
 - **Action memory.** Earlier replies are sent back with a short note of the actions taken, so follow-ups like "now add a line to that file" work.
 
 If `llama-server` refuses tools (older builds started without `--jinja`), Axis uses the text-based format automatically.

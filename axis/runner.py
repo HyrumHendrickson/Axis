@@ -18,7 +18,8 @@ Events sent to `emit` (one dict each):
     {"tool": {"id", "name", "args"}}              a tool is about to run
     {"tool_progress": {"id", ...}}                generate_image progress: "phase", "progress",
                                                   "queued" and, with image_preview, "preview"
-    {"tool_result": {"id", "ok", "output"}}       the tool finished
+    {"tool_result": {"id", "ok", "output"}}       the tool finished (share_file adds "file": {name, size, place,
+                                                  path[, folder]}, which the page shows with Download and Show in folder)
     {"stats": {"prompt_tokens", "output_tokens", "seconds"}}   token counts for the turn just finished
 """
 
@@ -32,7 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from . import backend, tools
 
-MAX_STEPS = 10
+MAX_STEPS = 10   # actions in one reply when an agent does not set its own number (agents.DEFAULT_MAX_ACTIONS)
 TOOL_TEMPERATURE = 0.2  # steadier tool calls from small models
 _TEXT_MODE: Set[Tuple[str, str]] = set()  # (server url, model) pairs that rejected native tools
 
@@ -42,7 +43,7 @@ FINAL_REQUEST = ("Stop using tools now. Using the results above, give the user y
                  "including the names of any files you created.")
 
 
-def text_protocol(tool_names: List[str]) -> str:
+def text_protocol(tool_names: List[str], callable_agents: Optional[List[Dict[str, str]]] = None) -> str:
     lines = [
         "To use a tool, reply with exactly one block in this format and nothing after it:",
         "```tool",
@@ -53,7 +54,7 @@ def text_protocol(tool_names: List[str]) -> str:
         "Available tools:",
     ]
     for name in tool_names:
-        spec = tools.tool_spec(name)
+        spec = tools.tool_spec(name, callable_agents)
         props = spec["parameters"]["properties"]
         args = ", ".join(f'"{k}": {v["description"]}' for k, v in props.items()) or "no arguments"
         lines.append(f"- {name}: {spec['description']} Arguments: {args}")
@@ -160,11 +161,14 @@ MAX_AGENT_CALLS = 5   # calls to other agents in one reply
 
 class Session:
     def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None,
-                 image_preview: bool = False, agent_caller: Optional[Callable[..., str]] = None):
+                 image_preview: bool = False, agent_caller: Optional[Callable[..., str]] = None,
+                 max_actions: int = MAX_STEPS):
         self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
         self.image_preview = image_preview
         self.agent_caller = agent_caller   # None for an agent that was itself called: it cannot call agents
         self.agent_calls = 0
+        self.max_actions = max_actions     # actions this reply may run; more are refused
+        self.actions = 0
         self.done: Dict[str, Tuple[str, str]] = {}  # call signature -> (tool, result)
         self.repeats = 0
 
@@ -205,7 +209,12 @@ class Session:
         shown = args if isinstance(args, dict) else {"raw": str(args)}
         sig = name + json.dumps(shown, sort_keys=True, default=str)
         self.emit({"tool": {"id": call_id, "name": name, "args": shown}})
-        if sig in self.done:
+        extra: Dict[str, Any] = {}
+        self.actions += 1
+        if self.actions > self.max_actions:
+            ok, output = False, (f"Error: at most {self.max_actions} actions are allowed in one reply. "
+                                 "Do not use another tool; give the user your final answer now.")
+        elif sig in self.done:
             self.repeats += 1
             ok, output = True, ("You already did exactly this. The result was:\n" + self.done[sig][1]
                                 + "\nDo not repeat it. Use the result to continue or to answer the user.")
@@ -223,7 +232,12 @@ class Session:
                 if name in CHANGING_TOOLS:   # the folder changed: listings and file contents seen before are stale
                     self.done = {s: v for s, v in self.done.items() if v[0] not in LOCAL_TOOLS}
                 self.done[sig] = (name, output)
-        self.emit({"tool_result": {"id": call_id, "ok": ok, "output": output}})
+            if ok and name == tools.SHARE_FILE:
+                try:   # the page shows the file with its buttons; it only needs to know where the file is
+                    extra["file"] = tools.share_info(tools.Places(self.workspace, self.shared), args.get("path"))
+                except tools.ToolError:
+                    pass
+        self.emit({"tool_result": {"id": call_id, "ok": ok, "output": output, **extra}})
         return output
 
 
@@ -237,12 +251,17 @@ def reply(
     shared: Optional[Path] = None,
     image_preview: bool = False,
     agent_caller: Optional[Callable[..., str]] = None,
+    max_actions: Optional[int] = None,
+    callable_agents: Optional[List[Dict[str, str]]] = None,
 ) -> None:
     """Produce one reply, running tools as the model asks for them.
 
     shared is the folder shared between agents, or None if this agent may not use it.
     image_preview passes the steps of pictures the agent makes on to the page.
+    max_actions is how many actions the reply may run (the agent's own setting; MAX_STEPS when not given).
+    callable_agents is the {name, description} of each agent this one may call; the model is shown only those.
     """
+    limit = max_actions if isinstance(max_actions, int) and max_actions > 0 else MAX_STEPS
     say = lambda t: emit({"t": t})  # noqa: E731
 
     def complete(*args, **kwargs) -> backend.Turn:
@@ -262,15 +281,16 @@ def reply(
     text_mode = key in _TEXT_MODE
 
     def use_text_mode() -> None:
-        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + text_protocol(model_tool_names)}
+        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n"
+                       + text_protocol(model_tool_names, callable_agents)}
 
     if text_mode:
         use_text_mode()
-    specs = tools.specs(model_tool_names)
+    specs = tools.specs(model_tool_names, callable_agents)
     session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview,
-                      agent_caller=agent_caller)
+                      agent_caller=agent_caller, max_actions=limit)
 
-    for step in range(MAX_STEPS):
+    for step in range(limit):
         emit({"round": step})
         if not text_mode:
             try:
@@ -297,7 +317,7 @@ def reply(
                     output = session.run(name, args, f"{step}-text")
                     messages.append({"role": "user", "content": f"Result of {name}:\n{output}\n\n"
                                      "Continue. Call another tool if needed, otherwise give your answer."})
-                if session.repeats >= 2:
+                if session.repeats >= 2 or session.actions >= limit:
                     break
                 continue
 
@@ -318,11 +338,11 @@ def reply(
         output = session.run(name, args, f"{step}-text") if name else str(args)
         messages.append({"role": "user", "content": f"Result of {name or 'tool'}:\n{output}\n\n"
                          "Continue. Use another tool block if needed, otherwise give your answer."})
-        if session.repeats >= 2:
+        if session.repeats >= 2 or session.actions >= limit:
             break
 
     # Step limit reached or the agent is going in circles: ask for a final answer without tools.
-    emit({"round": MAX_STEPS})
+    emit({"round": limit})
     messages.append({"role": "user", "content": FINAL_REQUEST})
     hider = HideToolBlocks(say)
     turn = complete(conn, model, messages, hider.feed, temperature=TOOL_TEMPERATURE)

@@ -268,7 +268,7 @@ class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
         self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia", "call-agent",
-                               "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
+                               "share-file", "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
                                "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
                                "figcraft"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
@@ -348,6 +348,7 @@ class TestSkillsAndAgents(Base):
     def test_skill_preview_is_what_is_sent(self):
         skills.create({"name": "Brief", "instructions": "Be brief."})
         skills.update("web-search", {"instructions": "Search twice."})
+        agents.create({"name": "other"})
         for skill in skills.list_all():
             preview = agents.skill_preview(skill["id"])
             self.assertIn(f"## {skill['name']}\n{skill['instructions']}", preview["system"], skill["id"])
@@ -355,7 +356,8 @@ class TestSkillsAndAgents(Base):
             self.assertEqual(bool(preview["tools_text"]), bool(skill["tools"]))
             self.assertTrue(preview["notes"])
             # an agent with just this skill is sent exactly the text the page shows
-            agent = agents.Agent(name="p", skills=[skill["id"]])
+            # (the Call agents skill is only sent to an agent that was allowed to call someone)
+            agent = agents.Agent(name="p", skills=[skill["id"]], can_call=[{"name": "other", "description": ""}])
             system = agents.build_messages(agent, [{"role": "user", "content": "hi"}])[0]["content"]
             self.assertEqual(system, agent.system_prompt + "\n\n" + preview["system"], skill["id"])
         custom = agents.skill_preview("brief")
@@ -2435,7 +2437,7 @@ class TestWorkFolders(Base):
         agents.create({"name": "a", "skills": ["run-python"]})
         seen = {}
 
-        def fake_reply(conn, model, messages, emit, tool_names, workspace, shared, image_preview):
+        def fake_reply(conn, model, messages, emit, tool_names, workspace, shared, image_preview, **more):
             seen.update(workspace=workspace, shared=shared, text=messages[-1]["content"])
 
         with mock.patch.object(runner, "reply", side_effect=fake_reply):

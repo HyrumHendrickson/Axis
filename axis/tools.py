@@ -232,6 +232,17 @@ TOOL_SPECS[CALL_AGENT] = {
     },
 }
 
+SHARE_FILE = "share_file"
+TOOL_SPECS[SHARE_FILE] = {
+    "description": "Give the user a file from your folder to download. It appears in the chat with buttons to download "
+    "it or open the folder it is in. The file must already exist.",
+    "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "The file relative to your folder, e.g. reports/summary.pdf"}},
+        "required": ["path"],
+    },
+}
+
 RUN_CRAFT = "run_craft"
 TOOL_SPECS[RUN_CRAFT] = {
     "description": "Run a Craft app's command-line program (photocraft-cli etc.) without a shell, so nothing needs "
@@ -262,11 +273,14 @@ def _shells_here() -> List[str]:
     return [default] + [n for n in found if n != default]
 
 
-def tool_spec(name: str) -> Dict[str, Any]:
+def tool_spec(name: str, callable_agents: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """One action's definition as the model should read it now: the static text in TOOL_SPECS plus what is
-    set up on this computer (the image models, the OCR models and languages, the shells, the other agents, the
-    installed Craft apps). A copy is returned; TOOL_SPECS itself never changes, so a model that was removed is
-    not mentioned later. The lists live here and not in the skills, so a model is told each of them once."""
+    set up on this computer (the image models, the OCR models and languages, the shells, the agents it may call,
+    the installed Craft apps). A copy is returned; TOOL_SPECS itself never changes, so a model that was removed is
+    not mentioned later. The lists live here and not in the skills, so a model is told each of them once.
+
+    callable_agents is the list of {name, description} an agent was allowed to call (agents.callable_agents). Only
+    those names and the descriptions the user wrote are shown; never another agent's skills or system prompt."""
     spec = copy.deepcopy(TOOL_SPECS[name])
     props = spec["parameters"]["properties"]
     try:
@@ -288,11 +302,13 @@ def tool_spec(name: str) -> Dict[str, Any]:
                     props["languages"]["description"] = ("Tesseract languages joined with +, from: " + ", ".join(langs)
                                                          + " (optional)")
         elif name == CALL_AGENT:
-            from . import agents
-            found = [a for a in agents.list_all() if a.name]
-            if found:
-                props["agent"]["description"] = ("Name of the agent to call, one of: "
-                                                 + "; ".join(f"{a.name} ({' '.join(a.system_prompt.split())[:50]})" for a in found[:30]))
+            if callable_agents is None:
+                from . import agents   # no agent in particular (the Skills page): every agent, by name only
+                callable_agents = [{"name": a.name, "description": ""} for a in agents.list_all()]
+            if callable_agents:
+                props["agent"]["enum"] = [a["name"] for a in callable_agents]
+                props["agent"]["description"] = "Name of the agent to call, one of: " + "; ".join(
+                    f"{a['name']} ({a['description']})" if a.get("description") else a["name"] for a in callable_agents)
         elif name in ("run_terminal", "run_terminal_file"):
             shells = _shells_here()
             props["shell"]["description"] = f"Optional shell, one of {', '.join(shells)} (default {shells[0]})"
@@ -307,9 +323,9 @@ def tool_spec(name: str) -> Dict[str, Any]:
     return spec
 
 
-def specs(names: List[str]) -> List[Dict[str, Any]]:
+def specs(names: List[str], callable_agents: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, Any]]:
     """Tool definitions in the OpenAI/Ollama function format."""
-    return [{"type": "function", "function": {"name": n, **tool_spec(n)}} for n in names if n in TOOL_SPECS]
+    return [{"type": "function", "function": {"name": n, **tool_spec(n, callable_agents)}} for n in names if n in TOOL_SPECS]
 
 
 def cas_tool_name() -> str:
@@ -1296,6 +1312,8 @@ TOOL_ALIASES = {
     "image": "generate_image", "create_image": "generate_image", "make_image": "generate_image",
     "draw": "generate_image", "draw_image": "generate_image", "text_to_image": "generate_image",
     "txt2img": "generate_image", "image_generation": "generate_image", "generate_picture": "generate_image",
+    "share": "share_file", "send_file": "share_file", "give_file": "share_file", "present_file": "share_file",
+    "download_file": "share_file", "export_file": "share_file", "offer_file": "share_file", "share_files": "share_file",
     "stable_diffusion": "generate_image", "paint": "generate_image",
     "cas": "run_cas", "maxima": "run_cas", "sympy": "run_cas", "run_maxima": "run_cas", "run_sympy": "run_cas",
     "computer_algebra": "run_cas", "symbolic_math": "run_cas", "algebra": "run_cas",
@@ -1636,6 +1654,50 @@ def read_text(where: Where, args: Dict[str, Any]) -> str:
     return head + ("\n" + _clip(text, MAX_READ) if text else "\nNo text was found in the picture.")
 
 
+def shared_file(ws: Where, rel: Any) -> Tuple[Path, Path, str]:
+    """The file an agent offers the user: (the folder it is in, its full path, how the agent wrote it). It must be a
+    file inside the agent's own folders and not one of Axis's bookkeeping files."""
+    root, path, prefix = locate(ws, rel)
+    shown = _show(root, path, prefix)
+    if not path.exists():
+        raise ToolError(f"{shown} does not exist in your folder. Make the file first, then share it.")
+    if not path.is_file():
+        raise ToolError(f"{shown} is a folder. Share one file at a time.")
+    if any(part in HIDDEN_NAMES for part in path.relative_to(root).parts):
+        raise ToolError(f"{shown} cannot be shared.")
+    return root, path, shown
+
+
+def share_file(ws: Where, args: Dict[str, Any]) -> str:
+    _, path, shown = shared_file(ws, _require(args, "path"))
+    return f"Shared {shown} ({_size_text(path.stat().st_size)}). The user can download it or open the folder it is in."
+
+
+# The names the file routes use for where a shared file is (see server.place): the workspace folder, or the one
+# folder a chat was given. A shared file is always one of these two, so the page can download it and show it in its folder.
+SHARED_PLACE = "_shared"
+FOLDER_PLACE = "_folder"
+
+
+def share_info(ws: Where, rel: Any) -> Dict[str, Any]:
+    """What the page needs to offer a shared file: {name, size, place, path} and, for FOLDER_PLACE, {folder}."""
+    from .paths import workspace_root
+    root, path, _ = shared_file(ws, rel)
+    info: Dict[str, Any] = {"name": path.name, "size": path.stat().st_size}
+    work = workspace_root().resolve()
+    if work in path.parents:
+        return {**info, "place": SHARED_PLACE, "path": path.relative_to(work).as_posix()}
+    return {**info, "place": FOLDER_PLACE, "folder": str(root), "path": path.relative_to(root).as_posix()}
+
+
+def _size_text(n: int) -> str:
+    for unit, step in (("bytes", 1024), ("KB", 1024), ("MB", 1024), ("GB", 1024)):
+        if n < step or unit == "GB":
+            return f"{n} bytes" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= step
+    return f"{n} bytes"
+
+
 # File management is intentionally not exposed as an agent skill. Agents can use
 # the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
 # to the user.
@@ -1643,7 +1705,7 @@ FILE_TOOLS = ()
 EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file",
                    RUN_CRAFT)
 # Actions that work in the agent's folder, so the agent is told about the folder.
-FOLDER_TOOLS = EXECUTION_TOOLS + ("run_cas", "read_text")
+FOLDER_TOOLS = EXECUTION_TOOLS + ("run_cas", "read_text", SHARE_FILE)
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     # These handlers remain available to the user-facing Workspace and to
     # compatibility code, but are no longer advertised by any agent skill.
@@ -1662,6 +1724,7 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "generate_image": generate_image,
     "run_cas": run_cas,
     "read_text": read_text,
+    SHARE_FILE: share_file,
     **{n: _web(n) for n in web_tools.HANDLERS},
 }
 

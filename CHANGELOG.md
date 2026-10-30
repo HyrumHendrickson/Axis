@@ -4,6 +4,19 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.9] - 2026-10-30
+
+### Added
+- **Share files skill.** An agent with it gives you a file with `share_file`, which takes the file's path in its folder. The file appears in the chat with its size and **Download** and **Open folder** buttons, and stays there when you open the chat again. A folder, a file that does not exist, a file outside the agent's folder and Axis's own bookkeeping files are refused. An agent that was called by another agent does not have the skill, because you would not see the file.
+- **Actions per reply.** An agent's settings have an **Actions per reply** number, from 1 to 100, that limits how many times it may use a skill in one reply. The default is 10, which is what every reply was limited to before. When the number is reached the agent is told and asked for its final answer. A called agent works under its own number.
+- **Agents it can call.** When the Call agents skill is chosen, a new section in the agent's settings lists your other agents. Tick the ones this agent may call and write a short note for each on when to call it. The agent is told the name of each ticked agent and your note, and nothing else about them. Calls to any other agent are refused.
+- API: agents have `max_actions` and `can_call` fields; the file routes accept `_folder` with `&folder=` for the folder a chat was given (only `raw` and `reveal`); a `share_file` `tool_result` event carries `file`.
+
+### Changed
+- **The Call agents skill needs a choice.** Before, an agent with it could call every agent. Now it can call only the agents ticked under **Agents it can call**, and an agent with none ticked is not given `call_agent` at all. Agents you already have with the skill need their agents ticked once.
+- The `call_agent` action no longer shows the start of each agent's system prompt. It shows only the names you allowed and your notes.
+- Renaming an agent keeps it in other agents' lists; deleting an agent removes it from them.
+
 ## [4.3.8] - 2026-10-30
 
 ### Added

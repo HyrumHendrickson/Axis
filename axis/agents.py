@@ -11,6 +11,10 @@ Settings:
 * config         a list of instructions appended to every message you send
 * skills         ids of skills from the skill library (see skills.py)
 * model          preferred model ("" means whichever model is loaded)
+* max_actions    how many actions (skills it runs) one reply may use; 10 unless the user changes it
+* can_call       the agents this one may call with the Call agents skill: [{name, description}], where the
+                 description is the user's own words on when to call that agent. Only these are ever shown to
+                 the model, and only the name and that description, never the agent's skills or system prompt.
 
 Deleting an agent deletes its whole folder, including the workspace, and its saved chats.
 """
@@ -36,6 +40,9 @@ DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_TEXT = 20000
 MAX_ITEMS = 100
+DEFAULT_MAX_ACTIONS = runner.MAX_STEPS
+MAX_ACTIONS = 100        # the most actions one reply may be allowed
+MAX_CALL_NOTE = 300      # characters in the description of an agent that may be called
 HISTORY_CHARS = int(os.environ.get("AXIS_HISTORY_CHARS", "20000"))
 
 
@@ -75,6 +82,8 @@ class Agent:
     model: str = ""
     config: List[str] = field(default_factory=list)
     skills: List[str] = field(default_factory=list)
+    max_actions: int = DEFAULT_MAX_ACTIONS
+    can_call: List[Dict[str, str]] = field(default_factory=list)
     created: str = ""
 
     @property
@@ -121,6 +130,25 @@ def _apply(agent: Agent, data: Dict[str, Any]) -> None:
             if skill_id not in chosen:
                 chosen.append(skill_id)
         agent.skills = chosen
+    if "max_actions" in data:
+        value = data["max_actions"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value) or not 1 <= value <= MAX_ACTIONS:
+            raise AgentError(f"Actions per reply must be a whole number from 1 to {MAX_ACTIONS}.")
+        agent.max_actions = int(value)
+    if "can_call" in data:
+        items = data["can_call"]
+        if not isinstance(items, list) or len(items) > MAX_ITEMS:
+            raise AgentError(f"The agents it can call must be a list of at most {MAX_ITEMS} agents.")
+        allowed: List[Dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise AgentError("Each agent it can call needs a name and a description.")
+            name = validate_name(item.get("name"))
+            if name == agent.name or any(c["name"] == name for c in allowed):   # never itself, never twice
+                continue
+            note = _text(item.get("description"), f"The description for {name}", MAX_CALL_NOTE)
+            allowed.append({"name": name, "description": " ".join(note.split())})
+        agent.can_call = allowed
 
 
 def create(data: Dict[str, Any]) -> Agent:
@@ -164,6 +192,12 @@ def load(name: str) -> Agent:
         _apply(agent, {k: data[k] for k in ("system_prompt", "model", "config", "skills") if k in data})
     except AgentError as exc:
         raise AgentError(f"{path}: {exc}") from exc
+    for key in ("max_actions", "can_call"):
+        if key in data:
+            try:
+                _apply(agent, {key: data[key]})
+            except AgentError:
+                pass   # a damaged value goes back to its default; the agent itself still loads
     if migrated:
         agent.save()
     _migrate_legacy_workspace(agent)
@@ -231,9 +265,25 @@ def update(name: str, data: Dict[str, Any]) -> Agent:
                 "Close any of its files that are open in other programs and try again."
             ) from exc
         chat_lib.rename_agent(agent.name, new_name)
+        _rename_references(agent.name, new_name)
         agent.name = new_name
     agent.save()
     return agent
+
+
+def _rename_references(old: str, new: str) -> None:
+    """Other agents that may call this one keep being able to, under its new name."""
+    for other in list_all():
+        if other.name != old and any(c["name"] == old for c in other.can_call):
+            other.can_call = [{**c, "name": new} if c["name"] == old else c for c in other.can_call]
+            other.save()
+
+
+def _remove_references(name: str) -> None:
+    for other in list_all():
+        if any(c["name"] == name for c in other.can_call):
+            other.can_call = [c for c in other.can_call if c["name"] != name]
+            other.save()
 
 
 def list_all() -> List[Agent]:
@@ -262,6 +312,7 @@ def delete(name: str) -> None:
             f"in other programs, then delete the agent again. Folder: {folder}"
         )
     chat_lib.delete_for_agent(agent.name)
+    _remove_references(agent.name)
 
 
 # ----------------------------------------------------------------- prompts
@@ -352,9 +403,11 @@ def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False, 
     exactly what is sent.
     """
     uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
-    if nested:
-        skill_ids = [i for i in skill_ids if i != skill_lib.CALL_AGENT_SKILL]
     chosen = [skill_lib.get(i) for i in skill_ids if skill_lib.exists(i)]
+    # A skill whose only action the agent does not have (an agent that was called, or one with no agent it may
+    # call) is left out, so the agent is never told about something it cannot do.
+    gives = {skill_lib.CALL_AGENT_SKILL: tool_lib.CALL_AGENT, skill_lib.SHARE_FILE_SKILL: tool_lib.SHARE_FILE}
+    chosen = [s for s in chosen if gives.get(s["id"], "") in names or s["id"] not in gives]
     # A skill that only changes how file actions work means nothing without them.
     needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
     chosen = [s for s in chosen if uses_files or s["id"] not in needs_files]
@@ -394,6 +447,9 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
         notes.append("This is only sent to an agent that also has a file or Python skill.")
     if actions:
         notes.append("The closing note about the agent's folder is added once per agent, however many action skills it has.")
+    if skill_id == skill_lib.CALL_AGENT_SKILL:
+        notes.append("In a chat the action lists only the agents this agent is allowed to call, each with the "
+                     "description you wrote for it (set in the agent's settings); this preview lists every agent by name.")
     notes.append("The agent's own system prompt comes first, and its config instructions are added to each message "
                  "you send. They are not part of the skill.")
     shown = tool_lib.model_tools(actions)
@@ -401,16 +457,32 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
             "tools_text": runner.text_protocol(shown) if shown else "", "notes": notes}
 
 
+NESTED_NEVER = (tool_lib.CALL_AGENT, tool_lib.SHARE_FILE)   # what an agent that was called never has: it cannot
+                                                            # call agents, and the user does not see its files offered
+
+
+def callable_agents(agent: Optional[Agent]) -> List[Dict[str, str]]:
+    """The agents this one may call, as {name, description}, in the order the user set. An agent that has since been
+    deleted, and the agent itself, are left out. This is all a model is ever told about them."""
+    if agent is None:
+        return []
+    return [dict(c) for c in agent.can_call
+            if c["name"] != agent.name and (agents_root() / c["name"] / "agent.json").is_file()]
+
+
 def tool_names(agent: Optional[Agent], nested: bool = False) -> List[str]:
     """The actions an agent may take, from its built-in skills. An agent called by another agent (nested)
-    has all of them except call_agent."""
+    has all of them except call_agent and share_file. call_agent is only there when the agent was allowed to
+    call at least one agent."""
     if agent is None:
         return []
     names: List[str] = []
     for skill_id in agent.skills:
         if skill_id in skill_lib.BUILTIN_IDS:
             for t in skill_lib.get(skill_id)["tools"]:
-                if nested and t == tool_lib.CALL_AGENT:
+                if nested and t in NESTED_NEVER:
+                    continue
+                if t == tool_lib.CALL_AGENT and not callable_agents(agent):
                     continue
                 if t not in names:
                     names.append(t)

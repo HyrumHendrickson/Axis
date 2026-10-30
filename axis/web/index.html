@@ -546,6 +546,14 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .ig-strength input[type=number] { width: 72px; }
 .ocr-text { width: 100%; min-height: 260px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--bg); font: 14px/1.55 var(--mono); white-space: pre-wrap; }
 .ocr-pic { display: block; max-width: 100%; max-height: 40vh; margin: 0 auto 12px; border-radius: 6px; }
+.shared-file { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 10px 12px; margin: 6px 0 10px; max-width: 520px; }
+.shared-file-name { min-width: 0; overflow-wrap: anywhere; }
+.shared-file-name small { display: block; color: var(--muted); font-size: 12px; }
+.shared-file-actions { display: flex; gap: 8px; }
+.call-row { margin-bottom: 8px; }
+.call-row .pick { margin-bottom: 4px; }
+.call-row > input[type="text"] { width: 100%; }
+.actions-limit { width: 8em; }
 .chat-image { margin: 6px 0 10px; }
 .chat-image img { display: block; max-width: min(100%, 512px); border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; }
 .chat-image small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -1317,6 +1325,7 @@ const STEP_TEXT = {
   wikipedia_search: ["Searching Wikipedia for", "Searched Wikipedia for"],
   wikipedia_article: ["Reading Wikipedia:", "Read Wikipedia:"],
   generate_image: ["Making a picture of", "Made a picture of"],
+  share_file: ["Sharing", "Shared"],
 };
 const SHARED = "_shared";   // the Workspace tab's name for the folder agents share
 const IMAGES = "_images";   // Axis's images folder, where every picture Axis makes is saved
@@ -1390,8 +1399,22 @@ function chatImage(p, agent) {
     h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || pic.path, loading: "lazy" })),
     h("small", {}, pic.place === IMAGES ? "images/" + pic.path : pic.path));
 }
+// A file an agent shared with share_file: its name and size, with buttons to download it or open the folder it is in.
+// The server saved where the file is with the step (p.file); a folder given to one chat is sent as &folder=.
+function sharedFileCard(p) {
+  const f = p.ok && p.file;
+  if (!f || !f.place || !f.path) return null;
+  const extra = f.folder ? "&folder=" + encodeURIComponent(f.folder) : "";
+  return h("div", { class: "shared-file" },
+    h("div", { class: "shared-file-name" }, h("strong", {}, f.name), h("small", {}, size(f.size))),
+    h("div", { class: "shared-file-actions" },
+      h("a", { class: "btn small primary", href: filesUrl(f.place, "raw", f.path, extra + "&download=1"), download: f.name }, "Download"),
+      h("button", { class: "btn small", type: "button",
+        onclick: () => api(filesUrl(f.place, "reveal", f.path, extra), { method: "POST" }).catch((e) => toast(e.message)) }, "Open folder")));
+}
 function partsView(parts, agent, openSteps) {
   return parts.flatMap((p) => {
+    if (p.type === "tool" && p.name === "share_file") return [stepView(p, agent, openSteps && openSteps.has(p.id)), sharedFileCard(p)].filter(Boolean);
     if (p.type === "tool") return p.name === "generate_image" ? [stepView(p, agent, openSteps && openSteps.has(p.id)), chatImage(p, agent)].filter(Boolean)
       : stepView(p, agent, openSteps && openSteps.has(p.id));
     const d = h("div", { class: "msg ai" }); d.innerHTML = markdown(p.text);
@@ -1692,7 +1715,7 @@ async function send(target, { resend = false, terminal, workspace } = {}) {
     }
     if (ev.tool_result) {
       const step = parts.find((p) => p.type === "tool" && p.id === ev.tool_result.id && p.output === undefined);
-      if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; }
+      if (step) { step.ok = ev.tool_result.ok; step.output = ev.tool_result.output; if (ev.tool_result.file) step.file = ev.tool_result.file; }
     }
     if (ev.stats) stream.stats.push(ev.stats);
     if (ev.error) stream.error = ev.error;
@@ -1759,7 +1782,7 @@ function renderEditor() {
   const existing = S.view.agent ? agentByName(S.view.agent) : null;
   if (S.view.agent && !existing) return go({ kind: "chat", agent: DIRECT });
   const source = !existing && S.view.from ? agentByName(S.view.from) : null;
-  let draft = { name: "", model: "", system_prompt: "You are a concise and helpful assistant.", config: [], skills: [] };
+  let draft = { name: "", model: "", system_prompt: "You are a concise and helpful assistant.", config: [], skills: [], max_actions: 10, can_call: [] };
   if (existing) draft = JSON.parse(JSON.stringify(existing));
   else if (source) {
     draft = JSON.parse(JSON.stringify(source));
@@ -1803,12 +1826,42 @@ function renderEditor() {
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
 
+  // How many actions one reply may use. Every skill that gives the agent an action counts against it.
+  const actionsLimit = h("input", { type: "number", id: "f-actions", class: "actions-limit", min: 1, max: 100, step: 1,
+    value: draft.max_actions || 10, "aria-label": "Actions per reply" });
+
+  // The agents this one may call. The section shows only while the Call agents skill is chosen. The agent is told the
+  // name of each chosen agent and the note written here, and nothing else about it.
+  const callOf = new Map((draft.can_call || []).map((c) => [c.name, c.description || ""]));
+  const callRows = new Map();   // agent name -> { pick, note }
+  const callList = h("div", {}, S.agents.filter((a) => !existing || a.name !== existing.name).map((a) => {
+    const pick = h("input", { type: "checkbox", checked: callOf.has(a.name), "aria-label": "Allow calling " + a.name });
+    const note = h("input", { type: "text", value: callOf.get(a.name) || "", maxlength: 300, autocomplete: "off",
+      disabled: !callOf.has(a.name), "aria-label": "When to call " + a.name,
+      placeholder: "When should this agent call " + a.name + "? For example: checks sums and units." });
+    pick.addEventListener("change", () => { note.disabled = !pick.checked; if (pick.checked) note.focus(); });
+    callRows.set(a.name, { pick, note });
+    return h("div", { class: "call-row" }, h("label", { class: "pick" }, pick, h("div", {}, a.name)), note);
+  }));
+  if (!callRows.size) fill(callList, h("p", { class: "hint" }, "There are no other agents yet. Make another agent first."));
+  const callSection = h("div", { class: "section", hidden: !chosen.has("call-agent") },
+    h("div", { class: "section-head" }, h("h3", {}, "Agents it can call")),
+    h("p", { class: "hint" }, "Choose the agents this one may call, and write a short note for each on when to call it. " +
+      "The agent is told each name and your note, never the other agent\u2019s skills or system prompt. " +
+      "With none chosen, this agent cannot call anyone."),
+    callList);
+  skillPicker.addEventListener("change", (e) => {
+    if (e.target.value === "call-agent") callSection.hidden = !e.target.checked;
+  });
+
   const collect = () => ({
     name: name.value.trim(),
     model: model.value.trim(),
     system_prompt: prompt.value,
     config: [...configList.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean),
     skills: [...skillPicker.querySelectorAll(".skill-pick")].filter((i) => i.checked).map((i) => i.value),
+    max_actions: Number(actionsLimit.value),
+    can_call: [...callRows].filter(([, r]) => r.pick.checked).map(([n, r]) => ({ name: n, description: r.note.value.trim() })),
   });
 
   const save = async () => {
@@ -1865,7 +1918,11 @@ function renderEditor() {
     h("div", { class: "section" },
       h("div", { class: "section-head" }, h("h3", {}, "Skills")),
       h("p", { class: "hint" }, "Choose what this agent can do. Skills are added to its instructions."),
-      skillPicker),
+      skillPicker,
+      h("div", { class: "field", style: "margin-top:14px" }, h("label", { for: "f-actions" }, "Actions per reply"),
+        h("p", { class: "hint" }, "How many times this agent may use a skill in one reply, from 1 to 100. When it reaches the number, " +
+          "it is asked to give its final answer. The default is 10."), actionsLimit)),
+    callSection,
     existing ? workspaceSection(existing) : null,
     h("div", { class: "form-actions" },
       h("button", { class: "btn primary", type: "submit" }, existing ? "Save agent" : "Create agent"),

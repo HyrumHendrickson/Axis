@@ -118,14 +118,15 @@ class TestQuitStopsEverything(Base):
 
 class TestCallAgents(Base):
     def make(self):
-        boss = agents.create({"name": "boss", "skills": ["call-agent", "run-python"]})
         helper = agents.create({"name": "helper", "system_prompt": "You check sums.", "skills": ["call-agent", "run-python"]})
+        boss = agents.create({"name": "boss", "skills": ["call-agent", "run-python"],
+                              "can_call": [{"name": "helper", "description": "checks sums and units"}]})
         return boss, helper
 
     def test_the_skill_gives_the_action(self):
         boss, _ = self.make()
         self.assertIn("call_agent", agents.tool_names(boss))
-        spec = tools.tool_spec("call_agent")
+        spec = tools.tool_spec("call_agent", agents.callable_agents(boss))
         self.assertIn("helper", spec["parameters"]["properties"]["agent"]["description"])
 
     def test_a_called_agent_keeps_its_skills_but_not_the_call_skill(self):
@@ -138,7 +139,8 @@ class TestCallAgents(Base):
         self.assertNotIn("call_agent", system)
         self.assertIn("Run Python", system)
         self.assertIn("called you", system)
-        plain = agents.build_messages(helper, [{"role": "user", "content": "x"}])[0]["content"]
+        agents.update("helper", {"can_call": [{"name": "boss", "description": "plans"}]})   # allowed to call, but was called
+        plain = agents.build_messages(agents.load("helper"), [{"role": "user", "content": "x"}])[0]["content"]
         self.assertIn("Call agents", plain)
 
     def test_the_runner_runs_the_call_and_returns_the_answer(self):
@@ -179,7 +181,7 @@ class TestCallAgents(Base):
             emit({"t": "all "})
             emit({"t": "done"})
         conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
-        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None)
+        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None, ["helper"])
         with mock.patch.object(runner, "reply", side_effect=fake_reply):
             out = call("helper", "add 1 and 1", lambda note: None)
         self.assertEqual(out, "Answer from helper:\nall done")
@@ -191,24 +193,181 @@ class TestCallAgents(Base):
     def test_bad_calls_are_explained(self):
         self.make()
         conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
-        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None)
-        for agent, message, text in (("boss", "x", "cannot call itself"), ("nobody", "x", "does not exist"),
+        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None, ["helper", "gone"])
+        for agent, message, text in (("boss", "x", "cannot call itself"), ("nobody", "x", "not allowed"),
+                                     ("gone", "x", "does not exist"),
                                      ("helper", "  ", "Give the agent a task"), (None, "x", "Say which agent"),
                                      ("helper", "x" * (subagents.MAX_TASK + 1), "too long")):
             with self.assertRaisesRegex(tools.ToolError, text):
                 call(agent, message, lambda n: None)
+
+    def test_an_agent_cannot_call_one_it_was_not_allowed_to(self):
+        self.make()
+        agents.create({"name": "secret"})
+        conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
+        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None, ["helper"])
+        with self.assertRaisesRegex(tools.ToolError, "not allowed to call 'secret'.*helper"):
+            call("secret", "x", lambda n: None)
+        none = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None)   # no list: no calls at all
+        with self.assertRaisesRegex(tools.ToolError, "may not call any agent"):
+            none("helper", "x", lambda n: None)
 
     def test_the_action_cannot_be_run_outside_a_reply(self):
         ok, out = tools.execute(Path(self.home), "call_agent", {"agent": "a", "message": "b"}, ["call_agent"])
         self.assertFalse(ok)
 
     def test_the_agents_that_can_be_called_are_listed_in_the_action_only(self):
-        self.make()
+        boss, _ = self.make()
+        agents.create({"name": "secret", "system_prompt": "Nobody may know this."})
         self.assertIn("call-agent", skills.BUILTIN_IDS)
         self.assertEqual(skills.adapt("call-agent", "Use it."), "Use it.")   # not repeated in the skill
-        text = tools.tool_spec("call_agent")["parameters"]["properties"]["agent"]["description"]
-        self.assertIn("helper", text)
-        self.assertIn("You check sums", text)
+        spec = tools.tool_spec("call_agent", agents.callable_agents(boss))
+        agent = spec["parameters"]["properties"]["agent"]
+        self.assertEqual(agent["enum"], ["helper"])
+        self.assertIn("helper (checks sums and units)", agent["description"])
+        for text in (str(spec), agents.build_messages(boss, [{"role": "user", "content": "x"}])[0]["content"]):
+            self.assertNotIn("secret", text)             # an agent that was not allowed is never mentioned
+            self.assertNotIn("You check sums", text)      # and no agent's system prompt is ever shown
+
+    def test_the_chat_is_sent_only_the_allowed_agents_and_the_users_notes(self):
+        boss, _ = self.make()
+        agents.create({"name": "secret", "system_prompt": "Nobody may know this."})
+        sent = {}
+
+        def fake_complete(conn, model, messages, on_text, tools=None, temperature=None):
+            sent.update(tools=tools, system=messages[0]["content"])
+            return backend.Turn(text="done")
+        conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
+        with mock.patch.object(backend, "complete", side_effect=fake_complete):
+            runner.reply(conn, "m", agents.build_messages(boss, [{"role": "user", "content": "x"}]), lambda e: None,
+                         tool_names=agents.tool_names(boss), workspace=Path(self.home), agent_caller=lambda *a: "x",
+                         callable_agents=agents.callable_agents(boss))
+        call = next(t for t in sent["tools"] if t["function"]["name"] == "call_agent")
+        text = json.dumps(call)
+        self.assertIn("helper (checks sums and units)", text)
+        self.assertNotIn("secret", text)
+        self.assertNotIn("You check sums", text)
+
+    def test_without_an_allowed_agent_the_action_and_skill_are_left_out(self):
+        lone = agents.create({"name": "lone", "skills": ["call-agent", "run-python"]})
+        self.assertEqual(agents.tool_names(lone), ["run_python", "run_python_file"])
+        system = agents.build_messages(lone, [{"role": "user", "content": "x"}])[0]["content"]
+        self.assertNotIn("call_agent", system)
+        self.assertNotIn("Call agents", system)
+
+    def test_the_allowed_agents_follow_a_rename_and_a_delete(self):
+        self.make()
+        agents.create({"name": "other"})
+        agents.update("boss", {"can_call": [{"name": "helper", "description": "sums"}, {"name": "other", "description": ""}]})
+        agents.update("helper", {"name": "checker"})
+        self.assertEqual([c["name"] for c in agents.load("boss").can_call], ["checker", "other"])
+        self.assertEqual(agents.load("boss").can_call[0]["description"], "sums")
+        agents.delete("other")
+        self.assertEqual([c["name"] for c in agents.load("boss").can_call], ["checker"])
+        self.assertEqual([c["name"] for c in agents.callable_agents(agents.load("boss"))], ["checker"])
+
+    def test_the_allowed_list_is_checked_and_cleaned(self):
+        self.make()
+        got = agents.update("boss", {"can_call": [{"name": "helper", "description": "  sums\n and   units "},
+                                                  {"name": "helper", "description": "twice"}, {"name": "boss", "description": "me"}]})
+        self.assertEqual(got.can_call, [{"name": "helper", "description": "sums and units"}])   # no repeat, never itself
+        for bad in ("helper", [["helper"]], [{"name": "bad name!"}], [{"name": "helper", "description": "x" * 301}]):
+            with self.assertRaises(agents.AgentError):
+                agents.update("boss", {"can_call": bad})
+        self.assertEqual(agents.load("boss").can_call, got.can_call)
+
+    def test_the_agents_page_data_has_both_new_settings(self):
+        boss, _ = self.make()
+        data = agents.load("boss").to_dict()
+        self.assertEqual((data["max_actions"], data["can_call"]), (10, [{"name": "helper", "description": "checks sums and units"}]))
+
+
+# ------------------------------------------------------- actions in one reply
+
+
+class TestActionsPerReply(Base):
+    def test_the_setting_has_a_default_a_range_and_survives_a_save(self):
+        self.assertEqual(agents.create({"name": "a"}).max_actions, 10)
+        self.assertEqual(agents.update("a", {"max_actions": 3}).max_actions, 3)
+        self.assertEqual(agents.load("a").max_actions, 3)
+        for bad in (0, -1, 101, 2.5, "5", True, None):
+            with self.assertRaisesRegex(agents.AgentError, "whole number from 1 to 100"):
+                agents.update("a", {"max_actions": bad})
+        self.assertEqual(agents.load("a").max_actions, 3)
+        self.assertEqual(agents.update("a", {"max_actions": 100}).max_actions, 100)
+
+    def test_an_agent_file_without_or_with_a_damaged_value_still_loads(self):
+        agents.create({"name": "a"})
+        path = Path(self.home) / "agents" / "a" / "agent.json"
+        data = json.loads(path.read_text())
+        data.pop("max_actions"); data.pop("can_call")
+        path.write_text(json.dumps(data))
+        self.assertEqual((agents.load("a").max_actions, agents.load("a").can_call), (10, []))
+        path.write_text(json.dumps({**data, "max_actions": "lots", "can_call": "everyone"}))
+        self.assertEqual((agents.load("a").max_actions, agents.load("a").can_call), (10, []))
+
+    def _loop(self, limit, per_round=1):
+        """A model that asks for a tool again and again; returns the tool events and the rounds it was asked."""
+        events, rounds = [], []
+
+        def fake_complete(conn, model, messages, on_text, tools=None, temperature=None):
+            rounds.append(tools is not None)
+            if tools is None:
+                on_text("final answer")
+                return backend.Turn(text="final answer")
+            n = len(rounds)
+            return backend.Turn(text="", tool_calls=[backend.ToolCall(id=f"c{n}-{i}", name="list_files", arguments={"path": f"d{n}-{i}"})
+                                                     for i in range(per_round)])
+        conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
+        with mock.patch.object(backend, "complete", side_effect=fake_complete):
+            runner.reply(conn, "m", [{"role": "system", "content": "s"}, {"role": "user", "content": "go"}], events.append,
+                         tool_names=["list_files"], workspace=Path(self.home), max_actions=limit)
+        return [e for e in events if "tool" in e], rounds
+
+    def test_a_reply_stops_at_the_agents_number(self):
+        for limit in (1, 3, 7):
+            ran, rounds = self._loop(limit)
+            self.assertEqual(len(ran), limit)
+            self.assertFalse(rounds[-1])      # the last request asks for the final answer, with no tools
+
+    def test_actions_asked_for_together_are_counted_one_by_one(self):
+        with mock.patch.object(runner.tools, "execute", return_value=(True, "ok")):
+            events = []
+            session = runner.Session(Path(self.home), ["list_files"], events.append, max_actions=2)
+            outs = [session.run("list_files", {"path": f"d{i}"}, str(i)) for i in range(4)]
+        self.assertEqual(outs[:2], ["ok", "ok"])
+        self.assertTrue(all("at most 2 actions" in o for o in outs[2:]))
+        self.assertEqual([e["tool_result"]["ok"] for e in events if "tool_result" in e], [True, True, False, False])
+
+    def test_without_a_setting_the_old_limit_of_ten_is_kept(self):
+        ran, _ = self._loop(None)
+        self.assertEqual(len(ran), runner.MAX_STEPS)
+
+    def test_the_chat_route_uses_the_agents_number(self):
+        agents.create({"name": "a", "skills": ["run-python"], "max_actions": 4})
+        seen = {}
+
+        def fake_reply(conn, model, messages, emit, **kw):
+            seen.update(kw)
+        from test_axis import OllamaHandler, chat_events, request
+        url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
+        with mock.patch.object(runner, "reply", side_effect=fake_reply):
+            chat_events(request(url + "/api/chat", "POST", {"agent": "a", "messages": [{"role": "user", "content": "hi"}]})[1])
+        self.assertEqual(seen["max_actions"], 4)
+
+    def test_a_called_agent_uses_its_own_number(self):
+        agents.create({"name": "boss"})
+        agents.create({"name": "helper", "max_actions": 2})
+        seen = {}
+
+        def fake_reply(conn, model, messages, emit, **kw):
+            seen.update(kw)
+            emit({"t": "ok"})
+        conn = backend.Backend("ollama", "http://127.0.0.1:9", ["m"])
+        call = subagents.make_caller(None, conn, "m", "boss", Path(self.home), None, ["helper"])
+        with mock.patch.object(runner, "reply", side_effect=fake_reply):
+            call("helper", "task", lambda n: None)
+        self.assertEqual(seen["max_actions"], 2)
 
 
 # ------------------------------------------------------- a folder per picture
