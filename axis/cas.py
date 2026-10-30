@@ -493,6 +493,8 @@ def check_maxima_code(where: Any, code: str, cwd: Optional[Path] = None) -> None
         if literal.strip().lower().endswith((".lisp", ".lsp", ".fasl", ".fas")):
             raise CasError("The code was not run: Lisp files can do anything on the computer. Use plain Maxima commands.")
         bad = tools._outside_in(literal, roots, base)
+        if not bad and os.name == "nt" and re.match(r"[/\\][^\s/\\]", literal.strip()):
+            bad = literal.strip().split()[0]   # "/etc/x" names a place on the current drive; _outside_in leaves it for shell options
         if bad:
             raise CasError(f"The code names '{bad}', which is outside your folder. Only {roots[0]} and the folders "
                            "inside it can be used. Use paths inside your folder.")

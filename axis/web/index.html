@@ -508,6 +508,9 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .ig-form label.lbl { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 .ig-form textarea, .ig-form input[type=text], .ig-form input[type=number], .ig-form select { width: 100%; max-width: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: var(--surface); }
 .ig-form textarea { resize: vertical; min-height: 96px; }
+.ocr-settings { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.ocr-settings > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.ocr-settings > .model-card { margin-top: 10px; }
 .ig-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
 .ig-pair span { color: var(--muted); font-size: 13px; }
 .ig-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -636,6 +639,7 @@ const S = {
   modelsTab: "chat",            // Models sub-tab: chat | image | ocr | engines
   ocr: null,                    // last /api/ocr result: Tesseract, the PyTorch environment and OCR models
   ocrForm: { model: "", source: null, languages: "", psm: 3 },
+  ocrSettingsOpen: false,        // the OCR settings section on the OCR page is unfolded
   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
   ocrResult: null,
   ocrError: null,
@@ -2760,11 +2764,10 @@ function renderAgents() {
       h("div", { class: "agent-tools" },
         h("button", { class: "link", onclick: () => go({ kind: "chat", agent: a.name }) }, "Chat"),
         h("button", { class: "link", onclick: () => go({ kind: "edit", agent: a.name }) }, "Edit"),
-        h("button", { class: "link", onclick: () => openInWorkspace(a.name, "", false) }, "Workspace"),
         h("button", { class: "link", onclick: () => { S.history.agent = a.name; go({ kind: "history" }); } }, "Past chats")));
   });
   fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" },
-    h("p", { class: "hint" }, "Click an agent to chat with it. Each agent has its own folder, which you can browse in Workspace."),
+    h("p", { class: "hint" }, "Click an agent to chat with it. The files agents work with are in the Workspace tab."),
     rows)));
 }
 
@@ -2829,13 +2832,14 @@ function renderTerminal() {
     return;
   }
   const t = activeTerm();
+  if (!S.wsFolder) loadWsFolder();   // so Full chat can tell whether the terminal is in the workspace folder itself
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal"),
     h("button", { class: "btn small", title: "Open a terminal in the workspace folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
     t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
-    h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
-      title: "A panel where an agent can see this terminal and help", onclick: () => { T.side = !T.side; if (!T.side) T.terminalTool = false; store("axis.termSide", T.side); renderTerminal(); } },
-      T.side ? "Hide agent" : "Show agent"));
+    h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
+      h("button", { class: "btn small", id: "term-side-btn", "aria-pressed": T.side ? "true" : "false", "aria-controls": "term-side",
+        title: "Show or hide a chat with an agent that can see this terminal", onclick: toggleTermSide }, "Agent")));
   const tabs = T.sessions.length ? h("div", { class: "term-tabs", role: "tablist", "aria-label": "Open terminals" },
     T.sessions.map((x) => h("span", { class: "term-tab" + (x.alive ? "" : " closed"), role: "presentation", "aria-selected": x.id === T.active ? "true" : "false" },
       h("button", { class: "label", role: "tab", "aria-selected": x.id === T.active ? "true" : "false", title: x.cwd,
@@ -2871,6 +2875,13 @@ function terminalSurface(t) {
     "aria-label": `Type commands for the terminal in ${t.title}. Enter runs the line.`, onkeydown: termKeydown, oninput: termInput, oncompositionend: termInput }));
   surface.addEventListener("mouseup", () => { if (!String(window.getSelection() || "")) focusTerm(); });   // selecting text must not be interrupted
   return surface;
+}
+
+function toggleTermSide() {
+  const T = S.term;
+  T.side = !T.side; if (!T.side) T.terminalTool = false;
+  store("axis.termSide", T.side);
+  renderTerminal();
 }
 
 let termTimer = null, termBusy = false;
@@ -3054,6 +3065,24 @@ const termChatShown = (target) => S.view.kind === "terminal" && S.term.side && !
 const ideChatShown = (target) => S.view.kind === "workspace" && S.ide.side && !!target && S.ide.agent === target && !!$("ide-side");
 const workspaceContextFor = (target) => ideChatShown(target) ? { place: S.workspace.agent, path: S.workspace.dir, file: S.workspace.file || "" } : null;
 
+// Path helpers for the folder a side panel shows. The server sends full paths with the separator of this computer.
+const pathKey = (p) => { const k = String(p || "").replace(/\\/g, "/").replace(/\/+$/, ""); return /^[a-z]:/i.test(k) ? k.toLowerCase() : k; };
+function joinPath(root, rel) {
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return root.replace(/[\\/]+$/, "") + sep + String(rel).split("/").filter(Boolean).join(sep);
+}
+// Opens an agent's own page. A folder (a full path) keeps the agent in the folder the side panel was showing;
+// "" leaves the chat's folder as it is, which is the workspace folder for a new chat.
+async function openFullChat(target, folder) {
+  const id = S.current[target];
+  if (id && !S.chats[id]) {
+    const r = await loadChat(id);
+    if (r !== "ok" && r !== "missing") { toast("Could not open the chat: " + r); return; }
+  }
+  if (folder) setChatFolder(target, folder);
+  go({ kind: "chat", agent: target });
+}
+
 /* A chat with one agent in a panel beside another page. cfg says where it is drawn and what it tells the user:
    { host, askId, hintId, state (holds .agent), save(), fallback(), noAgents, placeholder(agent), hint(agent, model), ask(), headExtra }. */
 function renderSideChat(cfg) {
@@ -3082,7 +3111,8 @@ function renderSideChat(cfg) {
   const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), history, terminalAccess,
     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
       onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
-    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
+    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page, working in the folder shown here`,
+      onclick: () => openFullChat(target, cfg.folder ? cfg.folder() : "") }, "Full chat"),
     cfg.headExtra ? cfg.headExtra() : null);
   if (!ready()) {
     return fill(side, head, h("p", { class: "hint" }, "No model is on. ",
@@ -3141,6 +3171,12 @@ const TERM_CHAT = {
   ask: () => askFrom(S.term.agent, "term-ask"),
   terminalAccess: () => S.term.terminalTool,
   setTerminalAccess: (on) => { S.term.terminalTool = on; },
+  // The folder the open terminal started in ("" when there is none, or it is the workspace folder itself).
+  folder: () => {
+    const t = activeTerm(), root = S.wsFolder && S.wsFolder.folder;
+    return t && t.cwd && !(root && pathKey(t.cwd) === pathKey(root)) ? t.cwd : "";
+  },
+  headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleTermSide }, "Hide"),
 };
 const IDE_CHAT = {
   host: "ide-side", askId: "ide-ask", hintId: "ide-hint",
@@ -3154,6 +3190,11 @@ const IDE_CHAT = {
   terminalAccess: () => S.ide.terminalTool,
   setTerminalAccess: (on) => { S.ide.terminalTool = on; },
   terminalCommands: true,
+  // The folder the Workspace is showing, as a full path ("" at the top of the workspace folder).
+  folder: () => {
+    const root = S.wsFolder && S.wsFolder.folder;
+    return root && S.workspace.dir ? joinPath(root, S.workspace.dir) : "";
+  },
   headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
 };
 const renderTermChat = () => renderSideChat(TERM_CHAT);
@@ -3772,8 +3813,7 @@ function renderModels() {
     body.push(ocrInstallPanel(m), activity(m, tab), ocrModelsSection(m));
   } else {
     body.push(activity(m, tab), engineOverview(m), engineSettings(m),
-      h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")),
-      ocrSettingsCard(m));
+      h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")));
   }
   keepPlace(() => fill($("main"), bar, h("div", { class: "models-split" }, modelsTabs(tab),
     h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body)))));
@@ -3913,9 +3953,9 @@ function ocrModelsSection(m) {
     ocrEngineLines(m),
     o.models.length ? o.models.map((x) => ocrModelCard(x, o)) : h("p", { class: "hint" }, "No OCR models yet. Install one above, for example eng."));
 }
-function ocrSettingsCard(m) {
-  const o = m.ocr;
-  if (!o) return null;
+// The OCR settings (shown on the OCR page). o is the OCR status from /api/ocr; after() draws the page again once they are saved.
+function ocrSettingsCard(o, after) {
+  if (!o || !o.settings) return null;
   const st = o.settings;
   const err = h("p", { class: "form-error", role: "alert", hidden: true });
   const tess = h("input", { type: "text", value: st.tesseract, placeholder: o.tesseract.binary || "tesseract", "aria-label": "Tesseract path" });
@@ -3926,9 +3966,9 @@ function ocrSettingsCard(m) {
   const form = h("form", { class: "model-card", oninput: () => { form.dataset.dirty = "1"; }, onchange: () => { form.dataset.dirty = "1"; }, onsubmit: async (e) => {
     e.preventDefault(); err.hidden = true;
     try { S.ocr = await api("/api/ocr/settings", { method: "PUT", body: { tesseract: tess.value, python: py.value, torch_index: index.value, device: device.value } });
-      toast("Saved"); await loadManage(); renderModels(); }
+      toast("Saved"); await loadManage(); after(); }
     catch (ex) { err.textContent = ex.message; err.hidden = false; }
-  } }, h("h4", {}, "OCR"), err,
+  } }, err,
     h("div", { class: "field" }, h("label", {}, "Tesseract path"), h("p", { class: "hint" }, "Leave empty to find Tesseract on your PATH or where its installer puts it (or set AXIS_TESSERACT)."), tess),
     h("div", { class: "field" }, h("label", {}, "Device for PyTorch models"), h("p", { class: "hint" }, "Applies the next time a model starts or reads a picture."), device),
     h("div", { class: "field" }, h("label", {}, "Python for the PyTorch environment"),
@@ -3938,7 +3978,16 @@ function ocrSettingsCard(m) {
         extLink("https://pytorch.org/get-started/locally/", "pytorch.org"), " for others, such as an older CUDA version."]), index),
     h("p", { class: "hint" }, ["OCR models are kept in ", h("code", {}, o.root), "."]),
     h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
-  return h("div", { class: "skill-group" }, h("h3", {}, "OCR engine settings"), form);
+  return form;
+}
+// A folded section for the OCR page; it stays open while the page is drawn again, and when something needs fixing.
+function ocrSettingsSection(o, open) {
+  const card = ocrSettingsCard(o, () => { if (S.view.kind === "ocr") renderOcr(); });
+  if (!card) return null;
+  const d = h("details", { class: "ocr-settings", id: "ocr-settings" }, h("summary", {}, "OCR settings"), card);
+  d.open = open || S.ocrSettingsOpen === true;
+  d.addEventListener("toggle", () => { S.ocrSettingsOpen = d.open; });
+  return d;
 }
 
 /* ---------------------------------------------------------------- images */
@@ -4866,7 +4915,8 @@ function renderOcr() {
         h("li", {}, o.tesseract && o.tesseract.binary ? ["Tesseract found: ", h("code", {}, o.tesseract.binary)]
           : "Tesseract is not installed. Install it under OCR models, or choose a PyTorch model instead."),
         h("li", {}, "Under OCR models, install a language such as eng (English), lat (Latin) or grc (ancient Greek), or an EasyOCR or docTR model.")),
-      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Open OCR models")))));
+      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Open OCR models")),
+      h("div", { class: "form", style: "margin-top:18px;text-align:left" }, ocrSettingsSection(o, !!(o.tesseract && !o.tesseract.binary))))));
   }
   const f = S.ocrForm, job = S.ocrJob;
   const model = ocrFormModel();
@@ -4919,7 +4969,8 @@ function renderOcr() {
     h("div", { class: "ig-go" },
       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
         : h("button", { class: "btn primary", disabled: !model || !src, onclick: runOcr }, "Read text")),
-    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."));
+    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."),
+    ocrSettingsSection(o, false));
   const main = h("div", { class: "ig-main" }, h("div", { id: "ocr-stage" }));
   fill($("main"), bar, h("div", { class: "ig" }, form, main));
   drawOcr();

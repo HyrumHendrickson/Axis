@@ -26,7 +26,7 @@ class TestShareFileAction(Base):
         self.ws.mkdir()
         (self.ws / "report.txt").write_text("hello")
         (self.ws / "sub").mkdir()
-        (self.ws / "sub" / "data.csv").write_text("a,b\n1,2\n")
+        (self.ws / "sub" / "data.csv").write_bytes(b"a,b\n1,2\n")   # bytes: text mode writes \r\n on Windows
 
     def run_action(self, path, shared=None):
         return tools.execute(self.ws, "share_file", {"path": path}, ["share_file"], shared=shared)
@@ -181,6 +181,6 @@ class TestShareFileSkill(Base):
 
 class TestVersion(Base):
     def test_this_release(self):
-        self.assertEqual(axis.__version__, "4.3.9")
+        self.assertGreaterEqual(tuple(int(x) for x in axis.__version__.split(".")), (4, 3, 9))
         changes = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assertIn("## [4.3.9]", changes)

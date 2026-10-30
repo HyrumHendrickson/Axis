@@ -14,7 +14,7 @@ A tour of every page in Axis. Installation is covered in [installation.md](insta
 
 ## Agents
 
-Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, **Workspace**, and **Past chats**.
+Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab.
 
 | Field | Purpose |
 |-------|---------|
@@ -194,7 +194,7 @@ Then click **Add files I already have** and enter the same files and settings:
 
 ## OCR
 
-Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures with one of two kinds of engine:
+Open **Tools** in the sidebar, then **OCR**. **OCR settings**, at the bottom of the page, holds the Tesseract path, the device for PyTorch models, the Python the PyTorch environment is made from, and the PyTorch package index. Axis reads the text in pictures with one of two kinds of engine:
 
 - **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
 - **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
@@ -209,7 +209,7 @@ Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures wit
 
 Tesseract languages are downloaded from GitHub (checked against GitHub's file hashes when its API answers) into `Axis/models/ocr/tessdata`. Languages that came with Tesseract are listed too; Axis does not delete those.
 
-**Tesseract itself.** Axis uses a Tesseract it finds (the path under **Engine settings**, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
+**Tesseract itself.** Axis uses a Tesseract it finds (the path under **OCR settings** on the OCR page, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
 
 | System | How |
 |--------|-----|
@@ -255,7 +255,7 @@ Open **Workspace** in the sidebar to browse, change, and run what agents have ma
 
 **The bottom panel (terminal and output).** Click **Terminal** (or the arrow at the right end of the panel) to show or hide it. Drag its top edge, or focus it and press the up and down arrow keys, to change its height. Showing it for the first time opens a terminal in the folder you are looking at. Each terminal is a tab (**×** closes it), **New terminal** opens another in the current folder, and the terminal button on a folder row opens one in that folder. See [Terminal](#terminal) for typing. **Run** on a `.py`, `.rs`, `.sh`, `.bash`, `.ps1`, `.bat`, or `.cmd` file runs it and shows its output (printed text, errors, and exit code) in an **Output** tab of the same panel; **Run again** repeats it. Rust files are compiled first. These runs stop after one minute and use your permissions; they are not a security sandbox. While editing, **Save and run** does both. Closing the panel does not stop terminals.
 
-**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
+**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**, which keeps the agent in the folder you are in; in the Terminal tab, the folder of the open terminal). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
 
 ## Terminal
 
@@ -266,7 +266,7 @@ Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal
 - **Ctrl+C** copies when text is selected; otherwise it discards the line you are typing and stops the running command (macOS and Linux). **Stop command** does the same. **Clear** (or Ctrl+L) clears the output shown.
 - **Paste** puts text on the line. A pasted line is not run until you press Enter. Pasting several lines asks first, since each would run at once.
 - A terminal you type into runs with your own permissions and is not confined to any folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
-- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
+- In the Terminal tab, **Agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**, which keeps the agent in the folder you are in; in the Terminal tab, the folder of the open terminal).
 
 ## Models tab
 

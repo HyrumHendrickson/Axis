@@ -4,6 +4,18 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.11] - 2026-10-30
+
+### Changed
+- **Full chat keeps the agent in your folder.** In the Workspace the agent now works in the folder you are browsing; in the Terminal tab, in the folder of the open terminal. Before, it always started in the workspace folder.
+- **The Terminal tab's agent button matches the Workspace's.** Both pages have an **Agent** button that shows as pressed while the panel is open, and a **Hide** link in the panel.
+- **OCR settings are on the OCR page.** The Tesseract path, device, Python and PyTorch package index moved from **Models**, **Engine settings** to **OCR settings** at the bottom of the OCR page. The page shows them open when Tesseract is not found.
+- The Agents page no longer has a **Workspace** link on each agent; use the Workspace tab.
+
+### Fixed
+- Windows: Maxima code that names a file such as `"/etc/x.txt"` is refused, as on other systems.
+- Tests that failed on Windows (line endings in a test file, the path shown for a shell script) and on macOS (a temporary folder that is a link).
+
 ## [4.3.9] - 2026-10-30
 
 ### Added

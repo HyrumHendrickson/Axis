@@ -464,7 +464,7 @@ class TestOllamaEngine(Base):
         with mock.patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}):
             engines._unpack(good, out)
             self.assertEqual((out / "bin" / "ollama").read_bytes(), b"#!/bin/sh\n")
-            self.assertEqual(engines._find(out, "ollama"), (out / "bin" / "ollama").resolve())
+            self.assertEqual(engines._find(out, "ollama"), out / "bin" / "ollama")   # not resolved: a temporary folder is a link on macOS
             evil = make("evil.tar.zst", [("../escape.txt", b"no")])
             with self.assertRaisesRegex(engines.EngineError, "unsafe"):
                 engines._unpack(evil, Path(self.home) / "out2")

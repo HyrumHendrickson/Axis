@@ -2158,7 +2158,7 @@ class TestProgramTools(Base):
         self.assertIsInstance(line, str)
         self.assertNotIn('\\"', line)
         self.assertEqual(line, r'"C:\Windows\System32\cmd.exe" /D /Q /S /C "call "C:\My Files\ws\program.cmd""')
-        self.assertEqual(tools._shell_command("/bin/bash", "bash", Path("/w/program.sh")), ["/bin/bash", "/w/program.sh"])
+        self.assertEqual(tools._shell_command("/bin/bash", "bash", Path("/w/program.sh")), ["/bin/bash", str(Path("/w/program.sh"))])
 
     def test_program_aliases_and_paths(self):
         self.assertEqual(tools.normalize_call("rust", {"code": "fn main() {}"}, ["run_rust"])[0], "run_rust")

@@ -1,0 +1,406 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0ffdd12..6ccf28d 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,18 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++## [4.3.11] - 2026-10-30
++
++### Changed
++- **Full chat keeps the agent in your folder.** In the Workspace the agent now works in the folder you are browsing; in the Terminal tab, in the folder of the open terminal. Before, it always started in the workspace folder.
++- **The Terminal tab's agent button matches the Workspace's.** Both pages have an **Agent** button that shows as pressed while the panel is open, and a **Hide** link in the panel.
++- **OCR settings are on the OCR page.** The Tesseract path, device, Python and PyTorch package index moved from **Models**, **Engine settings** to **OCR settings** at the bottom of the OCR page. The page shows them open when Tesseract is not found.
++- The Agents page no longer has a **Workspace** link on each agent; use the Workspace tab.
++
++### Fixed
++- Windows: Maxima code that names a file such as `"/etc/x.txt"` is refused, as on other systems.
++- Tests that failed on Windows (line endings in a test file, the path shown for a shell script) and on macOS (a temporary folder that is a link).
++
+ ## [4.3.9] - 2026-10-30
+ 
+ ### Added
+diff --git a/axis/VERSION b/axis/VERSION
+index 7de8a1d..4d827cd 100644
+--- a/axis/VERSION
++++ b/axis/VERSION
+@@ -1 +1 @@
+-4.3.9
++4.3.11
+diff --git a/axis/cas.py b/axis/cas.py
+index 20a1bbc..f2f1958 100644
+--- a/axis/cas.py
++++ b/axis/cas.py
+@@ -493,6 +493,8 @@ def check_maxima_code(where: Any, code: str, cwd: Optional[Path] = None) -> None
+         if literal.strip().lower().endswith((".lisp", ".lsp", ".fasl", ".fas")):
+             raise CasError("The code was not run: Lisp files can do anything on the computer. Use plain Maxima commands.")
+         bad = tools._outside_in(literal, roots, base)
++        if not bad and os.name == "nt" and re.match(r"[/\\][^\s/\\]", literal.strip()):
++            bad = literal.strip().split()[0]   # "/etc/x" names a place on the current drive; _outside_in leaves it for shell options
+         if bad:
+             raise CasError(f"The code names '{bad}', which is outside your folder. Only {roots[0]} and the folders "
+                            "inside it can be used. Use paths inside your folder.")
+diff --git a/axis/web/index.html b/axis/web/index.html
+index 566f2aa..83f6a07 100644
+--- a/axis/web/index.html
++++ b/axis/web/index.html
+@@ -508,6 +508,9 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .ig-form label.lbl { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+ .ig-form textarea, .ig-form input[type=text], .ig-form input[type=number], .ig-form select { width: 100%; max-width: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: var(--surface); }
+ .ig-form textarea { resize: vertical; min-height: 96px; }
++.ocr-settings { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
++.ocr-settings > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
++.ocr-settings > .model-card { margin-top: 10px; }
+ .ig-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
+ .ig-pair span { color: var(--muted); font-size: 13px; }
+ .ig-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@@ -636,6 +639,7 @@ const S = {
+   modelsTab: "chat",            // Models sub-tab: chat | image | ocr | engines
+   ocr: null,                    // last /api/ocr result: Tesseract, the PyTorch environment and OCR models
+   ocrForm: { model: "", source: null, languages: "", psm: 3 },
++  ocrSettingsOpen: false,        // the OCR settings section on the OCR page is unfolded
+   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
+   ocrResult: null,
+   ocrError: null,
+@@ -2760,11 +2764,10 @@ function renderAgents() {
+       h("div", { class: "agent-tools" },
+         h("button", { class: "link", onclick: () => go({ kind: "chat", agent: a.name }) }, "Chat"),
+         h("button", { class: "link", onclick: () => go({ kind: "edit", agent: a.name }) }, "Edit"),
+-        h("button", { class: "link", onclick: () => openInWorkspace(a.name, "", false) }, "Workspace"),
+         h("button", { class: "link", onclick: () => { S.history.agent = a.name; go({ kind: "history" }); } }, "Past chats")));
+   });
+   fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "form" },
+-    h("p", { class: "hint" }, "Click an agent to chat with it. Each agent has its own folder, which you can browse in Workspace."),
++    h("p", { class: "hint" }, "Click an agent to chat with it. The files agents work with are in the Workspace tab."),
+     rows)));
+ }
+ 
+@@ -2829,13 +2832,14 @@ function renderTerminal() {
+     return;
+   }
+   const t = activeTerm();
++  if (!S.wsFolder) loadWsFolder();   // so Full chat can tell whether the terminal is in the workspace folder itself
+   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal"),
+     h("button", { class: "btn small", title: "Open a terminal in the workspace folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
+     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
+     t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
+-    h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
+-      title: "A panel where an agent can see this terminal and help", onclick: () => { T.side = !T.side; if (!T.side) T.terminalTool = false; store("axis.termSide", T.side); renderTerminal(); } },
+-      T.side ? "Hide agent" : "Show agent"));
++    h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
++      h("button", { class: "btn small", id: "term-side-btn", "aria-pressed": T.side ? "true" : "false", "aria-controls": "term-side",
++        title: "Show or hide a chat with an agent that can see this terminal", onclick: toggleTermSide }, "Agent")));
+   const tabs = T.sessions.length ? h("div", { class: "term-tabs", role: "tablist", "aria-label": "Open terminals" },
+     T.sessions.map((x) => h("span", { class: "term-tab" + (x.alive ? "" : " closed"), role: "presentation", "aria-selected": x.id === T.active ? "true" : "false" },
+       h("button", { class: "label", role: "tab", "aria-selected": x.id === T.active ? "true" : "false", title: x.cwd,
+@@ -2873,6 +2877,13 @@ function terminalSurface(t) {
+   return surface;
+ }
+ 
++function toggleTermSide() {
++  const T = S.term;
++  T.side = !T.side; if (!T.side) T.terminalTool = false;
++  store("axis.termSide", T.side);
++  renderTerminal();
++}
++
+ let termTimer = null, termBusy = false;
+ function termPoll() {
+   clearInterval(termTimer);
+@@ -3054,6 +3065,24 @@ const termChatShown = (target) => S.view.kind === "terminal" && S.term.side && !
+ const ideChatShown = (target) => S.view.kind === "workspace" && S.ide.side && !!target && S.ide.agent === target && !!$("ide-side");
+ const workspaceContextFor = (target) => ideChatShown(target) ? { place: S.workspace.agent, path: S.workspace.dir, file: S.workspace.file || "" } : null;
+ 
++// Path helpers for the folder a side panel shows. The server sends full paths with the separator of this computer.
++const pathKey = (p) => { const k = String(p || "").replace(/\\/g, "/").replace(/\/+$/, ""); return /^[a-z]:/i.test(k) ? k.toLowerCase() : k; };
++function joinPath(root, rel) {
++  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
++  return root.replace(/[\\/]+$/, "") + sep + String(rel).split("/").filter(Boolean).join(sep);
++}
++// Opens an agent's own page. A folder (a full path) keeps the agent in the folder the side panel was showing;
++// "" leaves the chat's folder as it is, which is the workspace folder for a new chat.
++async function openFullChat(target, folder) {
++  const id = S.current[target];
++  if (id && !S.chats[id]) {
++    const r = await loadChat(id);
++    if (r !== "ok" && r !== "missing") { toast("Could not open the chat: " + r); return; }
++  }
++  if (folder) setChatFolder(target, folder);
++  go({ kind: "chat", agent: target });
++}
++
+ /* A chat with one agent in a panel beside another page. cfg says where it is drawn and what it tells the user:
+    { host, askId, hintId, state (holds .agent), save(), fallback(), noAgents, placeholder(agent), hint(agent, model), ask(), headExtra }. */
+ function renderSideChat(cfg) {
+@@ -3082,7 +3111,8 @@ function renderSideChat(cfg) {
+   const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), history, terminalAccess,
+     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
+       onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
+-    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
++    h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page, working in the folder shown here`,
++      onclick: () => openFullChat(target, cfg.folder ? cfg.folder() : "") }, "Full chat"),
+     cfg.headExtra ? cfg.headExtra() : null);
+   if (!ready()) {
+     return fill(side, head, h("p", { class: "hint" }, "No model is on. ",
+@@ -3141,6 +3171,12 @@ const TERM_CHAT = {
+   ask: () => askFrom(S.term.agent, "term-ask"),
+   terminalAccess: () => S.term.terminalTool,
+   setTerminalAccess: (on) => { S.term.terminalTool = on; },
++  // The folder the open terminal started in ("" when there is none, or it is the workspace folder itself).
++  folder: () => {
++    const t = activeTerm(), root = S.wsFolder && S.wsFolder.folder;
++    return t && t.cwd && !(root && pathKey(t.cwd) === pathKey(root)) ? t.cwd : "";
++  },
++  headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleTermSide }, "Hide"),
+ };
+ const IDE_CHAT = {
+   host: "ide-side", askId: "ide-ask", hintId: "ide-hint",
+@@ -3154,6 +3190,11 @@ const IDE_CHAT = {
+   terminalAccess: () => S.ide.terminalTool,
+   setTerminalAccess: (on) => { S.ide.terminalTool = on; },
+   terminalCommands: true,
++  // The folder the Workspace is showing, as a full path ("" at the top of the workspace folder).
++  folder: () => {
++    const root = S.wsFolder && S.wsFolder.folder;
++    return root && S.workspace.dir ? joinPath(root, S.workspace.dir) : "";
++  },
+   headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
+ };
+ const renderTermChat = () => renderSideChat(TERM_CHAT);
+@@ -3772,8 +3813,7 @@ function renderModels() {
+     body.push(ocrInstallPanel(m), activity(m, tab), ocrModelsSection(m));
+   } else {
+     body.push(activity(m, tab), engineOverview(m), engineSettings(m),
+-      h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")),
+-      ocrSettingsCard(m));
++      h("div", { class: "skill-group" }, h("h3", {}, "Image engine settings"), S.images ? imageSettingsCard(S.images) : h("p", { class: "hint" }, "Loading\u2026")));
+   }
+   keepPlace(() => fill($("main"), bar, h("div", { class: "models-split" }, modelsTabs(tab),
+     h("div", { class: "editor", id: "models-scroll" }, h("div", { class: "form" }, body)))));
+@@ -3913,9 +3953,9 @@ function ocrModelsSection(m) {
+     ocrEngineLines(m),
+     o.models.length ? o.models.map((x) => ocrModelCard(x, o)) : h("p", { class: "hint" }, "No OCR models yet. Install one above, for example eng."));
+ }
+-function ocrSettingsCard(m) {
+-  const o = m.ocr;
+-  if (!o) return null;
++// The OCR settings (shown on the OCR page). o is the OCR status from /api/ocr; after() draws the page again once they are saved.
++function ocrSettingsCard(o, after) {
++  if (!o || !o.settings) return null;
+   const st = o.settings;
+   const err = h("p", { class: "form-error", role: "alert", hidden: true });
+   const tess = h("input", { type: "text", value: st.tesseract, placeholder: o.tesseract.binary || "tesseract", "aria-label": "Tesseract path" });
+@@ -3926,9 +3966,9 @@ function ocrSettingsCard(m) {
+   const form = h("form", { class: "model-card", oninput: () => { form.dataset.dirty = "1"; }, onchange: () => { form.dataset.dirty = "1"; }, onsubmit: async (e) => {
+     e.preventDefault(); err.hidden = true;
+     try { S.ocr = await api("/api/ocr/settings", { method: "PUT", body: { tesseract: tess.value, python: py.value, torch_index: index.value, device: device.value } });
+-      toast("Saved"); await loadManage(); renderModels(); }
++      toast("Saved"); await loadManage(); after(); }
+     catch (ex) { err.textContent = ex.message; err.hidden = false; }
+-  } }, h("h4", {}, "OCR"), err,
++  } }, err,
+     h("div", { class: "field" }, h("label", {}, "Tesseract path"), h("p", { class: "hint" }, "Leave empty to find Tesseract on your PATH or where its installer puts it (or set AXIS_TESSERACT)."), tess),
+     h("div", { class: "field" }, h("label", {}, "Device for PyTorch models"), h("p", { class: "hint" }, "Applies the next time a model starts or reads a picture."), device),
+     h("div", { class: "field" }, h("label", {}, "Python for the PyTorch environment"),
+@@ -3938,7 +3978,16 @@ function ocrSettingsCard(m) {
+         extLink("https://pytorch.org/get-started/locally/", "pytorch.org"), " for others, such as an older CUDA version."]), index),
+     h("p", { class: "hint" }, ["OCR models are kept in ", h("code", {}, o.root), "."]),
+     h("div", { class: "model-actions" }, h("button", { class: "btn small primary", type: "submit" }, "Save")));
+-  return h("div", { class: "skill-group" }, h("h3", {}, "OCR engine settings"), form);
++  return form;
++}
++// A folded section for the OCR page; it stays open while the page is drawn again, and when something needs fixing.
++function ocrSettingsSection(o, open) {
++  const card = ocrSettingsCard(o, () => { if (S.view.kind === "ocr") renderOcr(); });
++  if (!card) return null;
++  const d = h("details", { class: "ocr-settings", id: "ocr-settings" }, h("summary", {}, "OCR settings"), card);
++  d.open = open || S.ocrSettingsOpen === true;
++  d.addEventListener("toggle", () => { S.ocrSettingsOpen = d.open; });
++  return d;
+ }
+ 
+ /* ---------------------------------------------------------------- images */
+@@ -4866,7 +4915,8 @@ function renderOcr() {
+         h("li", {}, o.tesseract && o.tesseract.binary ? ["Tesseract found: ", h("code", {}, o.tesseract.binary)]
+           : "Tesseract is not installed. Install it under OCR models, or choose a PyTorch model instead."),
+         h("li", {}, "Under OCR models, install a language such as eng (English), lat (Latin) or grc (ancient Greek), or an EasyOCR or docTR model.")),
+-      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Open OCR models")))));
++      h("p", { style: "margin-top:18px" }, h("button", { class: "btn primary", onclick: () => go({ kind: "models", focus: "ocr" }) }, "Open OCR models")),
++      h("div", { class: "form", style: "margin-top:18px;text-align:left" }, ocrSettingsSection(o, !!(o.tesseract && !o.tesseract.binary))))));
+   }
+   const f = S.ocrForm, job = S.ocrJob;
+   const model = ocrFormModel();
+@@ -4919,7 +4969,8 @@ function renderOcr() {
+     h("div", { class: "ig-go" },
+       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
+         : h("button", { class: "btn primary", disabled: !model || !src, onclick: runOcr }, "Read text")),
+-    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."));
++    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."),
++    ocrSettingsSection(o, false));
+   const main = h("div", { class: "ig-main" }, h("div", { id: "ocr-stage" }));
+   fill($("main"), bar, h("div", { class: "ig" }, form, main));
+   drawOcr();
+diff --git a/docs/troubleshooting.md b/docs/troubleshooting.md
+index 91a0cdf..e3178c1 100644
+--- a/docs/troubleshooting.md
++++ b/docs/troubleshooting.md
+@@ -37,9 +37,9 @@ Find the symptom in the left column. If nothing here helps, please [open an issu
+ | Images: **Set up Stable Diffusion** | Install an image model by name on the Models page; Axis installs stable-diffusion.cpp with it. |
+ | Image model shows **Files missing** | A path is wrong or relative paths start in an unexpected folder. Use full paths, or set the **Working folder**. |
+ | Picture fails with `sd-cli failed` | Run the same command in a terminal. Out-of-memory errors usually need a smaller size, a smaller quantization, or `--offload-to-cpu` in Extra arguments. |
+-| OCR: "Tesseract is not installed" | Click **Install Tesseract** under **Models**, **OCR models**, or set its path under **Engine settings**. |
++| OCR: "Tesseract is not installed" | Click **Install Tesseract** under **Models**, **OCR models**, or set its path under **OCR settings** on the **OCR** page. |
+ | OCR: "The Tesseract language ... is not installed" | Install it under **OCR models** (for example `lat`), then read the picture again. |
+-| Installing PyTorch: "This Python cannot make environments" | On Debian or Ubuntu run `sudo apt install python3-venv`, or set another Python under **Engine settings**. |
+-| Installing PyTorch: "pip found no PyTorch for this Python" | PyTorch supports recent 64-bit Python versions only. Set another Python under **Engine settings** and install the PyTorch environment again. |
+-| A PyTorch OCR model runs out of memory | Set **Device** to **CPU only** under **Engine settings**, or stop other models. |
++| Installing PyTorch: "This Python cannot make environments" | On Debian or Ubuntu run `sudo apt install python3-venv`, or set another Python under **OCR settings** on the **OCR** page. |
++| Installing PyTorch: "pip found no PyTorch for this Python" | PyTorch supports recent 64-bit Python versions only. Set another Python under **OCR settings** on the **OCR** page and install the PyTorch environment again. |
++| A PyTorch OCR model runs out of memory | Set **Device** to **CPU only** under **OCR settings** on the **OCR** page, or stop other models. |
+ | Chats disappeared | Use the same `AXIS_HOME`. Chats written by very old versions were stored per browser and port; use the same browser and default port once to migrate them. |
+diff --git a/docs/user-guide.md b/docs/user-guide.md
+index a83bb0a..dc9f640 100644
+--- a/docs/user-guide.md
++++ b/docs/user-guide.md
+@@ -14,7 +14,7 @@ A tour of every page in Axis. Installation is covered in [installation.md](insta
+ 
+ ## Agents
+ 
+-Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, **Workspace**, and **Past chats**.
++Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab.
+ 
+ | Field | Purpose |
+ |-------|---------|
+@@ -194,7 +194,7 @@ Then click **Add files I already have** and enter the same files and settings:
+ 
+ ## OCR
+ 
+-Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures with one of two kinds of engine:
++Open **Tools** in the sidebar, then **OCR**. **OCR settings**, at the bottom of the page, holds the Tesseract path, the device for PyTorch models, the Python the PyTorch environment is made from, and the PyTorch package index. Axis reads the text in pictures with one of two kinds of engine:
+ 
+ - **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
+ - **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
+@@ -209,7 +209,7 @@ Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures wit
+ 
+ Tesseract languages are downloaded from GitHub (checked against GitHub's file hashes when its API answers) into `Axis/models/ocr/tessdata`. Languages that came with Tesseract are listed too; Axis does not delete those.
+ 
+-**Tesseract itself.** Axis uses a Tesseract it finds (the path under **Engine settings**, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
++**Tesseract itself.** Axis uses a Tesseract it finds (the path under **OCR settings** on the OCR page, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
+ 
+ | System | How |
+ |--------|-----|
+@@ -255,7 +255,7 @@ Open **Workspace** in the sidebar to browse, change, and run what agents have ma
+ 
+ **The bottom panel (terminal and output).** Click **Terminal** (or the arrow at the right end of the panel) to show or hide it. Drag its top edge, or focus it and press the up and down arrow keys, to change its height. Showing it for the first time opens a terminal in the folder you are looking at. Each terminal is a tab (**×** closes it), **New terminal** opens another in the current folder, and the terminal button on a folder row opens one in that folder. See [Terminal](#terminal) for typing. **Run** on a `.py`, `.rs`, `.sh`, `.bash`, `.ps1`, `.bat`, or `.cmd` file runs it and shows its output (printed text, errors, and exit code) in an **Output** tab of the same panel; **Run again** repeats it. Rust files are compiled first. These runs stop after one minute and use your permissions; they are not a security sandbox. While editing, **Save and run** does both. Closing the panel does not stop terminals.
+ 
+-**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
++**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**, which keeps the agent in the folder you are in; in the Terminal tab, the folder of the open terminal). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
+ 
+ ## Terminal
+ 
+@@ -266,7 +266,7 @@ Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal
+ - **Ctrl+C** copies when text is selected; otherwise it discards the line you are typing and stops the running command (macOS and Linux). **Stop command** does the same. **Clear** (or Ctrl+L) clears the output shown.
+ - **Paste** puts text on the line. A pasted line is not run until you press Enter. Pasting several lines asks first, since each would run at once.
+ - A terminal you type into runs with your own permissions and is not confined to any folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
+-- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
++- In the Terminal tab, **Agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**, which keeps the agent in the folder you are in; in the Terminal tab, the folder of the open terminal).
+ 
+ ## Models tab
+ 
+diff --git a/tests/test_axis.py b/tests/test_axis.py
+index 27ee2d1..367b557 100644
+--- a/tests/test_axis.py
++++ b/tests/test_axis.py
+@@ -2158,7 +2158,7 @@ class TestProgramTools(Base):
+         self.assertIsInstance(line, str)
+         self.assertNotIn('\\"', line)
+         self.assertEqual(line, r'"C:\Windows\System32\cmd.exe" /D /Q /S /C "call "C:\My Files\ws\program.cmd""')
+-        self.assertEqual(tools._shell_command("/bin/bash", "bash", Path("/w/program.sh")), ["/bin/bash", "/w/program.sh"])
++        self.assertEqual(tools._shell_command("/bin/bash", "bash", Path("/w/program.sh")), ["/bin/bash", str(Path("/w/program.sh"))])
+ 
+     def test_program_aliases_and_paths(self):
+         self.assertEqual(tools.normalize_call("rust", {"code": "fn main() {}"}, ["run_rust"])[0], "run_rust")
+diff --git a/tests/test_v4311.py b/tests/test_v4311.py
+new file mode 100644
+index 0000000..008106e
+--- /dev/null
++++ b/tests/test_v4311.py
+@@ -0,0 +1,43 @@
++"""Checks of the page for the 4.3.11 changes. There are no browser tests, so these read the page's source."""
++
++from __future__ import annotations
++
++import re
++import unittest
++from pathlib import Path
++
++PAGE = (Path(__file__).resolve().parent.parent / "axis" / "web" / "index.html").read_text(encoding="utf-8")
++
++
++class TestVersion(unittest.TestCase):
++    def test_this_release(self):
++        import axis
++        self.assertGreaterEqual(tuple(int(x) for x in axis.__version__.split(".")), (4, 3, 11))
++        changes = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
++        self.assertIn("## [4.3.11]", changes)
++
++
++class TestPage(unittest.TestCase):
++    def test_agent_rows_have_no_workspace_link(self):
++        rows = PAGE[PAGE.index("function renderAgents()"):PAGE.index("/* ---", PAGE.index("function renderAgents()"))]
++        self.assertNotIn('"Workspace"', rows)
++
++    def test_full_chat_passes_the_folder(self):
++        self.assertIn("openFullChat(target, cfg.folder ? cfg.folder() : \"\")", PAGE)
++        for cfg in ("const TERM_CHAT", "const IDE_CHAT"):
++            block = PAGE[PAGE.index(cfg):PAGE.index("};", PAGE.index(cfg))]
++            self.assertIn("folder: () =>", block, cfg)
++            self.assertIn("Hide this panel", block, cfg)
++
++    def test_terminal_has_the_same_agent_button(self):
++        self.assertIn('id: "term-side-btn"', PAGE)
++        self.assertNotIn("Show agent", PAGE)
++
++    def test_ocr_settings_are_on_the_ocr_page_only(self):
++        self.assertEqual(len(re.findall(r"ocrSettingsSection\(", PAGE)), 3)   # defined, set-up screen, form
++        models = PAGE[PAGE.index("function renderModels()"):PAGE.index("function engineOverview")]
++        self.assertNotIn("ocrSettingsCard", models)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_v437.py b/tests/test_v437.py
+index a438860..55a0300 100644
+--- a/tests/test_v437.py
++++ b/tests/test_v437.py
+@@ -464,7 +464,7 @@ class TestOllamaEngine(Base):
+         with mock.patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}):
+             engines._unpack(good, out)
+             self.assertEqual((out / "bin" / "ollama").read_bytes(), b"#!/bin/sh\n")
+-            self.assertEqual(engines._find(out, "ollama"), (out / "bin" / "ollama").resolve())
++            self.assertEqual(engines._find(out, "ollama"), out / "bin" / "ollama")   # not resolved: a temporary folder is a link on macOS
+             evil = make("evil.tar.zst", [("../escape.txt", b"no")])
+             with self.assertRaisesRegex(engines.EngineError, "unsafe"):
+                 engines._unpack(evil, Path(self.home) / "out2")
+diff --git a/tests/test_v439.py b/tests/test_v439.py
+index 541e1fd..526485f 100644
+--- a/tests/test_v439.py
++++ b/tests/test_v439.py
+@@ -26,7 +26,7 @@ class TestShareFileAction(Base):
+         self.ws.mkdir()
+         (self.ws / "report.txt").write_text("hello")
+         (self.ws / "sub").mkdir()
+-        (self.ws / "sub" / "data.csv").write_text("a,b\n1,2\n")
++        (self.ws / "sub" / "data.csv").write_bytes(b"a,b\n1,2\n")   # bytes: text mode writes \r\n on Windows
+ 
+     def run_action(self, path, shared=None):
+         return tools.execute(self.ws, "share_file", {"path": path}, ["share_file"], shared=shared)
+@@ -181,6 +181,6 @@ class TestShareFileSkill(Base):
+ 
+ class TestVersion(Base):
+     def test_this_release(self):
+-        self.assertEqual(axis.__version__, "4.3.9")
++        self.assertGreaterEqual(tuple(int(x) for x in axis.__version__.split(".")), (4, 3, 9))
+         changes = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+         self.assertIn("## [4.3.9]", changes)
