@@ -286,7 +286,10 @@ def _image_refs(item: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]:
+AGENT_CALL_SKILL = "call-agents"
+
+
+def build_messages(agent: Optional[Agent], history: Any, nested: bool = False) -> List[Dict[str, Any]]:
     """Turn a chat history into the messages sent to the model.
 
     For an agent, the system message is its system prompt plus enabled skills,
@@ -326,10 +329,11 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
     if agent is None:
         return messages
 
-    names = tool_names(agent)
+    names = tool_names(agent, include_agent_calls=not nested)
     uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
     shared = shared_folder(agent) is not None if uses_files else False
-    system = agent.system_prompt + skills_prompt(agent.skills, names, shared)
+    skill_ids = [s for s in agent.skills if not (nested and s == AGENT_CALL_SKILL)]
+    system = agent.system_prompt + skills_prompt(skill_ids, names, shared)
 
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
@@ -394,12 +398,14 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
             "tools_text": runner.text_protocol(shown) if shown else "", "notes": notes}
 
 
-def tool_names(agent: Optional[Agent]) -> List[str]:
+def tool_names(agent: Optional[Agent], include_agent_calls: bool = True) -> List[str]:
     """The actions an agent may take, from its built-in skills."""
     if agent is None:
         return []
     names: List[str] = []
     for skill_id in agent.skills:
+        if not include_agent_calls and skill_id == AGENT_CALL_SKILL:
+            continue
         if skill_id in skill_lib.BUILTIN_IDS:
             for t in skill_lib.get(skill_id)["tools"]:
                 if t not in names:

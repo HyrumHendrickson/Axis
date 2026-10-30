@@ -157,9 +157,10 @@ CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_T
 
 class Session:
     def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None,
-                 image_preview: bool = False):
+                 image_preview: bool = False, agent_call: Optional[Callable[[str, str], str]] = None):
         self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
         self.image_preview = image_preview
+        self.agent_call = agent_call
         self.done: Dict[str, Tuple[str, str]] = {}  # call signature -> (tool, result)
         self.repeats = 0
 
@@ -190,7 +191,8 @@ class Session:
             ok, output = False, "Error: the arguments were not valid JSON. Call the tool again with a JSON object."
         else:
             ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared,
-                                       on_image_event=self._image_events(call_id), image_preview=self.image_preview)
+                                       on_image_event=self._image_events(call_id), image_preview=self.image_preview,
+                                       agent_call=self.agent_call)
             if ok:
                 if name in CHANGING_TOOLS:   # the folder changed: listings and file contents seen before are stale
                     self.done = {s: v for s, v in self.done.items() if v[0] not in LOCAL_TOOLS}
@@ -208,6 +210,7 @@ def reply(
     workspace: Optional[Path] = None,
     shared: Optional[Path] = None,
     image_preview: bool = False,
+    agent_call: Optional[Callable[[str, str], str]] = None,
 ) -> None:
     """Produce one reply, running tools as the model asks for them.
 
@@ -238,7 +241,7 @@ def reply(
     if text_mode:
         use_text_mode()
     specs = tools.specs(model_tool_names)
-    session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview)
+    session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview, agent_call=agent_call)
 
     for step in range(MAX_STEPS):
         emit({"round": step})

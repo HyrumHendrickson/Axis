@@ -57,6 +57,8 @@ The config block is attached to your newest message each time and is not shown i
 
 Choose an agent's skills in its settings (**Edit agent**). Every agent chooses from the same library.
 
+The **Call other agents** skill lets an agent delegate a focused request to another agent and use its answer. A called agent never receives this skill or the `call_agent` action, even if it is enabled in that agent's settings, so delegation cannot recurse.
+
 | Built-in skill | Capability |
 |----------------|------------|
 | Run Python | Write and run Python (`run_python`), or run a `.py` file already in the agent's folder (`run_python_file`); 60 seconds per run |

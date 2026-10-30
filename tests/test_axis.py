@@ -270,7 +270,7 @@ class TestSkillsAndAgents(Base):
         self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia",
                                "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
                                "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
-                               "figcraft"])
+                               "figcraft", "call-agents"])
         s = skills.create({"name": "Plain English", "description": "Simple words", "instructions": "Avoid jargon."})
         self.assertEqual(s["id"], "plain-english")
         self.assertFalse(s["builtin"])

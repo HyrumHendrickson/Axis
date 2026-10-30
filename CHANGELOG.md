@@ -156,3 +156,7 @@ Changes before 4.1.1 were not recorded in a changelog. The Git history (`git log
 - Added optional local LaTeX rendering for chat replies, with download, enable/disable and delete controls.
 - Tool definitions now expose the installed CAS backend by name and include configured image-model choices.
 
+## 4.3.7
+
+- Put the Tools tab rail on the right and make the Tools control open and close it.
+- Added the Call other agents skill; delegated agents cannot delegate again.

@@ -1335,7 +1335,7 @@ class Handler(BaseHTTPRequestHandler):
         agent = agents.load(body["agent"]) if body.get("agent") else None
         folder = chat_folder(body.get("folder")) if agent else None
         commands = terminal_commands(body.get("terminal_commands"))
-        messages = agents.build_messages(agent, body.get("messages"))
+        messages = agents.build_messages(agent, body.get("messages"), nested=bool(body.get("nested_agent")))
         if body.get("terminal_tool") and agent:
             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
                             "\n\nThe user temporarily granted you the run_terminal tool for this conversation. "
@@ -1373,9 +1373,22 @@ class Handler(BaseHTTPRequestHandler):
             if folder is not None:   # the chat's own folder: the agent is kept inside it alone
                 execution_workspace = folder
                 execution_shared = None
+            def call_nested(agent_name: str, request: str) -> str:
+                child = agents.load(agent_name)
+                child_messages = agents.build_messages(child, [{"role": "user", "content": request}], nested=True)
+                child_allowed = agents.tool_names(child, include_agent_calls=False)
+                result_parts: List[str] = []
+                def child_emit(event: Dict[str, Any]) -> None:
+                    if event.get("t"):
+                        result_parts.append(str(event["t"]))
+                runner.reply(conn, model, child_messages, child_emit, tool_names=child_allowed,
+                             workspace=child.workspace, shared=agents.shared_folder(child))
+                return "".join(result_parts).strip() or "The called agent returned no text."
+
             runner.reply(conn, model, messages, emit,
                          tool_names=allowed, workspace=execution_workspace,
-                         shared=execution_shared, image_preview=body.get("image_preview") is True)
+                         shared=execution_shared, image_preview=body.get("image_preview") is True,
+                         agent_call=call_nested if "call_agent" in allowed else None)
             emit({"done": True})
         except ClientGone:
             return
