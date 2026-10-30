@@ -76,7 +76,8 @@ axis/
   jobs.py         long operations in the background, with progress
   procs.py        programs Axis starts: logs, readiness, stopping, crash recovery
   terminal.py     shells for the Terminal tab and the Workspace's bottom panel
-  instances.py    running copies of Axis, for `axis quit`
+  instances.py    running copies of Axis, for `axis quit` and Quit Axis
+  subagents.py    one agent calling another (the Call agents skill)
   appwindow.py    opens the page in its own window
   shortcut.py     the Start menu, Applications, or app menu launcher
   updates.py      the update check and installing updates from the page

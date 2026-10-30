@@ -1,9 +1,13 @@
 """Running copies of Axis, so `axis quit` can find and stop every one of them.
 
 Each `axis` that serves the web app writes ~/Axis/run/instances/<pid>.json with its port
-and removes it when it exits. `axis quit` asks every recorded copy, and anything else
-answering as Axis on the usual ports, to quit through POST /api/quit. A copy that does not
-stop in time is terminated; on Windows its job object then ends the models it started.
+and removes it when it exits. `axis quit` and the **Quit Axis** button ask every recorded copy,
+and anything else answering as Axis on the usual ports, to quit through POST /api/quit. A copy
+that does not stop in time is terminated; on Windows its job object then ends the models it
+started.
+
+A copy is always asked with {"others": false}: it stops itself (and what it started) but does not
+go on to ask the other copies, which the one asking is already doing.
 """
 
 from __future__ import annotations
@@ -18,6 +22,14 @@ from typing import Any, Dict, Iterable, List, Optional
 from .paths import axis_home
 
 _LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+FIRST_PORT = 8765   # server.make_server tries this port and the next TRIES - 1 ports
+TRIES = 20
+
+
+def usual_ports() -> List[int]:
+    """The ports an Axis that was not given one may be serving on."""
+    return list(range(FIRST_PORT, FIRST_PORT + TRIES))
 
 
 def _folder() -> Path:
@@ -65,7 +77,8 @@ def ping(port: int, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
 
 
 def ask_to_quit(port: int) -> bool:
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b"{}", method="POST",
+    """Ask the Axis on this port to stop itself only (it does not ask the other copies)."""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b'{"others": false}', method="POST",
                                  headers={"Content-Type": "application/json"})
     try:
         with _LOCAL.open(req, timeout=5) as resp:
@@ -99,11 +112,15 @@ def find(ports: Iterable[int]) -> List[Dict[str, Any]]:
     return sorted(found.values(), key=lambda e: e["port"])
 
 
-def quit_all(ports: Iterable[int], timeout: float = 45.0, say=print) -> int:
-    """Ask every running Axis to quit and wait for it. Returns how many were stopped."""
+def quit_all(ports: Iterable[int], timeout: float = 45.0, say=print, skip_port: Optional[int] = None) -> int:
+    """Ask every running Axis to quit and wait for it. Returns how many were stopped.
+
+    skip_port leaves out the copy at that port: the one that is doing the asking (the Quit Axis button),
+    which stops itself afterwards.
+    """
     from .procs import _kill_pid, _pid_alive
 
-    running = find(ports)
+    running = [e for e in find(ports) if skip_port is None or e["port"] != skip_port]
     for e in running:
         say(f"Stopping Axis on port {e['port']}" + (f" (process {e['pid']})" if e["pid"] else "") + "...")
         e["asked"] = ask_to_quit(e["port"])

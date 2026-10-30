@@ -286,7 +286,7 @@ def _image_refs(item: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]:
+def build_messages(agent: Optional[Agent], history: Any, called_by: str = "") -> List[Dict[str, Any]]:
     """Turn a chat history into the messages sent to the model.
 
     For an agent, the system message is its system prompt plus enabled skills,
@@ -326,10 +326,14 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
     if agent is None:
         return messages
 
-    names = tool_names(agent)
+    nested = bool(called_by)   # called by another agent: it never gets the skill that calls agents
+    names = tool_names(agent, nested=nested)
     uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
     shared = shared_folder(agent) is not None if uses_files else False
-    system = agent.system_prompt + skills_prompt(agent.skills, names, shared)
+    system = agent.system_prompt + skills_prompt(agent.skills, names, shared, nested=nested)
+    if nested:
+        system += (f"\n\nThe agent '{called_by}' called you to do one task. Do it and reply with the result only. "
+                   "You cannot call other agents.")
 
     if agent.config:
         rules = "\n".join(f"- {line}" for line in agent.config)
@@ -340,7 +344,7 @@ def build_messages(agent: Optional[Agent], history: Any) -> List[Dict[str, Any]]
     return [{"role": "system", "content": system}] + messages
 
 
-def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False) -> str:
+def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False, nested: bool = False) -> str:
     """The text an agent's skills add to its system message, after the agent's own system prompt.
 
     names are the actions the agent has (from its built-in skills); shared says the agent may use the
@@ -348,6 +352,8 @@ def skills_prompt(skill_ids: List[str], names: List[str], shared: bool = False) 
     exactly what is sent.
     """
     uses_files = any(t in names for t in tool_lib.FOLDER_TOOLS)
+    if nested:
+        skill_ids = [i for i in skill_ids if i != skill_lib.CALL_AGENT_SKILL]
     chosen = [skill_lib.get(i) for i in skill_ids if skill_lib.exists(i)]
     # A skill that only changes how file actions work means nothing without them.
     needs_files = {s["id"] for s in skill_lib.BUILTIN if s.get("needs_files")}
@@ -395,14 +401,17 @@ def skill_preview(skill_id: str) -> Dict[str, Any]:
             "tools_text": runner.text_protocol(shown) if shown else "", "notes": notes}
 
 
-def tool_names(agent: Optional[Agent]) -> List[str]:
-    """The actions an agent may take, from its built-in skills."""
+def tool_names(agent: Optional[Agent], nested: bool = False) -> List[str]:
+    """The actions an agent may take, from its built-in skills. An agent called by another agent (nested)
+    has all of them except call_agent."""
     if agent is None:
         return []
     names: List[str] = []
     for skill_id in agent.skills:
         if skill_id in skill_lib.BUILTIN_IDS:
             for t in skill_lib.get(skill_id)["tools"]:
+                if nested and t == tool_lib.CALL_AGENT:
+                    continue
                 if t not in names:
                     names.append(t)
     return names

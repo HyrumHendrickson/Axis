@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from . import images, web_tools
+from . import images, procs, web_tools
 from .paths import images_folder
 
 SHARED_PREFIX = "shared"
@@ -229,6 +229,21 @@ TOOL_SPECS["read_text"] = {
 }
 
 
+CALL_AGENT = "call_agent"
+TOOL_SPECS[CALL_AGENT] = {
+    "description": "Give a task to another of the user's agents and get its answer back. The other agent works in the "
+    "same folder, has its own skills and cannot see this conversation, so the message must hold everything it needs.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "agent": {"type": "string", "description": "The name of the agent to call"},
+            "message": {"type": "string", "description": "The complete task for that agent"},
+        },
+        "required": ["agent", "message"],
+    },
+}
+
+
 def _shells_here() -> List[str]:
     """The shells run_terminal can use on this computer, the default first."""
     names = ["cmd", "powershell", "pwsh"] if os.name == "nt" else ["bash", "sh", "pwsh"]
@@ -272,6 +287,12 @@ def tool_spec(name: str) -> Dict[str, Any]:
                     props["languages"]["description"] = ("For Tesseract only: languages to read, joined with +, "
                                                          "from the installed ones: " + ", ".join(langs)
                                                          + " (optional)")
+        elif name == CALL_AGENT:
+            from . import agents
+            found = [a for a in agents.list_all() if a.name]
+            if found:
+                props["agent"]["description"] = ("The name of the agent to call, one of: "
+                                                 + "; ".join(f"{a.name} ({' '.join(a.system_prompt.split())[:70]})" for a in found[:30]))
         elif name in ("run_terminal", "run_terminal_file"):
             shells = _shells_here()
             props["shell"]["description"] = (f"Optional shell: one of {', '.join(shells)} (auto uses {shells[0]}, "
@@ -618,9 +639,7 @@ def run_code(where: Where, code: str, cwd: Optional[Path] = None, script: str = 
                 "AXIS_ROOT": str(root)})
     if script:
         env["AXIS_SCRIPT"] = script
-    kwargs: Dict[str, Any] = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    kwargs: Dict[str, Any] = _run_kwargs()
     result = None
     try:
         for exe in ([python] if python else dict.fromkeys([python_executable(), sys.executable])):
@@ -648,8 +667,8 @@ def _run_capped(cmd: Union[str, List[str]], code: str, cwd: str, env: Dict[str, 
     Only the first MAX_CAPTURE bytes of each output stream are kept. The rest is still read, so the
     program is never blocked, but it is not stored: code that prints without end cannot fill Axis's memory.
     """
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            cwd=cwd, env=env, **kwargs)
+    proc = procs.track(subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        cwd=cwd, env=env, **kwargs))
     kept = {"out": bytearray(), "err": bytearray()}
     cut = {"out": False, "err": False}
 
@@ -690,12 +709,14 @@ def _run_capped(cmd: Union[str, List[str]], code: str, cwd: str, env: Dict[str, 
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        proc.kill()
+        procs.kill_tree(proc)   # the program and anything it started in the background
         proc.wait()
     except BaseException:
-        proc.kill()
+        procs.kill_tree(proc)
         proc.wait()
         raise
+    finally:
+        procs.untrack(proc)
     for t in threads:
         t.join(5)
 
@@ -1117,6 +1138,8 @@ TOOL_ALIASES = {
     "stable_diffusion": "generate_image", "paint": "generate_image",
     "cas": "run_cas", "maxima": "run_cas", "sympy": "run_cas", "run_maxima": "run_cas", "run_sympy": "run_cas",
     "computer_algebra": "run_cas", "symbolic_math": "run_cas", "algebra": "run_cas",
+    "ask_agent": "call_agent", "delegate": "call_agent", "delegate_task": "call_agent", "run_agent": "call_agent",
+    "call_subagent": "call_agent", "subagent": "call_agent", "agent": "call_agent", "call_agents": "call_agent",
     "ocr": "read_text", "read_image_text": "read_text", "image_to_text": "read_text", "extract_text": "read_text",
     "read_text_from_image": "read_text", "run_ocr": "read_text", "tesseract": "read_text",
 }
@@ -1139,6 +1162,8 @@ ARG_ALIASES = {
     "shell": ("shell", "terminal", "interpreter", "language"),
     "system": ("system", "cas", "engine", "backend"),
     "languages": ("languages", "language", "lang", "langs"),
+    "agent": ("agent", "agent_name", "name", "to", "target", "callee", "assistant"),
+    "message": ("message", "task", "prompt", "request", "instruction", "instructions", "query", "text", "content"),
 }
 
 
@@ -1282,6 +1307,8 @@ def execute(workspace: Path, name: str, args: Any, allowed: List[str], shared: O
     when image_preview is true.
     """
     name, args = normalize_call(name, args, allowed)
+    if name == CALL_AGENT:
+        return False, "Error: call_agent only works inside a chat reply."
     if name not in allowed or name not in HANDLERS:
         return False, f"Unknown tool '{name}'. Available tools: {', '.join(allowed) or 'none'}."
     if not isinstance(args, dict):

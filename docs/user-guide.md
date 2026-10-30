@@ -86,6 +86,8 @@ Notes:
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
 
+**Call agents.** With this skill an agent can give a task to another of your agents and get the answer back. The other agent cannot see your conversation, so the agent writes out the whole task; it works in the same folder and uses its own skills and model. An agent that is called this way never has the Call agents skill, so agents cannot call agents in a chain, and an agent cannot call itself. One reply makes at most 5 calls.
+
 **Tools skills.** Each page under **Tools** has a skill, listed under **Tools** in an agent's settings: **CAS**, **Images** and **OCR** (the Craft apps have their own, below). Each gives the agent one action that uses what you set up on that page, so set it up there first. The CAS skill uses the system chosen under **CAS agents use** on the CAS page unless the agent asks for the other one. Maxima code from an agent is read before it runs and refused when it starts other programs (`system`), uses Lisp, or names a file outside the agent's folder; SymPy code runs under the same guard as Run Python. Neither is a sandbox. The OCR skill reads pictures in the agent's folder only, with a running PyTorch OCR model if one is on, otherwise Tesseract English, unless the agent names another installed model.
 
 **Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in its folder, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. If a newer app release changes a command, edit the skill's file in `Axis/skills/built-in`.
@@ -121,6 +123,8 @@ If `llama-server` refuses tools (older builds started without `--jinja`), Axis u
 Every conversation is saved automatically. Open **Past chats** in the sidebar to filter by agent, sort (newest, oldest, by agent, by title), search by title, rename, resume, or delete. Axis never deletes chats on its own, except that deleting an agent deletes its chats. Chats are stored as `.json` files in `Axis/chats` in your home folder.
 
 ## Images
+
+Every picture is saved in a folder of its own in `Axis/images`, together with a `.json` file holding its prompt, seed and every other setting. Click a picture in the gallery and open **All settings** to see them; **Delete** removes the whole folder. Pictures made before Axis 4.3.7 are single files and are listed too.
 
 Open **Tools** in the sidebar, then **Images**. Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](installation.md#model-engines)).
 
@@ -270,6 +274,10 @@ Open **Models** to install, start, stop, and delete models. While the page is op
 | Image model | A name such as `z-image-turbo`, or one file from Hugging Face. See [Images](#images). | `z-image-turbo`, `sd1.5` |
 
 Hugging Face downloads are checked against the size and SHA-256 checksum Hugging Face publishes before they are used. An interrupted download resumes where it stopped the next time you install the same model; a cancelled one is discarded. Axis checks free disk space first.
+
+**Engines.** Under **Engine settings**, each engine Axis can install (Ollama, llama.cpp, stable-diffusion.cpp, Tesseract and the PyTorch environment for OCR) has **Install**, **Update** and **Remove**; so do Maxima and SymPy on the CAS page. **Remove** only removes what Axis installed, never a copy that was already on your computer, and models you downloaded stay on disk until you delete them. Ollama's download is a large one and needs no administrator rights; on Linux it needs the `zstd` program.
+
+**Quit Axis** (top right) and `axis quit` stop every running Axis and everything Axis started: models, Ollama when Axis started it, and any picture or program still running. Ollama that you started yourself keeps running, with its models unloaded. Craft apps you opened keep running so unsaved work is not lost.
 
 **Each installed model** shows **Start** or **Stop**, **Delete** (which asks first), and **Chat with this model** while it is on. **Start** loads the model and keeps it loaded until **Stop**. For Ollama, Axis loads it at the context size it uses (`AXIS_NUM_CTX`), so the first chat does not reload it. For llama.cpp, Axis starts `llama-server` with the context size and extra arguments under **Engine settings** (for example `-ngl 99` to put every layer on the GPU). If a model fails to start, the card shows the program's last messages, including out-of-memory errors.
 

@@ -40,7 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import __version__, engines, jobs
+from . import __version__, engines, jobs, procs
 from .paths import inside, remove_tree, replace_retry, unlink_quiet
 
 REPO_OWNER = "storytold"
@@ -834,6 +834,7 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
                 except OSError as exc:
                     raise ArtCraftError(f"rustup-init could not be started: {exc.strerror or exc}") from exc
             assert proc is not None
+            procs.track(proc)   # quitting Axis ends an installer that is still running
             lines: "queue.Queue[Optional[str]]" = queue.Queue()
             threading.Thread(target=_pump, args=(proc.stdout, lines), daemon=True).start()
             tail: List[str] = []
@@ -855,8 +856,9 @@ def install_rust(job: jobs.Job) -> Dict[str, Any]:
                         job.progress(phase=line[:160])
             finally:
                 if proc.poll() is None:
-                    proc.kill()
+                    procs.kill_tree(proc)
                 proc.wait()
+                procs.untrack(proc)
                 if proc.stdout is not None:
                     proc.stdout.close()
             if proc.returncode != 0:

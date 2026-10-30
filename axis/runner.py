@@ -152,14 +152,18 @@ IMAGE_EVENT_KEYS = ("phase", "progress", "queued", "preview")
 # earlier ones may be out of date, so they are forgotten (see Session.run).
 FILE_HANDLERS = {"list_files", "read_file", "write_file", "make_folder", "delete_file"}   # no longer a skill, still callable
 LOCAL_TOOLS = FILE_HANDLERS | set(tools.EXECUTION_TOOLS) | {"generate_image", "run_cas", "read_text"}
-CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image", "run_cas"}
+CHANGING_TOOLS = {"write_file", "make_folder", "delete_file", *tools.EXECUTION_TOOLS, "generate_image", "run_cas",
+                  tools.CALL_AGENT}
+MAX_AGENT_CALLS = 5   # calls to other agents in one reply
 
 
 class Session:
     def __init__(self, workspace: Path, allowed: List[str], emit, shared: Optional[Path] = None,
-                 image_preview: bool = False):
+                 image_preview: bool = False, agent_caller: Optional[Callable[..., str]] = None):
         self.workspace, self.allowed, self.emit, self.shared = workspace, allowed, emit, shared
         self.image_preview = image_preview
+        self.agent_caller = agent_caller   # None for an agent that was itself called: it cannot call agents
+        self.agent_calls = 0
         self.done: Dict[str, Tuple[str, str]] = {}  # call signature -> (tool, result)
         self.repeats = 0
 
@@ -177,6 +181,24 @@ class Session:
             self.emit({"tool_progress": {"id": call_id, **out}})
         return on_event
 
+    def _call_agent(self, args: Dict[str, Any], call_id: str) -> Tuple[bool, str]:
+        if self.agent_caller is None or tools.CALL_AGENT not in self.allowed:
+            return False, "Error: you cannot call other agents."
+        if self.agent_calls >= MAX_AGENT_CALLS:
+            return False, f"Error: at most {MAX_AGENT_CALLS} agent calls are allowed in one reply."
+        self.agent_calls += 1
+        beat = [0.0]
+
+        def on_event(note: str) -> None:
+            now = time.monotonic()   # also notices a page that has gone away, which stops the call
+            if now - beat[0] >= 1.0 or note:
+                beat[0] = now
+                self.emit({"tool_progress": {"id": call_id, "phase": note}})
+        try:
+            return True, self.agent_caller(args.get("agent"), args.get("message"), on_event)
+        except tools.ToolError as exc:
+            return False, f"Error: {exc}"
+
     def run(self, name: str, args: Any, call_id: str) -> str:
         name, args = tools.normalize_call(name, args, self.allowed)
         shown = args if isinstance(args, dict) else {"raw": str(args)}
@@ -188,6 +210,11 @@ class Session:
                                 + "\nDo not repeat it. Use the result to continue or to answer the user.")
         elif not isinstance(args, dict):
             ok, output = False, "Error: the arguments were not valid JSON. Call the tool again with a JSON object."
+        elif name == tools.CALL_AGENT:
+            ok, output = self._call_agent(args, call_id)
+            if ok:
+                self.done = {s: v for s, v in self.done.items() if v[0] not in LOCAL_TOOLS}
+                self.done[sig] = (name, output)
         else:
             ok, output = tools.execute(self.workspace, name, args, self.allowed, shared=self.shared,
                                        on_image_event=self._image_events(call_id), image_preview=self.image_preview)
@@ -208,6 +235,7 @@ def reply(
     workspace: Optional[Path] = None,
     shared: Optional[Path] = None,
     image_preview: bool = False,
+    agent_caller: Optional[Callable[..., str]] = None,
 ) -> None:
     """Produce one reply, running tools as the model asks for them.
 
@@ -238,7 +266,8 @@ def reply(
     if text_mode:
         use_text_mode()
     specs = tools.specs(model_tool_names)
-    session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview)
+    session = Session(workspace, tool_names, emit, shared=shared, image_preview=image_preview,
+                      agent_caller=agent_caller)
 
     for step in range(MAX_STEPS):
         emit({"round": step})

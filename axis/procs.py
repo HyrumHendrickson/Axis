@@ -11,6 +11,10 @@ and hold on to memory. Two things prevent that:
 * Elsewhere the programs are listed in ~/Axis/run/processes.json. When Axis
   starts again it takes back any that are still answering on their port, so the
   Models page can stop them.
+
+Programs that run for one request (a picture from sd-cli, an OCR run, an agent's
+code, an installer) are not servers, but they are tracked too (see track), so
+quitting Axis ends them and the programs they started.
 """
 
 from __future__ import annotations
@@ -261,6 +265,70 @@ def _assign_to_job(proc: subprocess.Popen) -> None:
         pass  # the program still runs; it is just not tied to Axis's lifetime
 
 
+# ------------------------------------------- short-lived programs: end with Axis
+
+_CHILDREN: Dict[int, subprocess.Popen] = {}
+_CHILD_LIMIT = 64
+
+
+def track(proc: subprocess.Popen) -> subprocess.Popen:
+    """Remember a program that runs for one request, so quitting Axis ends it (and what it started).
+
+    On Windows the program joins the job object, so it also ends if Axis is killed. Call untrack()
+    when it has finished; a program that is forgotten is dropped once it has ended.
+    """
+    _assign_to_job(proc)
+    with _LOCK:
+        if len(_CHILDREN) >= _CHILD_LIMIT:
+            for pid in [pid for pid, p in _CHILDREN.items() if p.poll() is not None]:
+                del _CHILDREN[pid]
+        _CHILDREN[proc.pid] = proc
+    return proc
+
+
+def untrack(proc: subprocess.Popen) -> None:
+    with _LOCK:
+        _CHILDREN.pop(proc.pid, None)
+
+
+def tracked() -> List[subprocess.Popen]:
+    """The tracked programs that are still running."""
+    with _LOCK:
+        return [p for p in _CHILDREN.values() if p.poll() is None]
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """End a program and everything it started. Never touches Axis's own process group."""
+    if proc.poll() is not None:
+        return   # nothing to end; its process id may already belong to another program
+    if os.name == "nt":
+        _taskkill(proc.pid)
+    else:
+        try:
+            if os.getpgid(proc.pid) == proc.pid and proc.pid != os.getpgrp():
+                os.killpg(proc.pid, signal.SIGKILL)   # it leads a group of its own (start_new_session)
+        except OSError:
+            pass
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def stop_children() -> int:
+    """End every tracked program that is still running. Returns how many were running."""
+    with _LOCK:
+        found = list(_CHILDREN.values())
+        _CHILDREN.clear()
+    count = 0
+    for proc in found:
+        if proc.poll() is None:
+            count += 1
+        kill_tree(proc)
+    return count
+
+
 # ------------------------------------------------------------------ running
 
 
@@ -491,6 +559,7 @@ def running(kind: Optional[str] = None) -> List[Managed]:
 
 
 def stop_all() -> None:
+    """Stop every server Axis started, then every short-lived program it is still running."""
     with _LOCK:
         keys = list(_PROCS)
     for key in keys:
@@ -498,6 +567,10 @@ def stop_all() -> None:
             stop(key, timeout=8)
         except Exception:
             pass
+    try:
+        stop_children()
+    except Exception:
+        pass
 
 
 def adopt(probe: Optional[Callable[[Dict[str, Any]], bool]] = None) -> None:

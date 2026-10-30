@@ -18,7 +18,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 |--------|------|--------------|
 | `GET` | `/` | the app |
 | `GET` | `/api/ping` | identifies a running Axis |
-| `POST` | `/api/quit` | stops Axis (and the models it started) |
+| `POST` | `/api/quit` | stops every running Axis and everything they started; `{"others": false}` stops only this copy |
 | `POST` | `/api/page?id=x[&closing=1]` | an open page says it is still there (or is closing) |
 | `GET` | `/api/status` | model server and loaded models |
 | `GET` | `/api/update` | installed and newest version (the first call starts the check) |
@@ -129,7 +129,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `POST` | `/api/manage/ollama/start` | start the Ollama server |
 | `POST` | `/api/manage/ollama/stop` | stop the Ollama server (only if Axis started it) |
 | `POST` | `/api/manage/engines/install` | install or update llama.cpp, stable-diffusion.cpp, Tesseract or PyTorch for OCR {engine: llama&#124;sd&#124;tesseract&#124;pytorch, build?} |
-| `POST` | `/api/manage/engines/remove` | remove the copy Axis installed {engine} |
+| `POST` | `/api/manage/engines/remove` | remove the copy Axis installed {engine: llama\|sd\|ollama\|tesseract\|pytorch} (Tesseract answers with a job) |
 | `PUT` | `/api/manage/settings` | llama-server path, context size, extra arguments |
 | `POST` | `/api/manage/jobs/<id>/cancel` | cancel an install or start |
 | `DELETE` | `/api/manage/jobs/<id>` | remove a finished job from the list |

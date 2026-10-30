@@ -3,6 +3,23 @@
 All notable changes to Axis are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Axis uses [semantic versioning](https://semver.org/): a major version for changes that break existing data or habits, a minor version for new features, and a patch version for fixes and small improvements.
 
 ## [Unreleased]
+
+## [4.3.7] - 2026-10-30
+
+### Added
+- **Call agents skill.** An agent with it can hand a task to another agent with `call_agent` and get the answer back. The agent that is called keeps all its own skills but never has this one, so it cannot call agents itself; an agent cannot call itself, and one reply makes at most 5 calls. The called agent works in the same folder as the caller and uses its own model when that is on, otherwise the caller's. Steps show the task and which agent is working.
+- **A folder for each picture.** Every new picture is saved in its own folder in `Axis/images`, with the picture and a `.json` file of the same name holding the prompt, negative prompt, seed, model, size, steps, CFG scale, sampler, strength, how long it took and who made it. Choosing a picture in the gallery shows **All settings**. **Delete** removes the picture's whole folder. Earlier pictures stay where they are and are still listed.
+- **Install and remove Ollama.** The Models page can install Ollama (a checked download into `Axis/engines/ollama`, no administrator rights) and remove the copy Axis installed. Models stay in Ollama's own folder. On Linux the download needs the `zstd` program.
+- **Remove buttons for everything Axis installs.** llama.cpp, stable-diffusion.cpp, Tesseract (Models, Engine settings) and Maxima (CAS) can be removed. Tesseract and Maxima are removed with the package manager that installed them, and only when Axis installed them; a copy that was already on the computer is never removed.
+- API: `POST /api/quit` takes `{"others": false}`; `POST /api/manage/engines/install` and `/remove` take `engine: ollama`; `POST /api/cas/remove` takes `system: maxima`. Environment variable `AXIS_ALLOW_UNVERIFIED`.
+
+### Changed
+- **Quit Axis and `axis quit` do the same thing.** Both stop every running copy of Axis, and each copy cancels installs and downloads, closes terminals, unloads every model in Ollama, stops llama-server, sd-server and any `ollama serve` that Axis started, and ends every program still running for a picture, a reading or an agent's code. An Ollama you started yourself keeps running with no model loaded. `axis quit` now says so and exits with an error if something could not be stopped.
+- Downloads from GitHub are refused when GitHub publishes no SHA-256 for them (an older release that has one is used instead). `AXIS_ALLOW_UNVERIFIED=1` accepts them.
+- The LaTeX renderer is a fixed version (MathJax 3.2.2) checked against its SHA-256 before it is kept; it used to download whatever `mathjax@3` pointed to, and Axis serves it to its own page.
+- Agent Python, terminal and Rust code now runs in its own process group, and when it runs out of time everything it started is ended, not only the program itself.
+
+### Fixed (carried over from before this release)
 - Tools: the sub-tabs are now on the left, and the sidebar Tools entry no longer has a dropdown arrow that opened nothing.
 - The **Restart Axis** badge after an update is no longer green.
 - Windows: the LaTeX renderer downloads again (a temporary file was left open and could not be renamed). Rust installs again: the Visual Studio environment was never recognised, and a failed C++ Build Tools step deleted the Rust that had just been installed. The Build Tools are installed with winget when possible, otherwise with Microsoft's signed installer run as administrator. Short file locks from antivirus programs are waited out.

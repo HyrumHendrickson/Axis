@@ -40,7 +40,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import backend, catalog, engines, hub, images, jobs, ocr, procs
+from . import backend, catalog, engines, hub, images, jobs, ocr, procs, terminal
 from .paths import axis_home, image_root, inside, llm_root
 
 START_TIMEOUT = float(os.environ.get("AXIS_START_TIMEOUT", "900"))
@@ -154,7 +154,7 @@ def ollama_binary() -> Optional[Path]:
     else:
         extra += [Path("/Applications/Ollama.app/Contents/Resources/ollama"), Path("/usr/local/bin/ollama"),
                   Path("/usr/bin/ollama"), Path("/opt/homebrew/bin/ollama")]
-    return _find_program(load_settings()["ollama"], "AXIS_OLLAMA", ["ollama"], extra)
+    return _find_program(load_settings()["ollama"], "AXIS_OLLAMA", ["ollama"], extra, engines.program("ollama"))
 
 
 def ollama_url(server_url: Optional[str] = None) -> str:
@@ -1083,7 +1083,7 @@ def state(server_url: Optional[str]) -> Dict[str, Any]:
                   "sd_server_setting": images.load_settings().get("sd_server", ""), "root": str(image_root()),
                   "running": {"model": img.target, "url": img.url, "ready": img.ready, "adopted": img.adopted}
                   if img else None, "crashed": crashed_images},
-        "engines": engines.status(ENGINE_FINDERS),
+        "engines": engines.status({**ENGINE_FINDERS, "ollama": ollama_binary}),
         "ocr": ocr.status(),
         "catalog": catalog.public(),
         "hf_token": bool(hub.token()),
@@ -1106,14 +1106,18 @@ def install_engine(body: Any) -> Dict[str, Any]:
 
 
 def remove_engine(body: Any) -> Dict[str, Any]:
+    """Uninstall an engine. Only what Axis installed is removed; a copy found elsewhere is the user's."""
     if not isinstance(body, dict):
         raise ManageError("Request body must be a JSON object.")
     engine = _text(body, "engine", "Engine")
     if engine == "pytorch":
         return ocr.remove_env()
     if engine == "tesseract":
-        raise ManageError("Axis does not remove Tesseract. Uninstall it the way it was installed (Windows: Settings, "
-                          "Apps; macOS: brew uninstall tesseract; Linux: your package manager).")
+        return {"job": ocr.submit_remove_tesseract().public()}
+    if engine == "ollama":
+        if procs.running("ollama"):
+            raise ManageError("Stop Ollama first.")
+        return engines.remove(engine)
     kind = {"llama": "llama", "sd": "image"}.get(engine)
     if kind and procs.running(kind):
         raise ManageError("Stop every model that uses it first.")
@@ -1144,13 +1148,23 @@ def unload_all_ollama(urls: List[str]) -> List[str]:
 
 
 def shutdown(server_url: Optional[str] = None) -> List[str]:
-    """Stop every model (called when Axis exits). Returns the Ollama models that were unloaded.
+    """Stop everything Axis turned on (called when Axis exits). Returns the Ollama models that were unloaded.
 
-    Every model loaded in Ollama is unloaded, not just the ones Axis loaded, so no model keeps
-    holding memory after Axis quits; Ollama itself is left running unless Axis started it. Then
-    llama-server (one per llama.cpp model), sd-server and any `ollama serve` that Axis started
-    are stopped, together with the programs they started.
+    In this order: running installs and downloads are cancelled; terminals are closed; every model
+    loaded in Ollama is unloaded, not just the ones Axis loaded, so no model keeps holding memory after
+    Axis quits; then llama-server (one per llama.cpp model), sd-server, any `ollama serve` that Axis
+    started and every program still running for a picture, a reading or an agent's code are stopped,
+    together with the programs they started. An Ollama that Axis did not start (the desktop app, a
+    service) is the user's own, so it keeps running with no model loaded.
     """
+    try:
+        jobs.cancel_all()
+    except Exception:
+        pass
+    try:
+        terminal.close_all()
+    except Exception:
+        pass
     urls = [url for url, _ in backend.take_pinned_ollama()]
     try:
         urls.append(ollama_url(server_url))

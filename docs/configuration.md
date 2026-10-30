@@ -50,7 +50,7 @@ When Axis stops, it also stops every `llama-server` and `sd-server` it started, 
 | `axis setup` | Install llama.cpp and stable-diffusion.cpp now. `--build auto\|cpu\|vulkan\|cuda\|rocm\|metal`, `--only llama\|sd`, `--force` to replace a copy found elsewhere. |
 | `axis shortcut` | Add Axis to the Start menu, Applications, or app menu. `--remove` to remove it, `--no-desktop` to skip the Windows desktop shortcut. |
 | `axis update` | Install the latest version from GitHub. Agents, skills, and files are kept. `--check` only reports whether a newer version is available. |
-| `axis quit` | Stop every running copy of Axis and every model: each model loaded in Ollama is unloaded (Ollama itself keeps running), and llama-server and sd-server are stopped. A copy that does not stop when asked is ended only if it was started by this version of Axis; for an older copy, close its window or terminal. |
+| `axis quit` | Stop every running copy of Axis and everything Axis started: install jobs are cancelled, terminals closed, each model loaded in Ollama is unloaded, llama-server, sd-server and any `ollama serve` that Axis started are stopped (an Ollama you started yourself keeps running, with no model loaded), and so is every program still running for a picture, a reading or an agent's code. **Quit Axis** in the page does the same. A copy that does not stop when asked is ended only if it was started by this version of Axis; for an older copy, close its window or terminal. |
 | `axis uninstall` | Remove the program. Asks whether to delete your data as well. |
 | `axis --version` | Print the installed version |
 
@@ -103,6 +103,7 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `AXIS_TESSERACT` | Path to the `tesseract` program | Found on PATH or where its installer puts it |
 | `AXIS_OCR_PYTHON` | Python the OCR environment for PyTorch models is made from | The Python Axis was installed with |
 | `AXIS_OCR_TIMEOUT` | Longest time reading one picture may take, in seconds | 900 |
+| `AXIS_ALLOW_UNVERIFIED` | `1` lets Axis install a download from GitHub that has no published checksum (it refuses them otherwise) | not set |
 | `AXIS_MAXIMA` | Path to the `maxima` program (or its folder) for the CAS page and agents | Found on PATH or where its installer puts it |
 | `AXIS_CAS_TIMEOUT` | Longest time one run of CAS code may take, in seconds | 60 |
 | `GITHUB_TOKEN` | A GitHub token, used only if GitHub limits release lookups (Axis falls back to the release pages anyway) | not set |

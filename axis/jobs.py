@@ -158,6 +158,23 @@ def cancel(job_id: str) -> Job:
     return job
 
 
+def cancel_all(wait: float = 5.0) -> int:
+    """Ask every running job to stop (used when Axis quits) and give them a moment to clean up.
+
+    Returns how many were running. A job that cannot be cancelled (a system installer that has begun)
+    is left to finish.
+    """
+    with _LOCK:
+        running = [j for j in _JOBS.values() if j.state == "running"]
+    for job in running:
+        if job.cancellable:
+            job._cancel.set()
+    deadline = time.time() + wait
+    while time.time() < deadline and any(j.state == "running" and j.cancellable for j in running):
+        time.sleep(0.05)
+    return len(running)
+
+
 def dismiss(job_id: str) -> None:
     with _LOCK:
         job = _JOBS.get(job_id)

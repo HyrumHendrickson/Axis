@@ -18,9 +18,11 @@ Stored in ~/Axis:
 
 Every picture Axis makes, in the Images tab or with an agent's generate_image
 action, goes to ~/Axis/images (paths.images_folder), never into the workspace.
-The folder keeps a hidden index (.axis-images.json) with the prompt and settings
-of every picture, for the gallery. Pictures made before Axis 4.3.4 stay where they
-were saved (images/ in the shared folder).
+Since Axis 4.3.7 each picture has a folder of its own, ~/Axis/images/<name>/, holding
+<name>.png and <name>.json: the prompt, the seed, the model and every other setting, which
+the gallery shows when a picture is chosen. Pictures made earlier are single files in
+~/Axis/images (their settings are in the hidden index .axis-images.json) or, before Axis
+4.3.4, in images/ in the shared folder; they keep working and are listed too.
 
 Editing a picture (image to image): when a request names an init image, the same
 model starts from that picture instead of from noise. strength (0 to 1) sets how far
@@ -54,6 +56,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import __version__, procs
 from .paths import axis_home, image_root, inside, shared_root
 
 INDEX_NAME = ".axis-images.json"
@@ -637,12 +640,15 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     while not _LOCK.acquire(timeout=1.0):
         emit({"queued": True})  # also notices a browser that has gone away
     try:
-        out_dir = folder
-        out_dir.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True)
         name = _file_name(params["prompt"])
-        out_file, n = out_dir / f"{name}.png", 2
-        while out_file.exists():
-            out_file, n = out_dir / f"{name}-{n}.png", n + 1
+        out_dir, n = folder / name, 2
+        while out_dir.exists() or (folder / f"{name}.png").exists():
+            name_n = f"{name}-{n}"
+            out_dir, n = folder / name_n, n + 1
+        name = out_dir.name
+        out_dir.mkdir()                      # this picture's own folder: the picture and its settings file
+        out_file = out_dir / f"{name}.png"
         started = time.time()
         url = manager.image_server_url(model["id"])
         if url is None and cli is None:
@@ -684,8 +690,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
                     tail = "\n".join(l for l in lines[-8:] if l.strip())
                     raise ImageError("sd-cli finished without making a picture." + (f"\n{tail}" if tail else ""))
         except BaseException:
-            if out_file.exists():  # never leave half a picture behind
-                out_file.unlink()
+            shutil.rmtree(out_dir, ignore_errors=True)   # never leave half a picture (or its folder) behind
             raise
         finally:
             if preview_dir is not None:
@@ -697,10 +702,14 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     shown = {k: v for k, v in params.items() if k != "init_image"}   # the full path stays private
     if init_image is not None:
         shown["edited_from"] = init_name or init_image.name
-    record = {"file": out_file.name, "path": out_file.name, "model": model["name"],
-              "model_id": model["id"], **shown, "seconds": seconds, "source": source,
+    record = {"file": out_file.name, "path": f"{out_dir.name}/{out_file.name}", "folder": out_dir.name,
+              "model": model["name"], "model_id": model["id"], **shown, "seconds": seconds, "source": source,
               "created": datetime.now().isoformat(timespec="seconds")}
-    _add_to_index(out_dir, record)
+    try:
+        _write_json(out_dir / f"{out_dir.name}.json", {**{k: v for k, v in record.items() if k != "path"},
+                                                      "axis_version": __version__})
+    except OSError:
+        pass   # the picture is still good; the gallery then shows what it can
     return record
 
 
@@ -924,16 +933,19 @@ def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit, preview_file: Op
     kwargs: Dict[str, Any] = {"env": {**os.environ, **engines.run_env(Path(cmd[0]))}}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        kwargs["start_new_session"] = True   # so everything it starts can be ended with it
     try:
         proc = subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **kwargs)
     except OSError as exc:
         raise ImageError(f"Could not start sd-cli ({cmd[0]}): {exc.strerror or exc}") from exc
+    procs.track(proc)   # quitting Axis ends a picture that is still being made
     expired = threading.Event()
 
     def stop() -> None:
         expired.set()
-        proc.kill()
+        procs.kill_tree(proc)
 
     timer = threading.Timer(TIMEOUT, stop)
     timer.daemon = True
@@ -972,11 +984,12 @@ def _run(cmd: List[str], cwd: Optional[Path], steps: int, emit, preview_file: Op
                     watcher.check(step)
         code = proc.wait()
     except BaseException:
-        proc.kill()
+        procs.kill_tree(proc)
         proc.wait()
         raise
     finally:
         timer.cancel()
+        procs.untrack(proc)
         if proc.stdout is not None:
             proc.stdout.close()   # an open pipe keeps its handle (and, on Windows, the files it touched) locked
     if code != 0:
@@ -1002,7 +1015,11 @@ def _add_to_index(out_dir: Path, record: Dict[str, Any]) -> None:
 
 
 def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
-    """Pictures in folder (normally paths.images_folder()), newest first, with their prompts where known."""
+    """Pictures in folder (normally paths.images_folder()), newest first, with their settings where known.
+
+    A picture made since Axis 4.3.7 is a folder holding <name>.png and <name>.json. Single picture files
+    (older pictures) are listed too, with what the hidden index remembers about them.
+    """
     out_dir = folder
     if not out_dir.is_dir():
         return []
@@ -1010,15 +1027,23 @@ def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
     known = {i.get("file"): i for i in (items if isinstance(items, list) else []) if isinstance(i, dict)}
     result = []
     for f in out_dir.iterdir():
-        if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp") or not f.is_file():
-            continue
-        info = dict(known.get(f.name) or {})
         try:
-            mtime = f.stat().st_mtime
+            if f.is_dir() and not f.is_symlink():
+                png = f / f"{f.name}.png"
+                if not png.is_file():
+                    continue
+                meta = _read_json(f / f"{f.name}.json", {})
+                info = dict(meta) if isinstance(meta, dict) else {}
+                info.update({"file": png.name, "path": f"{f.name}/{png.name}", "folder": f.name,
+                             "mtime": png.stat().st_mtime})
+            elif f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and f.is_file():
+                info = dict(known.get(f.name) or {})
+                info.update({"file": f.name, "path": f.name, "mtime": f.stat().st_mtime})
+            else:
+                continue
         except OSError:
             continue
-        info.update({"file": f.name, "path": f.name, "mtime": mtime})
-        info.setdefault("created", datetime.fromtimestamp(mtime).isoformat(timespec="seconds"))
+        info.setdefault("created", datetime.fromtimestamp(info["mtime"]).isoformat(timespec="seconds"))
         result.append(info)
     result.sort(key=lambda i: i["mtime"], reverse=True)
     return result[:limit]

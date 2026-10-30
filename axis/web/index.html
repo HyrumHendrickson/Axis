@@ -937,7 +937,7 @@ function toolsItem(item) {
 async function quitAxis() {
   const busy = Object.keys(S.streams).length > 0 || !!S.imageJob;
   if (!confirm(busy ? "A reply or picture is still being made. Quit Axis anyway?"
-                    : "Quit Axis? Every running model will be stopped.")) return;
+                    : "Quit Axis? Every copy of Axis, every running model and everything Axis started (such as Ollama) will be stopped.")) return;
   try { await api("/api/quit", { method: "POST" }); } catch (e) { toast(e.message); return; }
   S.status = { ready: false, axisDown: true, message: "You quit Axis.", models: [] };
   // Axis's own window (browser app mode) can close itself; an ordinary tab cannot, so it shows the stopped page.
@@ -947,7 +947,7 @@ async function quitAxis() {
 
 // Settings and Quit sit at the right end of the top bar of every page, not in the sidebar.
 function quitButton() {
-  return h("button", { class: "btn small quit-btn", title: "Stop Axis and every running model", onclick: quitAxis }, "Quit Axis");
+  return h("button", { class: "btn small quit-btn", title: "Stop every copy of Axis and everything it started", onclick: quitAxis }, "Quit Axis");
 }
 
 /* -------------------------------------------------------------- settings */
@@ -1299,6 +1299,7 @@ function composerHint(target, agent, model) {
 }
 
 const STEP_TEXT = {
+  call_agent: ["Calling agent", "Called agent"],
   run_python: ["Running Python", "Ran Python"],
   run_python_file: ["Running", "Ran"],
   run_rust: ["Compiling and running Rust", "Compiled and ran Rust"],
@@ -1335,10 +1336,11 @@ function openInWorkspace(agent, path, isFile) {
 function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
 function stepLabel(p) {
   const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
-  const arg = p.args && ["path", "query", "title", "url", "prompt"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
+  const arg = p.args && ["path", "query", "title", "url", "prompt", "agent"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
   const target = arg ? " " + (arg.length > 80 ? arg.slice(0, 80) + "\u2026" : arg) : "";
   const state = stepState(p);
-  const at = state === "running" && p.progress ? ` (step ${p.progress.step} of ${p.progress.steps})` : "";
+  const at = state === "running" && p.progress ? ` (step ${p.progress.step} of ${p.progress.steps})`
+    : state === "running" && p.note ? ` (${p.note})` : "";
   return (state === "running" ? words[0] : words[1]) + target + (state === "failed" ? " (failed)" : state === "running" ? "\u2026" + at : "");
 }
 function stepView(p, agent, wasOpen) {
@@ -1347,6 +1349,7 @@ function stepView(p, agent, wasOpen) {
   if (p.args && typeof p.args.code === "string") body.append(h("div", { class: "step-label" }, "Code"), h("pre", {}, p.args.code));
   if (p.args && typeof p.args.content === "string")
     body.append(h("div", { class: "step-label" }, "Content"), h("pre", {}, p.args.content.length > 4000 ? p.args.content.slice(0, 4000) + "\n\u2026" : p.args.content));
+  if (p.args && typeof p.args.message === "string") body.append(h("div", { class: "step-label" }, "Task"), h("pre", {}, p.args.message));
   if (p.args && typeof p.args.raw === "string") body.append(h("div", { class: "step-label" }, "Arguments"), h("pre", {}, p.args.raw));
   if (p.output !== undefined) body.append(h("div", { class: "step-label" }, "Result"), h("pre", {}, p.output));
   if (agent && p.ok) {
@@ -1682,6 +1685,7 @@ async function send(target, { resend = false, terminal, workspace } = {}) {
       if (step) {
         if (ev.tool_progress.progress) step.progress = ev.tool_progress.progress;
         if (ev.tool_progress.preview) step.preview = ev.tool_progress.preview;
+        if (ev.tool_progress.phase && step.name === "call_agent") step.note = ev.tool_progress.phase;
       }
     }
     if (ev.tool_result) {
@@ -3458,6 +3462,9 @@ function chatCards(d, m) {
 }
 function engineLines(m) {
   const o = m.ollama, l = m.llamacpp;
+  const oe = (m.engines || {}).ollama;
+  const oJob = busyJob("engine", "ollama");
+  const removable = oe && oe.axis && !(o.running && o.managed);
   const ollama = h("div", { class: "engine-line" }, h("span", { class: "dot " + (o.running ? "ok" : o.binary ? "warn" : "") }),
     o.running ? [h("span", {}, `Ollama ${o.version || ""} is running at ${o.url}.`),
         o.managed ? h("button", { class: "btn small", onclick: async () => {
@@ -3465,9 +3472,21 @@ function engineLines(m) {
           await loadManage(); loadModels(); refreshStatus(); renderModels(); } }, "Stop Ollama") : null]
       : o.binary ? [h("span", {}, "Ollama is installed but not running."),
         o.local ? h("button", { class: "btn small primary", onclick: () => manageAction("ollama/start", {}) }, "Start Ollama") : null]
-      : h("span", {}, "Ollama is not installed. ", extLink("https://ollama.com/download", "Download Ollama"), " to install models with it."));
+      : h("span", {}, oe && oe.builds && oe.builds.length ? "Ollama is not installed. Axis can install it for you (no administrator rights are needed)."
+          : "Ollama is not installed. ", oe && oe.builds && oe.builds.length ? null : extLink("https://ollama.com/download", "Download Ollama"),
+          oe && oe.builds && oe.builds.length ? null : " to install models with it."),
+    oJob ? null : [
+      !o.binary && oe && oe.builds && oe.builds.length ? h("button", { class: "btn small primary", onclick: () => manageAction("engines/install", { engine: "ollama", build: oe.default_build }) }, "Install Ollama")
+        : o.binary && oe && oe.axis ? h("button", { class: "btn small", onclick: () => manageAction("engines/install", { engine: "ollama", build: oe.default_build }) }, "Update") : null,
+      removable ? removeButton("Remove", "Remove the Ollama that Axis installed? Models you downloaded with Ollama stay on disk (in the .ollama folder) and can be deleted from the list below. You can install Ollama again later.",
+        () => manageAction("engines/remove", { engine: "ollama" })) : null]);
   const job = busyJob("ollama", "");
-  return [ollama, job ? busyView(job) : null, engineLine(m, "llama")];
+  return [ollama, oJob ? busyView(oJob) : null, job ? busyView(job) : null, engineLine(m, "llama")];
+}
+/* A Remove button that asks for confirmation in place of the row it sits in. */
+function removeButton(label, text, yes) {
+  const b = h("button", { class: "btn small danger", type: "button", onclick: () => confirmRow(b.closest(".engine-line") || b.parentElement, text, yes) }, label);
+  return b;
 }
 /* llama.cpp and stable-diffusion.cpp: Axis installs and updates them itself. */
 /* Default to CPU only; "auto" only where the platform has no CPU build (Apple Silicon). */
@@ -3488,7 +3507,8 @@ function engineLine(m, key) {
   if (e.binary && e.axis) {
     text = h("span", {}, `${e.label} ${e.installed && e.installed.tag ? e.installed.tag : ""}`,
       e.installed && e.installed.build ? h("small", { class: "hint" }, ` (${e.build_labels[e.installed.build] || e.installed.build}), installed by Axis`) : null);
-    if (!job) actions = [pick, install("Update")];
+    if (!job) actions = [pick, install("Update"), removeButton("Remove", `Remove ${e.label}? Models stay on disk. Axis installs it again when you start a model that needs it.`,
+      () => manageAction("engines/remove", { engine: key }))];
   } else if (e.binary) {
     text = h("span", {}, `${e.label}: `, h("code", {}, e.binary));
   } else if (!builds.length) {
@@ -3765,7 +3785,9 @@ function ocrEngineLines(m) {
       : h("span", {}, "Tesseract is not installed. ", t.plan.note),
     tJob || (t.binary && t.plan.how !== "installer") || !t.plan.how ? null
       : h("button", { class: "btn small" + (t.binary ? "" : " primary"), onclick: () => manageAction("engines/install", { engine: "tesseract" }) },
-          t.binary ? "Update Tesseract" : "Install Tesseract"));
+          t.binary ? "Update Tesseract" : "Install Tesseract"),
+    tJob || !t.axis ? null : removeButton("Remove", "Remove the Tesseract that Axis installed? Language files Axis downloaded stay. You can install Tesseract again later.",
+      () => manageAction("engines/remove", { engine: "tesseract" })));
   const builds = p.builds || [];
   if (!ocrBuild.pytorch) ocrBuild.pytorch = p.installed ? p.installed.build : p.default_build;
   const pick = builds.length > 1 ? h("select", { "aria-label": "PyTorch build", "data-free": "1", onchange: (e) => { ocrBuild.pytorch = e.target.value; } },
@@ -4138,6 +4160,7 @@ function drawStage() {
         if (r.place === IMAGES) { S.imageSelected = (S.gallery || []).find((g) => g.path === r.path) || S.imageSelected; renderImages(); }
         else openInWorkspace(r.place, r.path, true); } },
         sel.edited_from.replace(/^_shared:/, "workspace/").replace(/^_images:/, "images/").replace(":", "/"))) : null,
+    sel.seed !== undefined || sel.prompt ? imageDetails(sel) : null,
     h("div", { class: "fb-actions", style: "margin:10px 0 0" },
       h("button", { class: "btn small", title: "Use this picture as the start of a new one", onclick: () => setSource({ place: sel.place, path: sel.path }) }, "Edit this picture"),
       sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
@@ -4145,6 +4168,17 @@ function drawStage() {
       h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
       h("button", { class: "btn small", title: "Select the picture in Explorer or Finder", onclick: () => revealFile(sel.place, sel.path) }, "Show in folder"),
       h("button", { class: "btn small danger", onclick: () => deleteImage(sel) }, "Delete"))));
+}
+
+/* Everything the picture's settings file (folder/name.json) holds, so a picture can be made again. */
+const DETAIL_LABELS = [["prompt", "Prompt"], ["negative_prompt", "Negative prompt"], ["seed", "Seed"], ["model", "Model"],
+  ["width", "Width"], ["height", "Height"], ["steps", "Steps"], ["cfg_scale", "CFG scale"], ["sampler", "Sampler"],
+  ["strength", "Strength"], ["edited_from", "Edited from"], ["seconds", "Seconds"], ["source", "Made by"], ["created", "Created"],
+  ["axis_version", "Axis version"], ["folder", "Folder"]];
+function imageDetails(sel) {
+  const rows = DETAIL_LABELS.filter(([k]) => sel[k] !== undefined && sel[k] !== "")
+    .map(([k, label]) => h("div", { class: "kv" }, h("dt", {}, label), h("dd", { style: "white-space:pre-wrap;word-break:break-word" }, String(sel[k]))));
+  return h("details", { class: "ig-meta" }, h("summary", {}, "All settings"), h("dl", {}, rows));
 }
 
 async function loadGallery() {
@@ -4167,8 +4201,8 @@ async function loadGallery() {
 }
 
 async function deleteImage(img) {
-  if (!confirm(`Delete ${img.file}? This cannot be undone.`)) return;
-  try { await api(filesUrl(img.place, "", img.path), { method: "DELETE" }); }
+  if (!confirm(`Delete ${img.folder || img.file}${img.folder ? " and its settings file" : ""}? This cannot be undone.`)) return;
+  try { await api(filesUrl(img.place, "", img.folder || img.path), { method: "DELETE" }); }
   catch (e) { return toast(e.message); }
   toast("Deleted");
   S.imageSelected = null; drawStage(); loadGallery();
@@ -4648,7 +4682,8 @@ function renderCas() {
     if (x.installed) {
       actions.push(h("span", { class: "hint", style: "margin:0" }, [x.version ? `${x.name} ${x.version}` : x.name, x.path ? " \u00b7 " + x.path : ""].join("")));
       if (x.removable) actions.push(h("button", { class: "btn", onclick: () => {
-        if (confirm(`Delete SymPy? Its Python environment is removed from disk. You can install it again later.`)) casAction("remove", { system: x.id }, () => toast("Deleted SymPy"));
+        const what = x.id === "sympy" ? "Its Python environment is removed from disk." : "Axis uninstalls it the way it installed it; your system may ask for permission.";
+        if (confirm(`Delete ${x.name}? ${what} You can install it again later.`)) casAction("remove", { system: x.id }, () => toast(`Deleted ${x.name}`));
       } }, "Delete"));
     } else if (x.plan && x.plan.how) {
       actions.push(h("button", { class: "btn primary", onclick: () => casAction("install", { system: x.id }) }, `Install ${x.name}`));

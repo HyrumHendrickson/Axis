@@ -5,7 +5,8 @@ Systems
     the PATH, or the usual install folders) and can install it: on Windows with winget
     (package MaximaTeam.Maxima; winget checks the installer against the SHA-256 in its
     manifest), on macOS with Homebrew, and on Linux with the system's package manager
-    (pkexec asks for the password). Axis never removes a system-wide Maxima.
+    (pkexec asks for the password). Axis removes a Maxima only when Axis installed it, with the
+    same package manager; a Maxima that was already on the computer is never removed.
   * SymPy is a Python library. Axis installs it with pip into a Python environment of its
     own, ~/Axis/engines/cas-python, made with venv. Axis itself stays standard-library only.
 
@@ -209,6 +210,16 @@ def _linux_install_command() -> Optional[List[str]]:
     return None
 
 
+def _linux_remove_command() -> Optional[List[str]]:
+    for prog, cmd in (("apt-get", ["apt-get", "remove", "-y", "maxima"]),
+                      ("dnf", ["dnf", "remove", "-y", "maxima"]),
+                      ("pacman", ["pacman", "-R", "--noconfirm", "maxima"]),
+                      ("zypper", ["zypper", "--non-interactive", "remove", "maxima"])):
+        if shutil.which(prog):
+            return cmd
+    return None
+
+
 def _brew() -> Optional[str]:
     found = shutil.which("brew")
     if found:
@@ -297,6 +308,39 @@ def install_maxima(job: jobs.Job) -> Dict[str, Any]:
     return {"system": "maxima", "model": "Maxima " + (info.get("version") or "")}
 
 
+def maxima_record() -> Optional[Dict[str, Any]]:
+    """What Axis recorded when it installed Maxima, or None when Axis did not install it."""
+    record = _read_json(_record_path(), {}).get("maxima")
+    return record if isinstance(record, dict) and record.get("method") else None
+
+
+def remove_maxima(job: jobs.Job) -> Dict[str, Any]:
+    """Uninstall the Maxima that Axis installed, with the package manager that installed it."""
+    record = maxima_record()
+    if record is None:
+        raise CasError("Axis did not install this Maxima, so it does not remove it. Remove it the way you remove "
+                       "other programs.")
+    method = record["method"]
+    if method == "winget":
+        job.cancellable = False
+        cmd = [shutil.which("winget") or "winget", "uninstall", "--id", WINGET_ID, "--exact", "--silent",
+               "--accept-source-agreements"]
+        env: Dict[str, str] = {}
+    elif method == "brew":
+        cmd, env = [_brew() or "brew", "uninstall", "maxima"], {"HOMEBREW_NO_ENV_HINTS": "1"}
+    else:
+        cmd = _linux_remove_command() or []
+        if not cmd:
+            raise CasError("Axis cannot tell which package manager installed Maxima. Remove it yourself.")
+        if not (hasattr(os, "geteuid") and os.geteuid() == 0):
+            cmd = ["pkexec"] + cmd
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+    _run_install(cmd, job, env, "the removal of Maxima")
+    _PROBE.clear()
+    _remember("maxima", None)
+    return {"system": "maxima", "model": "Maxima"}
+
+
 # ------------------------------------------------------------------ SymPy
 
 
@@ -374,13 +418,15 @@ def install(body: Any) -> Dict[str, Any]:
 
 
 def remove(body: Any) -> Dict[str, Any]:
-    """Delete the SymPy environment. A Maxima installed on the system is the user's to remove."""
+    """Uninstall SymPy (delete its environment) or the Maxima that Axis installed."""
     system = _system(body)
-    if system == "maxima":
-        raise CasError("Maxima is installed on your computer, not inside Axis. Remove it the way you remove other "
-                       "programs.")
     if jobs.busy("cas", system):
-        raise CasError("SymPy is being installed. Wait for it to finish, or cancel it.")
+        raise CasError(f"{LABELS[system]} is being installed or removed. Wait for it to finish, or cancel it.")
+    if system == "maxima":
+        if maxima_record() is None:
+            raise CasError("Axis did not install this Maxima, so it does not remove it. Remove it the way you "
+                           "remove other programs.")
+        return {"job": jobs.submit("delete", "cas", system, "Removing Maxima", remove_maxima).public()}
     remove_tree(env_dir())
     if env_dir().exists():
         raise CasError("Some files of the SymPy environment are in use. Try again in a moment.")
@@ -405,7 +451,8 @@ def status() -> Dict[str, Any]:
         "systems": [
             {"id": "maxima", "name": "Maxima", "installed": bool(info and info.get("works")),
              "version": (info or {}).get("version") or None, "path": str(binary) if binary else None,
-             "by_axis": isinstance(record.get("maxima"), dict), "plan": maxima_install_plan(), "removable": False},
+             "by_axis": isinstance(record.get("maxima"), dict), "plan": maxima_install_plan(),
+             "removable": bool(info and info.get("works") and maxima_record() is not None)},
             {"id": "sympy", "name": "SymPy", "installed": sym is not None, "version": (sym or {}).get("version"),
              "path": str(env_dir()) if sym else None, "by_axis": True,
              "plan": {"how": "pip", "note": "Axis makes a Python environment of its own and installs SymPy into "

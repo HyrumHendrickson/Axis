@@ -241,7 +241,7 @@ class TestRunning(CasBase):
 
 class TestInstalling(CasBase):
     def test_refusals(self):
-        with self.assertRaisesRegex(cas.CasError, "not inside Axis"):
+        with self.assertRaisesRegex(cas.CasError, "did not install this Maxima"):
             cas.remove({"system": "maxima"})
         with self.assertRaisesRegex(cas.CasError, "Maxima or SymPy"):
             cas.install({"system": "mathematica"})
@@ -336,7 +336,7 @@ class TestRoutes(CasBase):
         self.assertEqual(status, 400)
         status, r = request(srv.url + "/api/cas/remove", "POST", {"system": "maxima"})
         self.assertEqual(status, 400)
-        self.assertIn("not inside Axis", r["error"])
+        self.assertIn("did not install this Maxima", r["error"])
 
 
 if __name__ == "__main__":

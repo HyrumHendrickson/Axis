@@ -207,7 +207,7 @@ class TestBuilds(unittest.TestCase):
         self.assertEqual(engines.preferred_builds("sd", ("linux", "arm64"), has_vulkan=False), [])
 
     def test_choose_pairs_cuda_runtime_and_skips_empty_releases(self):
-        a = lambda n: {"name": n, "url": "u/" + n, "size": 1, "sha256": None}  # noqa: E731
+        a = lambda n: {"name": n, "url": "u/" + n, "size": 1, "sha256": "0" * 64}  # noqa: E731
         rels = [{"tag": "v0.8.0", "assets": [a("nightly-tag.txt")]},
                 {"tag": "b2", "assets": [a("llama-b2-bin-win-cuda-12.4-x64.zip"), a("llama-b2-bin-win-cuda-13.4-x64.zip"),
                                          a("cudart-llama-bin-win-cuda-12.4-x64.zip"), a("cudart-llama-bin-win-cuda-13.4-x64.zip"),

@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import procs
+
 MAX_BUFFER = 400_000        # characters kept per session
 MAX_INPUT = 64 * 1024
 MAX_SESSIONS = 12
@@ -137,6 +139,7 @@ class Session:
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, **kwargs)
         except OSError as exc:
             raise TerminalError(f"The shell could not be started: {exc.strerror or exc}") from exc
+        procs.track(self.proc)   # a shell left open when Axis is killed must not outlive it (Windows job object)
         threading.Thread(target=self._pump, name=f"terminal-{sid}", daemon=True).start()
 
     def _append(self, text: str) -> None:
@@ -238,6 +241,7 @@ class Session:
         self._append("^C\n")
 
     def close(self) -> None:
+        procs.untrack(self.proc)
         if self.alive:
             try:
                 if os.name == "nt":

@@ -50,6 +50,7 @@ SHARED_PYTHON_NOTE = (
     "and the shared folder's full path is os.environ['AXIS_SHARED_DIR']."
 )
 SHARED_SKILL = "shared-folder"
+CALL_AGENT_SKILL = "call-agent"
 
 BUILTIN: List[Dict[str, Any]] = [
     {
@@ -101,6 +102,16 @@ BUILTIN: List[Dict[str, Any]] = [
         "tools": ["wikipedia_search", "wikipedia_article"],
     },
 ]
+BUILTIN.append({
+    "id": CALL_AGENT_SKILL,
+    "name": "Call agents",
+    "description": "Hand a task to another agent and get its answer back. An agent that is called this way cannot call agents itself.",
+    "instructions": "Use call_agent when another agent is better suited to part of a task, or to get a second opinion. The "
+    "other agent cannot see this conversation, so write the whole task in message, including any file names. It works in "
+    "the same folder. Read what comes back, check it, and tell the user which agent did what. Do not call an agent for "
+    "something you can do yourself, and do not call yourself.",
+    "tools": ["call_agent"],
+})
 BUILTIN += tool_skills.build()    # CAS, Images and OCR, the pages under Tools
 BUILTIN += craft_skills.build()   # one skill for each Art Craft app
 BUILTIN_IDS = {s["id"] for s in BUILTIN}
@@ -173,6 +184,18 @@ def _adapt_terminal(text: str) -> str:
     return f"{text.rstrip()} {note}"
 
 
+def _adapt_agents(text: str) -> str:
+    from . import agents
+    try:
+        found = agents.list_all()
+    except Exception:
+        return text
+    if not found:
+        return f"{text.rstrip()} There are no other agents yet."
+    return f"{text.rstrip()} Agents you can call: " + "; ".join(
+        f"{a.name} ({' '.join(a.system_prompt.split())[:80]})" for a in found[:30]) + "."
+
+
 def adapt(skill_id: str, instructions: str) -> str:
     """A built-in skill's instructions as an agent reads them now: the text plus what is set up on this computer
     (the CAS in use, installed image and OCR models, the shell, whether a Craft app is installed)."""
@@ -180,6 +203,8 @@ def adapt(skill_id: str, instructions: str) -> str:
         return _adapt_rust(instructions)
     if skill_id == "run-terminal":
         return _adapt_terminal(instructions)
+    if skill_id == CALL_AGENT_SKILL:
+        return _adapt_agents(instructions)
     if skill_id in craft_skills.IDS:
         return craft_skills.adapt(skill_id, instructions)
     return tool_skills.adapt(skill_id, instructions)

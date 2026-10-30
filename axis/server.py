@@ -3,7 +3,8 @@
 Routes:
   GET    /                                  the app
   GET    /api/ping                          identifies a running Axis
-  POST   /api/quit                          stops Axis (and the models it started)
+  POST   /api/quit                          stops every running Axis and everything they started (models, Ollama
+                                            when Axis started it, programs); {"others": false} stops only this copy
   POST   /api/page?id=x[&closing=1]         an open page says it is still there (or is closing)
   GET    /api/status                        model server and loaded models
   GET    /api/update                        installed and newest version (the first call starts the check)
@@ -125,7 +126,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, jobs, latex, manager, ocr, procs, runner, skills, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, instances, jobs, latex, manager, ocr, procs, runner, skills, subagents, terminal, tools, updates
 from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -335,6 +336,19 @@ class AxisServer(ThreadingHTTPServer):
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
+
+    def quit(self, everyone: bool = True) -> None:
+        """Stop this Axis. With `everyone`, every other running copy is asked to stop first.
+
+        Each copy, this one included, then stops what it started (models, Ollama when Axis started it,
+        programs) in cli.cmd_serve once serve_forever returns.
+        """
+        if everyone:
+            try:
+                instances.quit_all(instances.usual_ports(), say=lambda _msg: None, skip_port=self.server_address[1])
+            except Exception:
+                pass   # a copy that cannot be reached must not stop this one from quitting
+        self.shutdown()
 
     def handle_error(self, request, client_address) -> None:
         """A browser that closes a connection is routine, not an error worth a traceback."""
@@ -890,9 +904,12 @@ class Handler(BaseHTTPRequestHandler):
         elif parts[1:] == ["ping"] and method == "GET":
             return self._json(200, {"app": "axis", "version": __version__, "pid": os.getpid()})
         elif parts[1:] == ["quit"] and method == "POST":
-            # Stop serve_forever from another thread; cli.cmd_serve then stops the models Axis started.
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return self._json(200, {"stopping": True})
+            # Stop serve_forever from another thread; cli.cmd_serve then stops everything Axis started.
+            # Like `axis quit`, this stops every copy of Axis unless the caller says "others": false.
+            body = self._body()
+            everyone = not (isinstance(body, dict) and body.get("others") is False)
+            threading.Thread(target=self.server.quit, args=(everyone,), daemon=True).start()
+            return self._json(200, {"stopping": True, "everyone": everyone})
         elif parts[1:] == ["page"] and method == "POST":
             page_id = param("id")[:64]
             if not page_id:
@@ -1335,7 +1352,7 @@ class Handler(BaseHTTPRequestHandler):
         agent = agents.load(body["agent"]) if body.get("agent") else None
         folder = chat_folder(body.get("folder")) if agent else None
         commands = terminal_commands(body.get("terminal_commands"))
-        messages = agents.build_messages(agent, body.get("messages"))
+        messages = agents.build_messages(agent, body.get("messages"))   # a chat's own agent is never "called by" another
         if body.get("terminal_tool") and agent:
             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
                             "\n\nThe user temporarily granted you the run_terminal tool for this conversation. "
@@ -1373,9 +1390,14 @@ class Handler(BaseHTTPRequestHandler):
             if folder is not None:   # the chat's own folder: the agent is kept inside it alone
                 execution_workspace = folder
                 execution_shared = None
+            caller = None
+            if agent and tools.CALL_AGENT in allowed and execution_workspace is not None:
+                caller = subagents.make_caller(self.server.model_url, conn, model, agent.name,
+                                               execution_workspace, execution_shared)
+            extra = {"agent_caller": caller} if caller is not None else {}
             runner.reply(conn, model, messages, emit,
                          tool_names=allowed, workspace=execution_workspace,
-                         shared=execution_shared, image_preview=body.get("image_preview") is True)
+                         shared=execution_shared, image_preview=body.get("image_preview") is True, **extra)
             emit({"done": True})
         except ClientGone:
             return

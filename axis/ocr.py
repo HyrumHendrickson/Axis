@@ -283,8 +283,8 @@ def _popen(cmd: List[str], env: Optional[Dict[str, str]] = None, cwd: Optional[P
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(cmd, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            env={**os.environ, **(env or {})}, cwd=str(cwd) if cwd else None, **kwargs)
+    return procs.track(subprocess.Popen(cmd, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        env={**os.environ, **(env or {})}, cwd=str(cwd) if cwd else None, **kwargs))
 
 
 def _kill(proc: subprocess.Popen) -> None:
@@ -393,6 +393,7 @@ def _run(cmd: List[str], job: Optional[jobs.Job], on_line: Optional[Callable[[st
 
 
 def _close(proc: subprocess.Popen) -> None:
+    procs.untrack(proc)
     try:
         if proc.stdout is not None:
             proc.stdout.close()
@@ -681,6 +682,17 @@ def _linux_install_command() -> Optional[List[str]]:
     return None
 
 
+def _linux_remove_command() -> Optional[List[str]]:
+    for prog, cmd in (("apt-get", ["apt-get", "remove", "-y", "tesseract-ocr"]),
+                      ("dnf", ["dnf", "remove", "-y", "tesseract"]),
+                      ("pacman", ["pacman", "-R", "--noconfirm", "tesseract", "tesseract-data-eng"]),
+                      ("zypper", ["zypper", "--non-interactive", "remove", "tesseract-ocr"]),
+                      ("apk", ["apk", "del", "tesseract-ocr"])):
+        if shutil.which(prog):
+            return cmd
+    return None
+
+
 def _brew() -> Optional[str]:
     found = shutil.which("brew")
     if found:
@@ -787,6 +799,76 @@ def install_tesseract(job: jobs.Job) -> Dict[str, Any]:
                              "installed": time.strftime("%Y-%m-%dT%H:%M:%S")}
         _write_json(_engines_record(), data)
     return {"engine": "tesseract", "model": "Tesseract " + (probe.get("version") or "")}
+
+
+def tesseract_axis_record() -> Optional[Dict[str, Any]]:
+    """What Axis recorded when it installed Tesseract, or None when Axis did not install it."""
+    record = _read_json(_engines_record(), {}).get("tesseract")
+    return record if isinstance(record, dict) and record.get("method") else None
+
+
+_WIN_UNINSTALL = (r"$k = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Tesseract-OCR' "
+                  "-ErrorAction SilentlyContinue; if ($k) { $k.UninstallString }")
+
+
+def remove_tesseract(job: jobs.Job) -> Dict[str, Any]:
+    """Uninstall the Tesseract that Axis installed, the way it was installed. A Tesseract Axis did not
+    install is the user's own and is never removed."""
+    record = tesseract_axis_record()
+    if record is None:
+        raise OcrError("Axis did not install this Tesseract, so it does not remove it. Uninstall it the way you "
+                       "installed it (Windows: Settings, Apps; macOS: brew uninstall tesseract; Linux: your "
+                       "package manager).")
+    method = record["method"]
+    env: Dict[str, str] = {}
+    if method == "installer":
+        job.cancellable = False
+        code, out = engines._quiet_run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _WIN_UNINSTALL], 60)
+        command = out.strip().strip('"')
+        if code != 0 or not command.lower().endswith(".exe"):
+            raise OcrError("Windows does not list Tesseract as installed. Remove it in Settings, Apps.")
+        folder = str(Path(command).parent).replace("'", "''")
+        quoted = command.replace("'", "''")
+        job.progress(phase="Running the Tesseract uninstaller (Windows may ask for permission)")
+        code, out = engines._quiet_run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                        f"$p = Start-Process -FilePath '{quoted}' -ArgumentList '/S','_?={folder}' "
+                                        "-Wait -PassThru; exit $p.ExitCode"], timeout=900)
+        if code != 0:
+            raise OcrError(f"The Tesseract uninstaller did not finish (code {code}). Remove it in Settings, Apps.")
+        try:
+            Path(command).unlink(missing_ok=True)   # the uninstaller cannot delete itself while it runs
+        except OSError:
+            pass
+    else:
+        if method == "brew":
+            cmd = [_brew() or "brew", "uninstall", "tesseract"]
+            env = {"HOMEBREW_NO_ENV_HINTS": "1"}
+        else:
+            cmd = _linux_remove_command() or []
+            if not cmd:
+                raise OcrError("Axis cannot tell which package manager installed Tesseract. Remove it yourself.")
+            if not (hasattr(os, "geteuid") and os.geteuid() == 0):
+                cmd = ["pkexec"] + cmd
+            env = {"DEBIAN_FRONTEND": "noninteractive"}
+        job.progress(phase="Running " + " ".join(cmd))
+        code, lines = _run(cmd, job, on_line=lambda line: job.progress(phase=line[:160]), env=env, timeout=1800)
+        if code != 0:
+            hint = "The password was not given. " if code in (126, 127) and cmd[0] == "pkexec" else ""
+            raise OcrError(f"{hint}Removing Tesseract failed (code {code}).\n{lines.tail()}")
+    _PROBE.clear()
+    with _RECORD_LOCK:
+        data = _read_json(_engines_record(), {})
+        data.pop("tesseract", None)
+        _write_json(_engines_record(), data)
+    return {"engine": "tesseract", "model": "Tesseract"}
+
+
+def submit_remove_tesseract() -> jobs.Job:
+    if tesseract_axis_record() is None:
+        raise OcrError("Axis did not install this Tesseract, so it does not remove it.")
+    if procs.running("ocr"):
+        raise OcrError("Stop every OCR model that is on first.")
+    return jobs.submit("delete", "engine", "tesseract", "Removing Tesseract", remove_tesseract)
 
 
 # ------------------------------------------------------------------ the PyTorch environment

@@ -18,6 +18,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     |                   |                                                            |
   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
+  |     +-- subagents.py                             (one agent calling another)
   |     +-- craft_skills.py                          (one skill for each Craft app)      |
   |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
@@ -43,7 +44,7 @@ This page explains how Axis is put together, so you can find the right file befo
 4. `engines.py` installs llama.cpp and stable-diffusion.cpp in the background on the first start, unless turned off.
 5. `appwindow.py` opens the page in a Chromium "app mode" window, or a normal tab as a fallback.
 6. The page reports itself every few seconds (`POST /api/page`). When the last window closes, `server.Pages` notices and Axis stops.
-7. On exit, `procs.py` stops every program Axis started. On Windows a job object guarantees this even if Axis is killed; on macOS and Linux the next Axis adopts any leftovers.
+7. On exit (**Quit Axis**, `axis quit`, a closed window, Ctrl+C), `manager.shutdown` cancels jobs, closes terminals, unloads Ollama's models and `procs.py` stops every program Axis started, including the short-lived ones it tracks (`procs.track`). **Quit Axis** and `axis quit` first ask every other copy to stop. On Windows a job object guarantees this even if Axis is killed; on macOS and Linux the next Axis adopts any leftovers.
 
 ## A chat message, end to end
 

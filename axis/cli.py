@@ -5,7 +5,7 @@
     axis update       download the latest Axis from GitHub and install it
     axis uninstall    remove the Axis program (optionally your data too)
     axis shortcut     add Axis to the Start menu / Applications / app menu (or --remove it)
-    axis quit         stop every running Axis and unload every model (Ollama itself keeps running)
+    axis quit         stop every running Axis, unload every model and stop what Axis started (including Ollama)
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import List, Optional
 from . import __version__, appwindow, engines, instances, jobs, manager, server, shortcut, tools, updates
 from .paths import axis_home
 
-DEFAULT_PORT = 8765
+DEFAULT_PORT = instances.FIRST_PORT
 PACKAGE = "axis-agent-manager"
 REPO_ZIP = updates.REPO_ZIP
 
@@ -95,10 +95,13 @@ def cmd_serve(args) -> int:
         print("\nStopping the models...")
         print("Axis stopped.")
     finally:
-        # Unload every Ollama model; stop llama-server, sd-server and ollama serve when Axis started them.
-        manager.shutdown(httpd.model_url)
-        httpd.server_close()
-        instances.unregister(record)
+        # Unload every Ollama model; stop llama-server, sd-server and ollama serve when Axis started them,
+        # and every program still running for a picture, a reading or an agent's code.
+        try:
+            manager.shutdown(httpd.model_url)
+        finally:
+            httpd.server_close()
+            instances.unregister(record)
     return 0
 
 
@@ -155,7 +158,7 @@ def _stop_on_terminate() -> None:
 
 def cmd_setup(args) -> int:
     """Install the engines from the terminal, for example right after `pipx install`."""
-    wanted = [args.only] if args.only else list(engines.ENGINES)
+    wanted = [args.only] if args.only else list(manager.ENGINE_FINDERS)   # Ollama is installed only on request
     failed = False
     for engine in wanted:
         label = engines.ENGINES[engine]["label"]
@@ -214,22 +217,30 @@ def cmd_shortcut(args) -> int:
 
 
 def cmd_quit(args) -> int:
-    """Stop every running Axis, then make sure no model is left running or loaded."""
-    ports = list(range(DEFAULT_PORT, DEFAULT_PORT + 20))  # where make_server looks for a free port
+    """Stop every running Axis, then make sure nothing Axis turned on is left running or loaded.
+
+    That is every llama-server, sd-server and `ollama serve` that an Axis started (Ollama too, when Axis
+    started it; an Ollama you started yourself keeps running, with no model loaded) and every model in
+    memory in Ollama.
+    """
+    ports = instances.usual_ports()  # where make_server looks for a free port
     if args.port and args.port not in ports:
         ports.append(args.port)
     stopped = instances.quit_all(ports, timeout=args.timeout)
-    # Anything an Axis left behind (one that crashed, or did not finish stopping): llama-server and
-    # sd-server it started, and every model loaded in Ollama. Ollama itself is left running.
+    # Anything an Axis left behind (one that crashed, or did not finish stopping).
     from . import procs
     leftovers = [m.key for m in procs.running()]
     unloaded = manager.shutdown(args.url)
     print(("Stopped " + (f"{stopped} copies of Axis" if stopped != 1 else "1 copy of Axis"))
           if stopped else "No Axis was running.")
     if leftovers:
-        print(f"Stopped {len(leftovers)} model server(s) left running: " + ", ".join(leftovers))
+        print(f"Stopped {len(leftovers)} program(s) an Axis left running: " + ", ".join(leftovers))
     if unloaded:
         print("Unloaded from Ollama: " + ", ".join(unloaded))
+    still = [m.key for m in procs.running()]
+    if still:
+        print("Could not stop: " + ", ".join(still) + ". Close them yourself.", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -411,7 +422,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("setup", help="install llama.cpp and stable-diffusion.cpp for Axis")
     s.add_argument("--build", choices=engines.BUILDS, default=None,
                    help="which build to install (default: cpu; auto picks the best one for this computer)")
-    s.add_argument("--only", choices=list(engines.ENGINES), help="install only llama.cpp (llama) or stable-diffusion.cpp (sd)")
+    s.add_argument("--only", choices=list(manager.ENGINE_FINDERS), help="install only llama.cpp (llama) or stable-diffusion.cpp (sd)")
     s.add_argument("--force", action="store_true", help="install even when a copy is already found")
     s.set_defaults(func=cmd_setup)
 
@@ -425,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--no-desktop", action="store_true", help="Windows: do not also put a shortcut on the desktop")
     sc.set_defaults(func=cmd_shortcut)
 
-    q = sub.add_parser("quit", help="stop every running Axis and unload every model")
+    q = sub.add_parser("quit", help="stop every running Axis, unload every model and stop what Axis started")
     q.add_argument("--timeout", type=float, default=45.0,
                    help="seconds to wait for each Axis to stop before ending it (default 45)")
     q.set_defaults(func=cmd_quit)

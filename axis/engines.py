@@ -1,4 +1,4 @@
-"""Installs the programs Axis runs models with: llama.cpp and stable-diffusion.cpp.
+"""Installs the programs Axis runs models with: llama.cpp, stable-diffusion.cpp and Ollama.
 
 Both projects publish ready-built programs on GitHub for Windows, macOS and
 Linux. Axis picks the build for this computer (CUDA for NVIDIA on Windows,
@@ -10,6 +10,11 @@ needed.
     ~/Axis/engines/engines.json          what is installed (version, build, program paths)
     ~/Axis/engines/llama/<release>-<build>/   llama-server and its libraries
     ~/Axis/engines/sd/<release>-<build>/      sd-cli, sd-server and their libraries
+    ~/Axis/engines/ollama/<release>-<build>/  ollama and its libraries (installed only when you ask)
+
+Every download is checked against the SHA-256 that GitHub publishes for it. A download with no
+published checksum is refused (set AXIS_ALLOW_UNVERIFIED=1 to accept one), and the next older release
+that has checksums is tried first. Ollama is never installed by itself on the first start.
 
 pip and pipx cannot run code while a package is installed, so Axis installs the
 engines itself: on its first start (in the background), from the Models page,
@@ -47,10 +52,12 @@ DISK_MARGIN = 512 * 1024 * 1024
 ENGINES = {
     "llama": {"label": "llama.cpp", "repo": "ggml-org/llama.cpp", "programs": ["llama-server"]},
     "sd": {"label": "stable-diffusion.cpp", "repo": "leejet/stable-diffusion.cpp", "programs": ["sd-cli", "sd-server"]},
+    "ollama": {"label": "Ollama", "repo": "ollama/ollama", "programs": ["ollama"]},
 }
-BUILDS = ("auto", "cpu", "vulkan", "cuda", "rocm", "metal")
+BUILDS = ("auto", "cpu", "vulkan", "cuda", "rocm", "metal", "standard")
 BUILD_LABELS = {"auto": "Automatic", "cpu": "CPU only", "vulkan": "Vulkan (any modern GPU)", "cuda": "CUDA (NVIDIA)",
-                "rocm": "ROCm (AMD)", "metal": "Metal (Apple Silicon)"}
+                "rocm": "ROCm (AMD)", "metal": "Metal (Apple Silicon)",
+                "standard": "Standard (uses the graphics card when it can)"}
 
 _ARCHIVE = r"\.(?:zip|tar\.gz|tgz)$"
 
@@ -79,6 +86,12 @@ PATTERNS: Dict[Tuple[str, str, str], Dict[str, Tuple[str, Optional[Callable[[str
         "vulkan": (r"^llama-[^-]+-bin-ubuntu-vulkan-arm64" + _ARCHIVE, None),
         "cpu": (r"^llama-[^-]+-bin-ubuntu-arm64" + _ARCHIVE, None),
     },
+    ("ollama", "windows", "x64"): {"standard": (r"^ollama-windows-amd64\.zip$", None)},
+    ("ollama", "windows", "arm64"): {"standard": (r"^ollama-windows-arm64\.zip$", None)},
+    ("ollama", "macos", "arm64"): {"standard": (r"^ollama-darwin\.tgz$", None)},
+    ("ollama", "macos", "x64"): {"standard": (r"^ollama-darwin\.tgz$", None)},
+    ("ollama", "linux", "x64"): {"standard": (r"^ollama-linux-amd64\.(?:tar\.zst|tgz)$", None)},
+    ("ollama", "linux", "arm64"): {"standard": (r"^ollama-linux-arm64\.(?:tar\.zst|tgz)$", None)},
     ("sd", "windows", "x64"): {
         "cuda": (r"^sd-.*-bin-win-cuda12-x64\.zip$", lambda name: [r"^cudart-sd-bin-win-cu12-x64\.zip$"]),
         "vulkan": (r"^sd-.*-bin-win-vulkan-x64\.zip$", None),
@@ -98,6 +111,10 @@ class EngineError(Exception):
     """A problem installing an engine that the user can act on."""
 
     user_facing = True
+
+
+def unverified_ok() -> bool:
+    return os.environ.get("AXIS_ALLOW_UNVERIFIED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _cuda_version(name: str) -> str:
@@ -209,7 +226,8 @@ def graphics() -> List[str]:
 def default_build(engine: str, plat: Optional[Tuple[str, str]] = None) -> str:
     """The build installed when none is chosen: CPU only, or "auto" where no CPU build exists
     (macOS on Apple Silicon ships Metal only)."""
-    return "cpu" if "cpu" in builds_for(engine, plat) else "auto"
+    have = builds_for(engine, plat)
+    return "cpu" if "cpu" in have else "standard" if "standard" in have else "auto"
 
 
 def preferred_builds(engine: str, plat: Optional[Tuple[str, str]] = None,
@@ -218,7 +236,9 @@ def preferred_builds(engine: str, plat: Optional[Tuple[str, str]] = None,
     osname, arch = plat or this_platform()
     available = builds_for(engine, (osname, arch))
     order: List[str] = []
-    if osname == "windows":
+    if engine == "ollama":
+        order.append("standard")
+    elif osname == "windows":
         names = graphics() if gpus is None else gpus
         nvidia = shutil.which("nvidia-smi") is not None or any("nvidia" in g.lower() for g in names)
         real = [g for g in names if not re.search(r"basic display|remote display|hyper-v|virtual|parsec|citrix", g, re.I)]
@@ -352,6 +372,7 @@ def choose(engine: str, build: str, rels,
         raise EngineError(f"There is no '{build}' build of {ENGINES[engine]['label']} for {osname} on {arch}. "
                           f"Choose one of: {', '.join(table)}.")
     main_re, extra = table[build]
+    unsigned = False
     for rel in rels:
         names = {a["name"]: a for a in rel["assets"]}
         main = next((a for n, a in sorted(names.items()) if re.search(main_re, n)), None)
@@ -365,8 +386,15 @@ def choose(engine: str, build: str, rels,
                 ok = False
                 break
             picked.append(hit)
+        if ok and not unverified_ok() and any(not a.get("sha256") for a in picked):
+            unsigned = True   # GitHub published no checksum for it: try an older release that has one
+            continue
         if ok:
             return rel, picked
+    if unsigned:
+        raise EngineError(f"The latest {ENGINES[engine]['label']} releases have no published checksum for the "
+                          f"'{build}' build, so Axis will not install it. Try again later, or set "
+                          "AXIS_ALLOW_UNVERIFIED=1 to install it without the check.")
     raise EngineError(f"None of the latest {ENGINES[engine]['label']} releases has a '{build}' build for "
                       f"{osname} on {arch}.")
 
@@ -410,9 +438,13 @@ def _download(asset: Dict[str, Any], dest: Path, job: jobs.Job, base: int, total
             for _ in range(10 * (attempt + 1)):
                 job.check()
                 time.sleep(0.2)
-    if asset.get("sha256") and h.hexdigest() != asset["sha256"]:
+    if asset.get("sha256"):
+        if h.hexdigest() != asset["sha256"]:
+            dest.unlink(missing_ok=True)
+            raise EngineError(f"{asset['name']} failed its checksum and was deleted. Try again.")
+    elif not unverified_ok():
         dest.unlink(missing_ok=True)
-        raise EngineError(f"{asset['name']} failed its checksum and was deleted. Try again.")
+        raise EngineError(f"{asset['name']} has no published checksum, so Axis will not use it.")
     job.progress(done=base + got, total=total)
     return got
 
@@ -458,6 +490,8 @@ def _unpack(archive: Path, dest: Path) -> None:
         except zipfile.BadZipFile as exc:
             raise EngineError(f"The download of {archive.name} is damaged. Try again.") from exc
         return
+    if name.endswith(".tar.zst"):
+        return _unpack_zst(archive, top, need_space)
     try:
         with tarfile.open(archive, "r:*") as t:
             members = t.getmembers()
@@ -476,6 +510,54 @@ def _unpack(archive: Path, dest: Path) -> None:
                 t.extractall(top, members=members)
     except tarfile.TarError as exc:
         raise EngineError(f"The download of {archive.name} is damaged. Try again.") from exc
+
+
+def _zstd_program() -> Optional[str]:
+    return shutil.which("zstd") or shutil.which("unzstd")
+
+
+def _unpack_zst(archive: Path, top: Path, need_space: Callable[[int], None]) -> None:
+    """Unpack a .tar.zst (Ollama on Linux) by streaming it through the system's zstd program.
+
+    Python's standard library cannot read Zstandard before 3.14. Every entry is checked before it is
+    written, as for the other archives, and nothing is ever stored as a whole archive on disk twice.
+    """
+    program = _zstd_program()
+    need_space(max(archive.stat().st_size * 3, 0))
+    if program is None:
+        raise EngineError("This download is compressed with zstd, which this computer does not have. Install it "
+                          "(for example: sudo apt install zstd) and try again, or install Ollama from "
+                          "ollama.com/download.")
+    kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen([program, "-dc", str(archive)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.DEVNULL, **kwargs)
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as t:
+            for m in t:
+                parts = PurePosixPath(m.name).parts
+                if m.name.startswith("/") or ".." in parts or not (m.isfile() or m.isdir() or m.issym() or m.islnk()):
+                    raise EngineError(f"{archive.name} contains an unsafe entry: {m.name}")
+                if m.issym() or m.islnk():
+                    link = (top / PurePosixPath(m.name).parent / m.linkname) if m.issym() else top / m.linkname
+                    if not _within(top, link):
+                        raise EngineError(f"{archive.name} contains a link that points outside it: {m.name}")
+                if hasattr(tarfile, "data_filter"):
+                    t.extract(m, top, filter="data")
+                else:
+                    t.extract(m, top)
+    except tarfile.TarError as exc:
+        raise EngineError(f"The download of {archive.name} is damaged. Try again.") from exc
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            if stream:
+                stream.close()
 
 
 def _find(folder: Path, name: str) -> Optional[Path]:
@@ -587,7 +669,7 @@ def install(engine: str, build: str, job: jobs.Job,
     unless: skip the install when this finds the program after waiting for another install.
     """
     if engine not in ENGINES:
-        raise EngineError("Choose llama.cpp or stable-diffusion.cpp.")
+        raise EngineError("Choose llama.cpp, stable-diffusion.cpp or Ollama.")
     if build not in BUILDS:
         raise EngineError(f"Unknown build '{build}'. Use one of: {', '.join(BUILDS)}.")
     label = ENGINES[engine]["label"]
@@ -637,7 +719,7 @@ def ensure(engine: str, found: Callable[[], Optional[Path]], job: jobs.Job) -> N
 
 def submit(engine: str, build: Optional[str] = None) -> jobs.Job:
     if engine not in ENGINES:
-        raise EngineError("Choose llama.cpp or stable-diffusion.cpp.")
+        raise EngineError("Choose llama.cpp, stable-diffusion.cpp or Ollama.")
     build = build or default_build(engine)
     label = ENGINES[engine]["label"]
     verb = "Updating" if installed(engine) else "Installing"
@@ -646,7 +728,7 @@ def submit(engine: str, build: Optional[str] = None) -> jobs.Job:
 
 def remove(engine: str) -> Dict[str, Any]:
     if engine not in ENGINES:
-        raise EngineError("Choose llama.cpp or stable-diffusion.cpp.")
+        raise EngineError("Choose llama.cpp, stable-diffusion.cpp or Ollama.")
     with _RECORD_LOCK:
         data = _load()
         data.pop(engine, None)

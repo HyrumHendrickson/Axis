@@ -267,7 +267,7 @@ def tool_msg(name, **args):
 class TestSkillsAndAgents(Base):
     def test_skill_library(self):
         ids = [s["id"] for s in skills.list_all()]
-        self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia",
+        self.assertEqual(ids, ["run-python", "run-rust", "run-terminal", "web-search", "wikipedia", "call-agent",
                                "cas", "images", "ocr", "photocraft", "lightcraft", "filmcraft", "designcraft", "vectorcraft", "pdfcraft",
                                "effectcraft", "wordcraft", "deckcraft", "gridcraft", "cadcraft", "soundcraft",
                                "figcraft"])
@@ -1551,12 +1551,19 @@ class TestImages(Base):
         self.assertTrue(any(str(m) in written for m in (model, model.resolve())), written)
         gallery = images.gallery(shared)
         self.assertEqual([g["prompt"] for g in gallery], ["a lighthouse on a cliff"])
+        # The picture has a folder of its own, with a settings file beside it.
+        folder = shared / gallery[0]["folder"]
+        meta = json.loads((folder / f"{folder.name}.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["prompt"], "a lighthouse on a cliff")
+        self.assertIn("seed", meta)
+        self.assertEqual(gallery[0]["path"], f"{folder.name}/{folder.name}.png")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), [f"{folder.name}.json", f"{folder.name}.png"])
         listing = tools.list_files(shared, {})
         self.assertNotIn(images.INDEX_NAME, listing)
         with self.assertRaises(images.ImageError) as ctx:
             images.generate({"prompt": "FAIL please"}, shared)
         self.assertIn("out of memory", str(ctx.exception))
-        self.assertEqual(len(list(shared.glob("*.png"))), 1)
+        self.assertEqual(len(list(shared.glob("*/*.png"))), 1)   # each picture has a folder of its own
 
     def test_step_previews(self):
         self.add_model()
@@ -1570,7 +1577,7 @@ class TestImages(Base):
         self.assertTrue(shots)
         self.assertTrue(all(s["image"].startswith("data:image/png;base64,") and s["steps"] == 4 for s in shots))
         self.assertEqual(base64.b64decode(shots[-1]["image"].split(",", 1)[1])[8:13], b"step4")
-        self.assertEqual(len(list(shared.glob("*.png"))), 2)   # the preview file is not kept
+        self.assertEqual(len(list(shared.glob("*/*.png"))), 2)   # the preview file is not kept
         self.assertTrue((shared / rec["path"]).is_file())
         cmd = images.build_command(self.cli, images.find_model(None), images.resolve_params(images.find_model(None), {"prompt": "x"}),
                                    Path("o.png"), self.root, Path("p.png"))
@@ -1696,7 +1703,7 @@ class TestImages(Base):
         self.assertTrue(out.startswith("Saved images/"), out)
         self.assertIn("images folder", out)   # the page finds the picture by these words
         # The picture goes to ~/Axis/images, never into the agent's folder.
-        self.assertEqual(len(list(paths.images_folder().glob("*.png"))), 1)
+        self.assertEqual(len(list(paths.images_folder().glob("*/*.png"))), 1)
         self.assertEqual(agents.list_workspace(agent), [])
         ok, out = tools.execute(agent.workspace, "generate_image", {"prompt": "x", "model": "nope"}, ["generate_image"])
         self.assertFalse(ok)
@@ -1720,7 +1727,7 @@ class TestImages(Base):
         gallery = json.loads(request(url + "/api/images/gallery")[1])["images"]
         self.assertEqual(gallery[0]["path"], image["path"])
         listing = json.loads(request(url + "/api/files/_images")[1])
-        self.assertEqual([e["name"] for e in listing["entries"]], [image["file"]])
+        self.assertEqual([e["name"] for e in listing["entries"]], [image["folder"]])
         self.assertFalse((Path(self.home) / "shared" / "images").exists())   # nothing goes to the workspace
         view = json.loads(request(url + "/api/files/_images/view?path=" + urllib.parse.quote(image["path"]))[1])
         self.assertEqual(view["kind"], "image")
@@ -1821,11 +1828,27 @@ class TestShortcut(Base):
         srv = server.make_server(0, None)
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
-        status, _ = request(srv.url + "/api/quit", "POST", {})
-        self.assertEqual(status, 200)
-        t.join(10)
+        with mock.patch.object(server.instances, "quit_all", return_value=0) as others:
+            status, _ = request(srv.url + "/api/quit", "POST", {})
+            self.assertEqual(status, 200)
+            t.join(10)
         self.assertFalse(t.is_alive())
         srv.server_close()
+        # The Quit Axis button stops every other copy too, but never asks this copy to stop itself.
+        others.assert_called_once()
+        self.assertEqual(others.call_args.kwargs["skip_port"], srv.server_address[1])
+
+    def test_quit_of_one_copy_does_not_ask_the_others(self):
+        srv = server.make_server(0, None)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        with mock.patch.object(server.instances, "quit_all", return_value=0) as others:
+            status, _ = request(srv.url + "/api/quit", "POST", {"others": False})
+            self.assertEqual(status, 200)
+            t.join(10)
+        self.assertFalse(t.is_alive())
+        srv.server_close()
+        others.assert_not_called()
 
     def test_axis_quit_stops_every_copy(self):
         from axis import instances

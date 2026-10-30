@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import sys
@@ -24,7 +25,28 @@ class Fake(io.BytesIO):
         return False
 
 
+GOOD = b"x" * 20000
+
+
 class TestLatex(Base):
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(latex, "ASSET_SHA256", hashlib.sha256(GOOD).hexdigest())
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_download_that_fails_its_checksum_is_not_kept(self):
+        with mock.patch.object(latex.urllib.request, "urlopen", side_effect=lambda *a, **k: Fake(b"y" * 20000)):
+            with self.assertRaisesRegex(latex.LatexError, "checksum"):
+                latex.install()
+        self.assertFalse(latex.status()["installed"])
+        self.assertEqual(list(latex._folder().glob("*")), [])
+
+    def test_the_download_is_a_fixed_version(self):
+        self.assertRegex(latex.ASSET_URL, r"mathjax@3\.\d+\.\d+/")
+        self.assertRegex(latex.MIRROR_URL, r"mathjax@3\.\d+\.\d+/")
+        self.assertEqual(len(latex.__dict__.get("ASSET_SHA256", "")), 64)
+
     def test_install_closes_its_temp_file_and_enables(self):
         opened = []
         real = os.close

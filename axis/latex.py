@@ -3,10 +3,14 @@
 MathJax is downloaded only when the user asks for it.  Keeping the asset in
 Axis' home directory means chat rendering still works without a CDN once it
 has been installed, and the user can remove it from the Tools page.
+
+The file is a fixed version (MathJax 3.2.2) and is checked against its SHA-256 before it is
+kept, because Axis serves it to its own page, where it runs with the page's full access.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -20,9 +24,12 @@ from . import __version__
 from .paths import axis_home
 
 ASSET_NAME = "tex-svg.js"
-ASSET_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"
+ASSET_URL = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"
 # The same file from a second host, tried when the first cannot be reached (some networks block one of them).
-MIRROR_URL = "https://unpkg.com/mathjax@3/es5/tex-svg.js"
+MIRROR_URL = "https://unpkg.com/mathjax@3.2.2/es5/tex-svg.js"
+# SHA-256 of es5/tex-svg.js in the mathjax 3.2.2 package on npm (read from the package that npm's own
+# sha512 integrity value vouches for).
+ASSET_SHA256 = "d4295dc33744836935c1399feece5159577b34c5c8ffb9f1c6324cd82e03a882"
 MIN_SIZE = 10000
 
 
@@ -63,14 +70,18 @@ def status() -> Dict[str, Any]:
 def _fetch(url: str, temp: Path) -> None:
     """Download url into temp. Raises LatexError if the answer is not the renderer."""
     request = urllib.request.Request(url, headers={"User-Agent": f"Axis/{__version__}"})
+    digest = hashlib.sha256()
     with urllib.request.urlopen(request, timeout=60) as response, temp.open("wb") as out:
         while True:
             chunk = response.read(1024 * 1024)
             if not chunk:
                 break
             out.write(chunk)
+            digest.update(chunk)
     if temp.stat().st_size < MIN_SIZE:
         raise LatexError("The LaTeX renderer download was incomplete.")
+    if digest.hexdigest() != ASSET_SHA256:
+        raise LatexError("The LaTeX renderer download failed its checksum, so it was not used.")
 
 
 def _move_into_place(temp: Path, target: Path) -> None:
@@ -106,8 +117,8 @@ def install() -> Dict[str, Any]:
                 reason = getattr(exc, "reason", None) or exc
                 problem = str(reason) if not isinstance(exc, LatexError) else str(exc)
         if problem is not None:
-            raise LatexError(f"Could not download the LaTeX renderer: {problem.rstrip('.')}. "
-                             "Check your internet connection.")
+            hint = "" if "checksum" in problem else " Check your internet connection."
+            raise LatexError(f"Could not download the LaTeX renderer: {problem.rstrip('.')}.{hint}")
         try:
             _move_into_place(temp, target)
         except OSError as exc:
