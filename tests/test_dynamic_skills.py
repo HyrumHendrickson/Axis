@@ -35,13 +35,10 @@ class TestDynamicSkills(Base):
                 mock.patch.object(tools, "_shells_here", return_value=["cmd"]):
             text = self.prompt("photocraft")
             self.assertIn("photocraft-cli is not installed", text)
-            self.assertIn("default Windows shell (cmd)", text)
+            self.assertIn("no shell, so nothing needs quoting", text)
         with mock.patch("axis.artcraft.cli_program", return_value=Path("/x/photocraft-cli")), \
-                mock.patch("axis.artcraft._app_info", return_value={}), mock.patch.object(tools, "_shells_here", return_value=["bash"]):
-            text = self.prompt("photocraft")
-            self.assertIn("photocraft-cli is installed", text)
-            self.assertIn("single quotes", text)
-            self.assertNotIn("default Windows shell", text)
+                mock.patch("axis.artcraft._app_info", return_value={}):
+            self.assertIn("photocraft-cli is installed", self.prompt("photocraft"))
 
     def test_every_craft_skill_adapts(self):
         for app_id in craft_skills.IDS:

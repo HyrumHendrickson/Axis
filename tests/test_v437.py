@@ -202,10 +202,11 @@ class TestCallAgents(Base):
         ok, out = tools.execute(Path(self.home), "call_agent", {"agent": "a", "message": "b"}, ["call_agent"])
         self.assertFalse(ok)
 
-    def test_the_skill_text_lists_the_agents_that_can_be_called(self):
+    def test_the_agents_that_can_be_called_are_listed_in_the_action_only(self):
         self.make()
         self.assertIn("call-agent", skills.BUILTIN_IDS)
-        text = skills.adapt("call-agent", "Use it.")
+        self.assertEqual(skills.adapt("call-agent", "Use it."), "Use it.")   # not repeated in the skill
+        text = tools.tool_spec("call_agent")["parameters"]["properties"]["agent"]["description"]
         self.assertIn("helper", text)
         self.assertIn("You check sums", text)
 

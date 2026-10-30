@@ -313,7 +313,7 @@ def _parse_args(raw: Any) -> Any:
         if not raw.strip():
             return {}
         try:
-            return json.loads(raw)
+            return json.loads(raw, strict=False)   # a raw line break inside a string is accepted
         except json.JSONDecodeError:
             return raw
     return raw

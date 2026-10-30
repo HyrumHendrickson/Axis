@@ -1,11 +1,8 @@
 """The skill library shared by all agents.
 
-Built-in skills give an agent actions (tools): working with files in its own
-folder, running programs, searching the web and reading Wikipedia. The Shared
-folder skill adds no tools of its own; it lets the file actions an agent already
-has also reach ~/Axis/shared, which every agent with that skill can use. There is also
-one skill for each page under Tools: CAS, Images and OCR (see tool_skills.py), and one
-for each Art Craft app (see craft_skills.py).
+Built-in skills give an agent actions (tools): running programs, searching the web, reading
+Wikipedia and calling other agents. There is also one skill for each page under Tools: CAS,
+Images and OCR (see tool_skills.py), and one for each Art Craft app (see craft_skills.py).
 Custom skills are named instructions written by the user; they are stored as
 ~/Axis/skills/<id>.json. Agents choose skills by id.
 
@@ -58,47 +55,44 @@ BUILTIN: List[Dict[str, Any]] = [
         "name": "Run Python",
         "description": "Write and run Python code in the agent's folder, or run a .py file that is already there, "
         "for calculations, data work and file processing.",
-        "instructions": "When a task needs calculation, data processing or checking an answer, write a complete Python "
-        "program and run it with run_python. To run a .py file that is already in your folder (one you or the user "
-        "saved), call run_python_file with its path instead of copying its code. Print the results you need. "
-        "Starting other programs is not allowed.",
+        "instructions": "For calculation, data work or checking an answer, write a complete Python program and run it "
+        "with run_python; print the results you need. Run a .py file already in your folder with run_python_file "
+        "instead of copying its code. Starting other programs is not allowed.",
         "tools": ["run_python", "run_python_file"],
     },
     {
         "id": "run-rust",
         "name": "Run Rust",
         "description": "Compile and run Rust code, or run a .rs file already in the agent's folder, and return its output.",
-        "instructions": "When a task needs Rust, write a complete program and run it with run_rust, or run a Rust file "
-        "already in your folder with run_rust_file. Print the results you need. Rust is not a security sandbox; the "
-        "program runs with the user's permissions.",
+        "instructions": "When a task needs Rust, write a complete program and run it with run_rust, or run a .rs file "
+        "already in your folder with run_rust_file. Print the results you need. The program runs with the user's "
+        "permissions; Rust is not a sandbox.",
         "tools": ["run_rust", "run_rust_file"],
     },
     {
         "id": "run-terminal",
         "name": "Run terminal code",
         "description": "Run a program or shell code using the computer's terminal language and return its output.",
-        "instructions": "Use run_terminal for a short program written in the terminal's language, or run_terminal_file for "
-        "a program already in your folder. Leave shell out to use the computer's default shell. Terminal programs "
-        "run with the user's permissions and are not a security sandbox.",
+        "instructions": "Use run_terminal for short shell code, or run_terminal_file for a program already in your folder. "
+        "Leave shell out to use the computer's default shell. The code runs with the user's permissions and is not "
+        "a sandbox.",
         "tools": ["run_terminal", "run_terminal_file"],
     },
     {
         "id": "web-search",
         "name": "Web search",
         "description": "Search the web and read web pages. The agent chooses how much text to get back.",
-        "instructions": "Use web_search for current events, facts you are unsure of, or anything after your training. "
-        "Then use fetch_page on the most relevant link to read it. Both take max_chars: ask for only as much "
-        "text as you need (small for a quick fact, larger for detail), and use start to read further into a long "
-        "page. Say which sites your answer came from.",
+        "instructions": "Use web_search for current events, facts you are unsure of, or anything after your training, "
+        "then fetch_page on the best link to read it. max_chars sets how much text comes back (small for a quick fact, "
+        "larger for detail) and start reads further into a long page. Say which sites your answer came from.",
         "tools": ["web_search", "fetch_page"],
     },
     {
         "id": "wikipedia",
         "name": "Wikipedia",
         "description": "Look up and read Wikipedia articles through the Wikipedia API.",
-        "instructions": "Use wikipedia_search to find the exact article title, then wikipedia_article to read it. "
-        "Set intro_only to true when a summary is enough. Use max_chars to limit how much text comes back and "
-        "start to continue a long article. Mention the article you used.",
+        "instructions": "Use wikipedia_search to find the exact title, then wikipedia_article to read it. intro_only "
+        "gives just the summary; max_chars and start work as for web pages. Mention the article you used.",
         "tools": ["wikipedia_search", "wikipedia_article"],
     },
 ]
@@ -106,10 +100,9 @@ BUILTIN.append({
     "id": CALL_AGENT_SKILL,
     "name": "Call agents",
     "description": "Hand a task to another agent and get its answer back. An agent that is called this way cannot call agents itself.",
-    "instructions": "Use call_agent when another agent is better suited to part of a task, or to get a second opinion. The "
-    "other agent cannot see this conversation, so write the whole task in message, including any file names. It works in "
-    "the same folder. Read what comes back, check it, and tell the user which agent did what. Do not call an agent for "
-    "something you can do yourself, and do not call yourself.",
+    "instructions": "Use call_agent when another agent suits part of a task, or for a second opinion. It cannot see this "
+    "conversation, so write the whole task in message, with any file names. It works in the same folder. Check what comes "
+    "back and tell the user which agent did what. Do not call an agent for something you can do yourself, or yourself.",
     "tools": ["call_agent"],
 })
 BUILTIN += tool_skills.build()    # CAS, Images and OCR, the pages under Tools
@@ -176,11 +169,13 @@ def _adapt_terminal(text: str) -> str:
         shells = tools._shells_here()
     except Exception:
         return text
-    note = f"The default shell here is {shells[0]}; shells available: {', '.join(shells)}."
+    note = f"The default shell here is {shells[0]}."
     if shells[0] == "cmd":
-        note += " Write cmd syntax (for example dir, type, copy, %VAR%) unless you set shell to powershell."
+        note += (" Write cmd syntax (for example dir, type, copy, %VAR%) unless you set shell to powershell. "
+                 "JSON goes in double quotes, each inner quote written \\\".")
     else:
-        note += " Write POSIX shell syntax unless you set shell to another one."
+        note += (" Write POSIX shell syntax unless you set shell to another one. JSON goes in single quotes; for text with "
+                 "apostrophes or long text use a quoted here-document (cat > f <<'EOF').")
     return f"{text.rstrip()} {note}"
 
 
@@ -192,8 +187,7 @@ def _adapt_agents(text: str) -> str:
         return text
     if not found:
         return f"{text.rstrip()} There are no other agents yet."
-    return f"{text.rstrip()} Agents you can call: " + "; ".join(
-        f"{a.name} ({' '.join(a.system_prompt.split())[:80]})" for a in found[:30]) + "."
+    return text   # call_agent's own definition lists the agents
 
 
 def adapt(skill_id: str, instructions: str) -> str:

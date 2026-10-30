@@ -31,7 +31,7 @@ class TestCraftSkillDefinitions(unittest.TestCase):
         for s in craft_skills.build():
             with self.subTest(app=s["id"]):
                 self.assertIn(s["id"], skills.BUILTIN_IDS)
-                self.assertEqual(s["tools"], ["run_terminal", "run_terminal_file"])
+                self.assertEqual(s["tools"], ["run_craft", "write_file"])
                 self.assertEqual(s["group"], craft_skills.GROUP)
                 self.assertLessEqual(len(s["description"]), 300)
                 self.assertLess(len(s["instructions"]), 3000)   # small models have small contexts
@@ -137,19 +137,19 @@ class TestSkillsReachTheAgent(Home):
     def test_a_craft_skill_gives_the_agent_terminal_actions_and_its_text(self):
         agent = agents.create({"name": "editor", "skills": ["photocraft"]})
         names = agents.tool_names(agent)
-        self.assertEqual(names, ["run_terminal", "run_terminal_file"])
+        self.assertEqual(names, ["run_craft", "write_file"])
         prompt = agents.skills_prompt(agent.skills, names)
         self.assertIn("## PhotoCraft", prompt)
-        self.assertIn("photocraft-cli commands --filter", prompt)
+        self.assertIn("commands --filter blur", prompt)
 
     def test_two_craft_skills_add_the_terminal_actions_once(self):
         agent = agents.create({"name": "both", "skills": ["photocraft", "pdfcraft", "run-terminal"]})
-        self.assertEqual(agents.tool_names(agent), ["run_terminal", "run_terminal_file"])
+        self.assertEqual(agents.tool_names(agent), ["run_craft", "write_file", "run_terminal", "run_terminal_file"])
 
     def test_the_skills_page_preview_shows_what_is_sent(self):
         view = agents.skill_preview("gridcraft")
         self.assertIn("gridcraft-cli", view["system"])
-        self.assertEqual([t["function"]["name"] for t in view["tools"]], ["run_terminal", "run_terminal_file"])
+        self.assertEqual([t["function"]["name"] for t in view["tools"]], ["run_craft", "write_file"])
 
     def test_the_text_can_be_edited_and_reset_like_any_built_in(self):
         before = skills.get("cadcraft")["instructions"]

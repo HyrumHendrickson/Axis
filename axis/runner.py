@@ -48,7 +48,7 @@ def text_protocol(tool_names: List[str]) -> str:
         "```tool",
         '{"name": "TOOL_NAME", "arguments": {...}}',
         "```",
-        "The arguments must be valid JSON (escape newlines in strings as \\n). "
+        "The arguments must be valid JSON: write a quote inside a string as \\\" and a line break as \\n. "
         "You will then receive the result and can continue. When you are finished, answer normally without a tool block.",
         "Available tools:",
     ]
@@ -63,7 +63,7 @@ def text_protocol(tool_names: List[str]) -> str:
 def _loads_maybe(value: Any) -> Any:
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            return json.loads(value, strict=False)   # strict=False: a raw line break inside a string is accepted
         except json.JSONDecodeError:
             return value
     return value
@@ -76,9 +76,10 @@ def parse_tool_block(text: str) -> Optional[Tuple[str, Any]]:
         return None
     body = m.group(1).strip()
     try:
-        data = json.loads(body)
+        data = json.loads(body, strict=False)
     except json.JSONDecodeError as exc:
-        return "", f"Your tool block was not valid JSON ({exc.msg}). Write it again as valid JSON."
+        return "", (f"Your tool block was not valid JSON ({exc.msg}, line {exc.lineno}). Write it again as valid JSON: "
+                    "a quote inside a string is \\\", a line break is \\n.")
     if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         return "", 'A tool block must be a JSON object like {"name": "...", "arguments": {...}}.'
     return data["name"], _loads_maybe(data.get("arguments", data.get("parameters", {})))
@@ -98,7 +99,7 @@ def _call_from_object(obj: Any, allowed: List[str]) -> Optional[Tuple[str, Any]]
 
 def find_text_call(text: str, allowed: List[str]) -> Optional[Tuple[str, Any, str]]:
     """Find a tool call written as JSON text. Returns (name, arguments, text without the call)."""
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     starts = [i for i, ch in enumerate(text) if ch == "{"][:200]
     for i in starts:
         try:

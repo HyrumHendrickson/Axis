@@ -4,6 +4,20 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.8] - 2026-10-30
+
+### Added
+- **`run_craft` action for the Craft apps.** An agent runs `<app>-cli` with a list of arguments and no shell, so nothing needs quoting or escaping. JSON is written as an object or list, and `{"join": ["ID=", {...}]}` builds an argument from an id and JSON. `find` keeps only the output lines (or JSON list items) that contain some text, so a command can be looked up in a catalogue of hundreds without printing it. Arguments that name a place outside the agent's folder are refused, as in terminal code; a document that merely contains a slash or a tilde is not.
+- Repairs for code a model escaped twice, in Run Python, Run terminal code, Run Rust and the CAS actions: a Markdown fence around the code, `\n` where line breaks belong, `\"` for quotes, and JSON in single quotes whose quotes carry a backslash. cmd gets double quotes for JSON written in single quotes. Code that was correct is never changed.
+- `read_file` takes `start`, and a cut-off result says what to use next.
+
+### Changed
+- **The Craft skills use `run_craft`.** They give the agent `run_craft` and `write_file` (for a script the app runs with its own script option). The Run terminal actions are no longer part of them; add the Run terminal code skill to an agent that also needs a shell. The text was rewritten against the released programs: it shows the argument lists, how to look commands up (CADCraft takes a filter; VectorCraft, LightCraft, WordCraft, DeckCraft and SoundCraft have long catalogues, so use `find`), and each app's file or script option. WordCraft now says how to write prose (Markdown, then `convert`), `paragraphs`, and `--script`.
+- Tool definitions are shorter. The image models, OCR models and languages, shells and agents are listed once, in the action's definition, and no longer again in the skill text.
+- `write_file` saves a JSON object or list sent as `content` as JSON (one item a line in a `.jsonl` file), not in Python's notation.
+- A program that succeeds and writes notes to its error stream ("wrote a.docx") is shown under **Messages**, not **Errors**; a program that prints nothing is no longer told to use `print()`.
+- Tool calls and tool blocks with a raw line break inside a string are accepted instead of rejected as invalid JSON.
+
 ## [4.3.7] - 2026-10-30
 
 ### Added

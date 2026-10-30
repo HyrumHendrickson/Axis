@@ -1306,6 +1306,7 @@ const STEP_TEXT = {
   run_rust_file: ["Compiling and running", "Compiled and ran"],
   run_terminal: ["Running terminal code", "Ran terminal code"],
   run_terminal_file: ["Running", "Ran"],
+  run_craft: ["Running", "Ran"],
   list_files: ["Listing files", "Listed files"],
   read_file: ["Reading", "Read"],
   write_file: ["Writing", "Wrote"],
@@ -1336,7 +1337,7 @@ function openInWorkspace(agent, path, isFile) {
 function stepState(p) { return p.output === undefined ? "running" : (p.ok ? "done" : "failed"); }
 function stepLabel(p) {
   const words = STEP_TEXT[p.name] || ["Using " + p.name, "Used " + p.name];
-  const arg = p.args && ["path", "query", "title", "url", "prompt", "agent"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
+  const arg = p.args && ["path", "query", "title", "url", "prompt", "agent", "app"].map((k) => p.args[k]).find((v) => typeof v === "string" && v);
   const target = arg ? " " + (arg.length > 80 ? arg.slice(0, 80) + "\u2026" : arg) : "";
   const state = stepState(p);
   const at = state === "running" && p.progress ? ` (step ${p.progress.step} of ${p.progress.steps})`
@@ -1349,6 +1350,7 @@ function stepView(p, agent, wasOpen) {
   if (p.args && typeof p.args.code === "string") body.append(h("div", { class: "step-label" }, "Code"), h("pre", {}, p.args.code));
   if (p.args && typeof p.args.content === "string")
     body.append(h("div", { class: "step-label" }, "Content"), h("pre", {}, p.args.content.length > 4000 ? p.args.content.slice(0, 4000) + "\n\u2026" : p.args.content));
+  if (p.args && Array.isArray(p.args.args)) body.append(h("div", { class: "step-label" }, "Arguments"), h("pre", {}, JSON.stringify(p.args.args, null, 1)));
   if (p.args && typeof p.args.message === "string") body.append(h("div", { class: "step-label" }, "Task"), h("pre", {}, p.args.message));
   if (p.args && typeof p.args.raw === "string") body.append(h("div", { class: "step-label" }, "Arguments"), h("pre", {}, p.args.raw));
   if (p.output !== undefined) body.append(h("div", { class: "step-label" }, "Result"), h("pre", {}, p.output));
@@ -1358,7 +1360,7 @@ function stepView(p, agent, wasOpen) {
     if ((p.name === "write_file" || p.name === "read_file") && path) body.append(link("Open in Workspace", path, true));
     else if (p.name === "make_folder" && path) body.append(link("Open folder in Workspace", path, false));
     else if (["run_python_file", "run_rust_file", "run_terminal_file"].includes(p.name) && path) body.append(link("Open in Workspace", path, true));
-    else if (["run_python", "run_rust", "run_terminal", "list_files"].includes(p.name)) body.append(link("Browse this agent\u2019s files", "", false));
+    else if (["run_python", "run_rust", "run_terminal", "run_craft", "list_files"].includes(p.name)) body.append(link("Browse this agent\u2019s files", "", false));
     else if (p.name === "generate_image" && imagePath(p)) {
       const pic = imagePath(p);
       body.append(h("button", { class: "link", style: "margin-top:8px", onclick: () => revealFile(pic.place, pic.path) }, "Show in folder"));

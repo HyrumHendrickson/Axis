@@ -14,14 +14,17 @@ Pictures made with generate_image go to ~/Axis/images, not into the folder.
 
 from __future__ import annotations
 
+import copy
+import errno
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -48,34 +51,37 @@ class ToolError(Exception):
 
 TOOL_SPECS: Dict[str, Dict[str, Any]] = {
     "list_files": {
-        "description": "List files and folders in your folder. Use path to look inside a subfolder.",
+        "description": "List the files and folders in your folder or in one of its subfolders.",
         "parameters": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Subfolder to list, relative to your folder. Omit for the top level."}},
+            "properties": {"path": {"type": "string", "description": "Subfolder, relative to your folder (omit for the top level)"}},
             "required": [],
         },
     },
     "read_file": {
-        "description": "Read a text file from your folder.",
+        "description": "Read a text file in your folder.",
         "parameters": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "File path relative to your folder, e.g. notes/todo.txt"}},
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to your folder, e.g. notes/todo.txt"},
+                "start": {"type": "integer", "description": "Character to start from (default 0); a cut-off result says what to use next"},
+            },
             "required": ["path"],
         },
     },
     "write_file": {
-        "description": "Create or overwrite a text file in your folder. Missing folders are created.",
+        "description": "Create or overwrite a text file in your folder. Missing folders are made.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "File path relative to your folder, e.g. report.md"},
-                "content": {"type": "string", "description": "The full text to write"},
+                "content": {"type": "string", "description": "The whole text of the file. A JSON object or list is saved as JSON."},
             },
             "required": ["path", "content"],
         },
     },
     "make_folder": {
-        "description": "Create a folder (and any missing parent folders) in your folder.",
+        "description": "Make a folder, and any missing parent folders, in your folder.",
         "parameters": {
             "type": "object",
             "properties": {"path": {"type": "string", "description": "Folder path relative to your folder"}},
@@ -91,63 +97,55 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
         },
     },
     "run_python": {
-        "description": "Run Python 3 code with your folder as the working directory and return what it prints. "
-        "Use print() to show results. Files the code creates are saved in your folder.",
+        "description": "Run a Python 3 program in your folder and return what it prints. Use print() to show results.",
         "parameters": {
             "type": "object",
-            "properties": {"code": {"type": "string", "description": "Complete Python program to run"}},
+            "properties": {"code": {"type": "string", "description": "The complete program"}},
             "required": ["code"],
         },
     },
     "run_python_file": {
-        "description": "Run a Python file that is already in your folder and return what it prints. "
-        "The file's folder is the working directory, so it can open files next to it by name.",
+        "description": "Run a .py file from your folder and return what it prints. The file's own folder is the working directory.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The .py file to run, relative to your folder, e.g. scripts/report.py"},
-            },
+            "properties": {"path": {"type": "string", "description": "The .py file relative to your folder, e.g. scripts/report.py"}},
             "required": ["path"],
         },
     },
     "run_rust": {
-        "description": "Compile and run Rust code with the agent's folder as the working directory and return what it prints. "
-        "On Windows, Axis can install the Microsoft C++ Build Tools needed by the MSVC linker.",
+        "description": "Compile and run a Rust program in your folder and return what it prints.",
         "parameters": {
             "type": "object",
-            "properties": {"code": {"type": "string", "description": "Complete Rust program to compile and run"}},
+            "properties": {"code": {"type": "string", "description": "The complete program, with fn main"}},
             "required": ["code"],
         },
     },
     "run_rust_file": {
-        "description": "Compile and run a Rust .rs file already in the agent's folder and return what it prints.",
+        "description": "Compile and run a .rs file from your folder and return what it prints.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The .rs file to compile and run, relative to your folder"},
-            },
+            "properties": {"path": {"type": "string", "description": "The .rs file relative to your folder"}},
             "required": ["path"],
         },
     },
     "run_terminal": {
-        "description": "Run code in the computer's terminal language and return what it prints. The default is bash or sh "
-        "on macOS and Linux, and cmd on Windows; use shell for powershell or another installed shell.",
+        "description": "Run shell code in your folder and return what it prints.",
         "parameters": {
             "type": "object",
             "properties": {
-                "code": {"type": "string", "description": "Complete shell program or commands to run"},
-                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh, or cmd"},
+                "code": {"type": "string", "description": "The shell commands to run"},
+                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh or cmd"},
             },
             "required": ["code"],
         },
     },
     "run_terminal_file": {
-        "description": "Run a shell program file already in the agent's folder and return what it prints.",
+        "description": "Run a shell program file from your folder and return what it prints.",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The shell program to run, relative to your folder"},
-                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh, or cmd"},
+                "path": {"type": "string", "description": "The file relative to your folder"},
+                "shell": {"type": "string", "description": "Optional shell: auto, bash, sh, powershell, pwsh or cmd"},
             },
             "required": ["path"],
         },
@@ -157,34 +155,31 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
 
 TOOL_SPECS.update(web_tools.SPECS)
 TOOL_SPECS["generate_image"] = {
-    "description": "Make a picture from a text description with a local Stable Diffusion model. "
-    "The picture is saved as a PNG in Axis's images folder (not in your folder) and shown to the user. "
-    "Describe the subject, style, lighting and composition in the prompt.",
+    "description": "Make a picture from a text description with a local image model. It is saved in Axis's images folder "
+    "(not your folder) and shown to the user.",
     "parameters": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "What the picture should show, in detail"},
-            "negative_prompt": {"type": "string", "description": "Things to keep out of the picture (optional)"},
-            "width": {"type": "integer", "description": "Width in pixels, a multiple of 64 (optional; the model's default if omitted)"},
-            "height": {"type": "integer", "description": "Height in pixels, a multiple of 64 (optional)"},
-            "steps": {"type": "integer", "description": "Sampling steps (optional; the model's default if omitted)"},
-            "seed": {"type": "integer", "description": "Seed for a repeatable picture (optional; random if omitted)"},
-            "model": {"type": "string", "description": "Name of the image model to use (optional; the default if omitted)"},
+            "prompt": {"type": "string", "description": "The picture in detail: subject, style, lighting, composition"},
+            "negative_prompt": {"type": "string", "description": "What to keep out of the picture (optional)"},
+            "width": {"type": "integer", "description": "Pixels, a multiple of 64 (optional)"},
+            "height": {"type": "integer", "description": "Pixels, a multiple of 64 (optional)"},
+            "steps": {"type": "integer", "description": "Sampling steps (optional)"},
+            "seed": {"type": "integer", "description": "For a repeatable picture (optional)"},
+            "model": {"type": "string", "description": "Image model name (optional)"},
         },
         "required": ["prompt"],
     },
 }
 TOOL_SPECS["run_cas"] = {
-    "description": "Run code in a computer algebra system (CAS) for exact symbolic math: algebra, calculus, equations, "
-    "series, matrices and number theory. Maxima code is a list of Maxima commands, each ending in ; (show the result) "
-    "or $ (hide it). SymPy code is a complete Python program that imports sympy and prints its results. "
-    "Your folder is the working folder.",
+    "description": "Run code in a computer algebra system for exact symbolic math: algebra, calculus, equations, series, "
+    "matrices, number theory. Your folder is the working folder.",
     "parameters": {
         "type": "object",
         "properties": {
-            "code": {"type": "string", "description": "The Maxima commands or the SymPy Python program to run"},
+            "code": {"type": "string", "description": "Maxima commands (each ending in ; or $), or a SymPy Python program"},
             "system": {"type": "string", "enum": ["maxima", "sympy"],
-                       "description": "Which CAS to use (optional; the one chosen on the CAS page if omitted)"},
+                       "description": "Which system (optional; the one chosen on the CAS page)"},
         },
         "required": ["code"],
     },
@@ -193,53 +188,64 @@ TOOL_SPECS["run_cas"] = {
 # what the user picked on the CAS page (see model_tools). run_cas stays the name of the action in Axis
 # (allowed lists, the handler) and the one a model sees only when no CAS is installed yet.
 TOOL_SPECS["run_maxima"] = {
-    "description": "Run Maxima code for exact symbolic math: algebra, calculus, equations, series, matrices and "
-    "number theory. The code is a list of Maxima commands, each ending in ; (show the result) or $ (hide it). "
+    "description": "Run Maxima code for exact symbolic math. Each command ends in ; (show the result) or $ (hide it). "
     "Your folder is the working folder.",
     "parameters": {
         "type": "object",
-        "properties": {"code": {"type": "string", "description": "The Maxima commands to run"}},
+        "properties": {"code": {"type": "string", "description": "The Maxima commands"}},
         "required": ["code"],
     },
 }
 TOOL_SPECS["run_sympy"] = {
-    "description": "Run a SymPy program for exact symbolic math: algebra, calculus, equations, series, matrices and "
-    "number theory. The code is a complete Python program that imports sympy and prints its results. "
+    "description": "Run a SymPy program for exact symbolic math. It imports sympy and prints its results. "
     "Your folder is the working folder.",
     "parameters": {
         "type": "object",
-        "properties": {"code": {"type": "string", "description": "The complete Python program that uses SymPy"}},
+        "properties": {"code": {"type": "string", "description": "The complete Python program"}},
         "required": ["code"],
     },
 }
 TOOL_SPECS["read_text"] = {
-    "description": "Read the text in a picture (OCR) with a local OCR model and return it. The picture must be a PNG, "
-    "JPEG, BMP, TIFF or WebP file in your folder.",
+    "description": "Read the text in a picture (OCR). The picture is a PNG, JPEG, BMP, TIFF or WebP file in your folder.",
     "parameters": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "The picture, relative to your folder, e.g. scans/page1.png"},
-            "model": {"type": "string", "description": "OCR model to use, e.g. tesseract:eng (optional; a sensible "
-                      "installed model if omitted)"},
-            "languages": {"type": "string", "description": "For Tesseract only: languages to read, e.g. eng+lat "
-                          "(optional; installed languages only)"},
+            "path": {"type": "string", "description": "The picture relative to your folder, e.g. scans/page1.png"},
+            "model": {"type": "string", "description": "OCR model, e.g. tesseract:eng (optional)"},
+            "languages": {"type": "string", "description": "Tesseract languages joined with +, e.g. eng+lat (optional)"},
         },
         "required": ["path"],
     },
 }
 
-
 CALL_AGENT = "call_agent"
 TOOL_SPECS[CALL_AGENT] = {
-    "description": "Give a task to another of the user's agents and get its answer back. The other agent works in the "
-    "same folder, has its own skills and cannot see this conversation, so the message must hold everything it needs.",
+    "description": "Give a task to another agent and get its answer. It works in the same folder but cannot see this "
+    "conversation, so the message must say everything it needs.",
     "parameters": {
         "type": "object",
         "properties": {
-            "agent": {"type": "string", "description": "The name of the agent to call"},
-            "message": {"type": "string", "description": "The complete task for that agent"},
+            "agent": {"type": "string", "description": "Name of the agent to call"},
+            "message": {"type": "string", "description": "The complete task"},
         },
         "required": ["agent", "message"],
+    },
+}
+
+RUN_CRAFT = "run_craft"
+TOOL_SPECS[RUN_CRAFT] = {
+    "description": "Run a Craft app's command-line program (photocraft-cli etc.) without a shell, so nothing needs "
+    "quoting. One item of args for each argument; write JSON as an object or list, not text. "
+    "{\"join\": [\"ID=\", {...}]} makes one argument from text and JSON.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "app": {"type": "string", "description": "The Craft app, e.g. photocraft"},
+            "args": {"type": "array", "items": {},
+                     "description": "Arguments after the program name, e.g. [\"info\", \"a.png\"]"},
+            "find": {"type": "string", "description": "Only return output lines (or JSON items) containing this text (optional)"},
+        },
+        "required": ["app", "args"],
     },
 }
 
@@ -258,8 +264,9 @@ def _shells_here() -> List[str]:
 
 def tool_spec(name: str) -> Dict[str, Any]:
     """One action's definition as the model should read it now: the static text in TOOL_SPECS plus what is
-    set up on this computer (the image models, the OCR models and languages, the shells). A copy is
-    returned; TOOL_SPECS itself never changes, so a model that was removed is not mentioned later."""
+    set up on this computer (the image models, the OCR models and languages, the shells, the other agents, the
+    installed Craft apps). A copy is returned; TOOL_SPECS itself never changes, so a model that was removed is
+    not mentioned later. The lists live here and not in the skills, so a model is told each of them once."""
     spec = copy.deepcopy(TOOL_SPECS[name])
     props = spec["parameters"]["properties"]
     try:
@@ -269,34 +276,32 @@ def tool_spec(name: str) -> Dict[str, Any]:
             if usable:
                 default = images.default_model_id(models)
                 names = ", ".join(m["name"] + (" (default)" if m["id"] == default else "") for m in usable)
-                spec["description"] = ("Make a picture from a text description with one of the local image models: "
-                                       f"{names}. The picture is saved as a PNG in Axis's images folder (not in your "
-                                       "folder) and shown to the user. Describe the subject, style, lighting and "
-                                       "composition in the prompt.")
-                props["model"]["description"] = ("Name of the image model to use, one of: "
-                                                 + ", ".join(m["name"] for m in usable)
-                                                 + " (optional; the default if omitted)")
+                spec["description"] += f" Models: {names}."
+                props["model"]["description"] = "Image model name, one of: " + ", ".join(m["name"] for m in usable) + " (optional)"
         elif name == "read_text":
             from . import ocr
             usable = [m for m in ocr.list_models() if m.get("usable")]
             if usable:
-                props["model"]["description"] = ("OCR model to use, one of: " + ", ".join(m["id"] for m in usable)
-                                                 + " (optional; a sensible installed model if omitted)")
+                props["model"]["description"] = "OCR model, one of: " + ", ".join(m["id"] for m in usable) + " (optional)"
                 langs = [m["model"] for m in usable if m.get("engine") == "tesseract"]
                 if langs:
-                    props["languages"]["description"] = ("For Tesseract only: languages to read, joined with +, "
-                                                         "from the installed ones: " + ", ".join(langs)
+                    props["languages"]["description"] = ("Tesseract languages joined with +, from: " + ", ".join(langs)
                                                          + " (optional)")
         elif name == CALL_AGENT:
             from . import agents
             found = [a for a in agents.list_all() if a.name]
             if found:
-                props["agent"]["description"] = ("The name of the agent to call, one of: "
-                                                 + "; ".join(f"{a.name} ({' '.join(a.system_prompt.split())[:70]})" for a in found[:30]))
+                props["agent"]["description"] = ("Name of the agent to call, one of: "
+                                                 + "; ".join(f"{a.name} ({' '.join(a.system_prompt.split())[:50]})" for a in found[:30]))
         elif name in ("run_terminal", "run_terminal_file"):
             shells = _shells_here()
-            props["shell"]["description"] = (f"Optional shell: one of {', '.join(shells)} (auto uses {shells[0]}, "
-                                             "which is also the default if omitted)")
+            props["shell"]["description"] = f"Optional shell, one of {', '.join(shells)} (default {shells[0]})"
+        elif name == RUN_CRAFT:
+            from . import artcraft
+            have = [a for a in artcraft.APP_IDS if artcraft.cli_program(a) is not None]
+            props["app"]["enum"] = have or list(artcraft.APP_IDS)
+            if have:
+                props["app"]["description"] = "The Craft app, one of: " + ", ".join(have)
     except Exception:   # a setup problem must never stop a reply; the static text is still correct
         return copy.deepcopy(TOOL_SPECS[name])
     return spec
@@ -443,25 +448,39 @@ def read_file(ws: Where, args: Dict[str, Any]) -> str:
     _, path, _ = locate(ws, _require(args, "path"))
     if not path.is_file():
         raise ToolError(f"{args['path']} is not a file in your folder.")
+    try:
+        start = max(0, int(float(args.get("start") or 0)))
+    except (TypeError, ValueError):
+        raise ToolError("start must be a whole number.")
     total = path.stat().st_size
-    with path.open("rb") as f:  # never load a huge file just to show the start of it
-        data = f.read(MAX_READ * 4 + 4)
+    with path.open("rb") as f:  # never load a huge file just to show a part of it
+        data = f.read(min(4 * (start + MAX_READ) + 4, 16 * 1024 * 1024))
     if b"\0" in data[:4096]:
         raise ToolError(f"{args['path']} is a binary file and cannot be shown as text.")
     text = data.decode("utf-8", errors="replace")
-    if len(text) > MAX_READ or total > len(data):
-        shown = text[:MAX_READ]
-        rest = total - len(shown.encode("utf-8", errors="replace"))
-        return shown + (f"\n... (file continues for about {max(rest, 0)} more bytes; "
-                        "use run_python to read a specific part if you need it)")
-    return text
+    if start and start >= len(text) and total > len(data):
+        raise ToolError("start is further into the file than can be read at once. Use run_python to read that part.")
+    shown = text[start:start + MAX_READ]
+    if start + MAX_READ < len(text) or total > len(data):
+        return shown + f"\n... (the file continues; call read_file again with start={start + len(shown)})"
+    return shown
+
+
+def _as_text(content: Any, path: Any) -> str:
+    """The text to save. A JSON object or list sent as content is written as JSON (one item a line in a .jsonl
+    file), never as Python's own notation with single quotes."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (dict, list)):
+        if isinstance(content, list) and str(path).lower().endswith(".jsonl"):
+            return "\n".join(json.dumps(i, ensure_ascii=False) for i in content) + "\n"
+        return json.dumps(content, ensure_ascii=False, indent=2) + "\n"
+    return str(content)
 
 
 def write_file(ws: Where, args: Dict[str, Any]) -> str:
     root, path, prefix = locate(ws, _require(args, "path"))
-    content = _require(args, "content")
-    if not isinstance(content, str):
-        content = str(content)
+    content = _as_text(_require(args, "content"), args["path"])
     if path.is_dir():
         raise ToolError(f"{args['path']} is a folder.")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -728,16 +747,16 @@ def _run_capped(cmd: Union[str, List[str]], code: str, cwd: str, env: Dict[str, 
             "timed_out": timed_out}
 
 
-def _report(result: Dict[str, Any]) -> str:
+def _report(result: Dict[str, Any], quiet: str = "(The code printed nothing. Use print() to show results.)") -> str:
     if result["timed_out"]:
         return f"Stopped: the code ran longer than {PYTHON_TIMEOUT} seconds."
     parts = [f"Exit code: {result['exit']}"]
     if result["stdout"]:
         parts.append("Output:\n" + result["stdout"].rstrip())
-    if result["stderr"]:
-        parts.append("Errors:\n" + result["stderr"].rstrip())
+    if result["stderr"]:   # a program that succeeded often writes its notes ("wrote a.docx") to this stream
+        parts.append(("Errors:\n" if result["exit"] else "Messages:\n") + result["stderr"].rstrip())
     if not result["stdout"] and not result["stderr"]:
-        parts.append("(The code printed nothing. Use print() to show results.)")
+        parts.append(quiet)
     return _clip("\n".join(parts))
 
 
@@ -1086,21 +1105,163 @@ def run_terminal_file(where: Where, args: Dict[str, Any]) -> str:
     return f"Ran {result['path']}.\n" + _report(result)
 
 
-def fix_escaped_code(code: str) -> str:
-    """Small models sometimes send code with literal \\n instead of line breaks."""
-    if "\n" in code or "\\n" not in code:
-        return code
+# ------------------------------------------------------- repairing escaped code
+# Models often escape code twice: line breaks sent as a backslash and an n, quotes sent as a backslash and a
+# quote, the whole program wrapped in a Markdown fence. Each repair below changes the code only when it is
+# clearly wrong as sent (it does not compile, or a break or quote that must be real sits outside any quotes),
+# so code that was fine is never touched.
+
+_FENCE = re.compile(r"^\s*```[\w+-]*[ \t]*\r?\n(.*?)\r?\n?[ \t]*```\s*$", re.DOTALL)
+_ESCAPED = {"n": "\n", "r": "", "t": "\t"}
+_RUST_CHAR = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^\\'])'")
+_JSON_TEXT = re.compile(r"^((?:[\w.-]+[= ])?)\s*([\[{].*[\]}])$", re.DOTALL)
+_SINGLE_QUOTED = re.compile(r"'([^']*)'")
+
+
+def strip_fence(code: str) -> str:
+    """The code without a Markdown fence around it, which a model sometimes puts inside the argument."""
+    m = _FENCE.match(code)
+    return m.group(1) if m else code
+
+
+def _compiles(code: str) -> bool:
     try:
         compile(code, "agent_code.py", "exec")
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _unescape_outside(code: str, kind: str) -> str:
+    """Turn a backslash-n (also -r and -t) that sits outside every string into the real character. kind is
+    sh (single and double quotes), rust (strings, raw strings, characters) or maxima (double quotes)."""
+    out: List[str] = []
+    i, n = 0, len(code)
+    while i < n:
+        c = code[i]
+        if c == "\\" and i + 1 < n:
+            nxt = code[i + 1]
+            out.append(_ESCAPED[nxt] if nxt in _ESCAPED else code[i:i + 2])
+            i += 2
+        elif c == "'" and kind == "sh":
+            j = code.find("'", i + 1)
+            j = n - 1 if j < 0 else j
+            out.append(code[i:j + 1])
+            i = j + 1
+        elif c == "'" and kind == "rust":
+            m = _RUST_CHAR.match(code, i)
+            out.append(m.group(0) if m else c)
+            i = m.end() if m else i + 1
+        elif kind == "rust" and c == "r" and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] == "_")) \
+                and re.match(r'r#*"', code[i:]):
+            hashes = re.match(r"r(#*)\"", code[i:]).group(1)
+            end = code.find('"' + hashes, i + 2 + len(hashes))
+            end = n if end < 0 else end + 1 + len(hashes)
+            out.append(code[i:end])
+            i = end
+        elif c == '"':
+            j = i + 1
+            while j < n and code[j] != '"':
+                j += 2 if code[j] == "\\" else 1
+            out.append(code[i:j + 1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _literal_breaks(code: str, kind: str) -> str:
+    """Code sent as one line with backslash-n where its line breaks belong, as real line breaks. Code that
+    already has a line break is left alone: its backslash-n are inside strings, where they belong."""
+    if "\n" in code or "\\n" not in code:
         return code
-    except SyntaxError:
-        pass
-    fixed = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    fixed = _unescape_outside(code, kind)
+    return fixed if "\n" in fixed else code
+
+
+def fix_escaped_code(code: str) -> str:
+    """Python code that does not compile because it was escaped twice: a fence around it, literal \\n for line
+    breaks, or \\" for quotes. The first change that makes it compile is used; otherwise the code is returned as sent."""
+    code = strip_fence(code)
+    if _compiles(code):
+        return code
+    breaks = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t") if "\n" not in code and "\\n" in code else code
+    for candidate in (breaks, code.replace('\\"', '"'), breaks.replace('\\"', '"')):
+        if candidate != code and _compiles(candidate):
+            return candidate
+    return code
+
+
+def _json_without_backslashes(text: str) -> Optional[str]:
+    """text (JSON, or an id and JSON like 'text.insert={...}') with the backslash taken off each quote, when it
+    is not valid JSON as sent and is once they are off. Otherwise None."""
+    m = _JSON_TEXT.match(text.strip())
+    if not m:
+        return None
     try:
-        compile(fixed, "agent_code.py", "exec")
-        return fixed
-    except SyntaxError:
-        return code
+        json.loads(m.group(2))
+        return None
+    except ValueError:
+        pass
+    fixed = m.group(2).replace('\\"', '"')
+    try:
+        json.loads(fixed)
+    except ValueError:
+        return None
+    return m.group(1) + fixed
+
+
+def _shell_kind(shell: Any) -> str:
+    name = _shell_name(shell)
+    if name in ("", "auto"):
+        name = _shells_here()[0]
+    return "cmd" if name == "cmd" else "sh"
+
+
+def fix_shell_code(code: str, shell: Any = "auto") -> str:
+    """Terminal code, repaired where a model escaped it twice: a fence around it, literal \\n between commands
+    outside any quotes, and JSON in single quotes whose quotes carry a backslash (the shell passes the backslash
+    on, and the program reports bad JSON). In cmd, which does not read single quotes, JSON in single quotes is
+    rewritten with double quotes."""
+    code = strip_fence(code)
+    kind = _shell_kind(shell)
+    if kind != "cmd":
+        code = _literal_breaks(code, "sh")
+
+    def quoted(m: "re.Match[str]") -> str:
+        inner = m.group(1)
+        fixed = _json_without_backslashes(inner)
+        if kind != "cmd":
+            return f"'{fixed}'" if fixed is not None else m.group(0)
+        body = fixed if fixed is not None else inner
+        parsed = _JSON_TEXT.match(body.strip())
+        if parsed:
+            try:
+                json.loads(parsed.group(2))
+            except ValueError:
+                return m.group(0)
+            return '"' + body.strip().replace('"', '\\"') + '"'
+        return m.group(0)
+
+    return _SINGLE_QUOTED.sub(quoted, code)
+
+
+def fix_rust_code(code: str) -> str:
+    return _literal_breaks(strip_fence(code), "rust")
+
+
+def fix_cas_code(code: str, system: Any = None) -> str:
+    """CAS code repaired like the other languages: SymPy is Python; Maxima has its line breaks restored and
+    its string quotes unescaped when every quote was sent with a backslash."""
+    code = strip_fence(code)
+    if system == "sympy" or (system != "maxima" and re.match(r"\s*(?:import |from \w+ import |print\()", code)):
+        return fix_escaped_code(code)
+    code = _literal_breaks(code, "maxima")
+    quotes = [m.start() for m in re.finditer('"', code)]
+    if quotes and all(i > 0 and code[i - 1] == "\\" for i in quotes):
+        code = code.replace('\\"', '"')
+    return code
 
 
 # Names small models (Llama in particular) commonly use instead of the real ones.
@@ -1140,6 +1301,8 @@ TOOL_ALIASES = {
     "computer_algebra": "run_cas", "symbolic_math": "run_cas", "algebra": "run_cas",
     "ask_agent": "call_agent", "delegate": "call_agent", "delegate_task": "call_agent", "run_agent": "call_agent",
     "call_subagent": "call_agent", "subagent": "call_agent", "agent": "call_agent", "call_agents": "call_agent",
+    "craft": "run_craft", "craft_cli": "run_craft", "run_craft_cli": "run_craft", "run_cli": "run_craft",
+    "run_app": "run_craft", "run_craft_app": "run_craft", "craft_app": "run_craft",
     "ocr": "read_text", "read_image_text": "read_text", "image_to_text": "read_text", "extract_text": "read_text",
     "read_text_from_image": "read_text", "run_ocr": "read_text", "tesseract": "read_text",
 }
@@ -1164,6 +1327,9 @@ ARG_ALIASES = {
     "languages": ("languages", "language", "lang", "langs"),
     "agent": ("agent", "agent_name", "name", "to", "target", "callee", "assistant"),
     "message": ("message", "task", "prompt", "request", "instruction", "instructions", "query", "text", "content"),
+    "app": ("app", "program", "cli", "application", "craft", "app_name"),
+    "args": ("args", "arguments", "argv", "cli_args", "command_args", "params", "parameters", "options"),
+    "find": ("find", "filter", "grep", "contains"),
 }
 
 
@@ -1177,6 +1343,10 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
         name = key
     elif key in TOOL_ALIASES and TOOL_ALIASES[key] in allowed:
         name = TOOL_ALIASES[key]
+    elif RUN_CRAFT in allowed and _craft_id(key):   # a call named for the program, like photocraft or photocraft_cli
+        args = {"args": args} if isinstance(args, str) else dict(args) if isinstance(args, dict) else {}
+        args.setdefault("app", _craft_id(key))
+        name = RUN_CRAFT
     if name in ("run_maxima", "run_sympy") and "run_cas" in allowed:
         args = dict(args) if isinstance(args, dict) else args
         if isinstance(args, dict):
@@ -1207,9 +1377,205 @@ def normalize_call(name: Any, args: Any, allowed: List[str]) -> tuple:
         target = next((out[k] for k in ARG_ALIASES["path"] if isinstance(out.get(k), str)), None)
         if target:
             return "run_terminal_file", {"path": target, **({"shell": out["shell"]} if "shell" in out else {})}
-    if name == "run_python" and isinstance(out.get("code"), str):
-        out["code"] = fix_escaped_code(out["code"])
+    if name == RUN_CRAFT:
+        line = next((out[k] for k in ("command", "cmd", "code", "script") if isinstance(out.get(k), str)), None)
+        if "args" not in out and line:   # a whole command line, like "photocraft-cli info a.png"
+            parts = craft_argv(line)
+            if "app" not in out and parts and _craft_id(parts[0].lower().replace("-cli", "_cli")):
+                out["app"] = _craft_id(parts[0].lower().replace("-cli", "_cli"))
+            out["args"] = parts
+        if isinstance(out.get("app"), str):
+            out["app"] = _craft_id(out["app"].strip().lower().replace("-cli", "_cli")) or out["app"]
+        for k in ("command", "cmd", "code", "script"):
+            out.pop(k, None)
+    elif isinstance(out.get("code"), str):
+        fix = {"run_python": fix_escaped_code, "run_rust": fix_rust_code,
+               "run_terminal": lambda c: fix_shell_code(c, out.get("shell")),
+               "run_cas": lambda c: fix_cas_code(c, out.get("system"))}.get(name)
+        if fix:
+            out["code"] = fix(out["code"])
     return name, out
+
+
+# ------------------------------------------------------------------- run_craft
+# Runs <app>-cli without a shell. The quoting that breaks agent commands (JSON inside single quotes inside a
+# shell command inside a JSON tool call) is not needed: every argument is one list item, and JSON is written as
+# an object or list that Axis turns into text. The folder check reads the arguments the way the terminal check
+# reads shell code, but looks at whole values (a path, or a string inside JSON), so a document that merely
+# contains a slash or a tilde is not refused.
+
+MAX_CRAFT_ARGS = 500
+
+
+def _craft_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _craft_part(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        raise ToolError("An argument cannot be null.")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return _craft_json(value)
+
+
+def _craft_arg(item: Any) -> str:
+    if isinstance(item, dict) and set(item) == {"join"} and isinstance(item["join"], list):
+        return "".join(_craft_part(p) for p in item["join"])
+    text = _craft_part(item)
+    fixed = _json_without_backslashes(text) if isinstance(item, str) else None
+    return fixed if fixed is not None else text
+
+
+def _craft_id(name: str) -> str:
+    """The app that a name stands for (photocraft, photocraft_cli), or ''."""
+    try:
+        from . import artcraft
+    except ImportError:
+        return ""
+    base = name[:-4] if name.endswith("_cli") else name
+    return base if base in artcraft.APP_IDS else ""
+
+
+def craft_argv(value: Any, app: str = "") -> List[str]:
+    """The program's arguments from what a model sent: a list (the right form), or a command line as text."""
+    if isinstance(value, str):
+        text = value.strip()
+        parsed = None
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text, strict=False)
+            except ValueError:
+                parsed = None
+        if isinstance(parsed, list):
+            value = parsed
+        else:
+            try:
+                parts = shlex.split(text, posix=os.name != "nt")
+            except ValueError as exc:
+                raise ToolError(f"Could not read args ({exc}). Send args as a list, one item for each argument.")
+            value = [p[1:-1] if len(p) > 1 and p[0] == p[-1] and p[0] in "'\"" else p for p in parts]
+    if not isinstance(value, list):
+        raise ToolError('args must be a list with one item for each argument, e.g. ["info", "a.png"].')
+    if len(value) > MAX_CRAFT_ARGS:
+        raise ToolError(f"Too many arguments (limit {MAX_CRAFT_ARGS}). Put the steps in a script file instead.")
+    argv = [_craft_arg(v) for v in value]
+    if argv and app and argv[0].lower() in (app, app + "-cli", app + "-cli.exe"):
+        argv = argv[1:]   # the program's name is already known
+    if any("\0" in a for a in argv):
+        raise ToolError("An argument has a null character in it.")
+    return argv
+
+
+def _json_strings(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _json_strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _json_strings(v)]
+    return []
+
+
+def _outside_value(value: str, roots: List[Path], cwd: Path) -> Optional[str]:
+    """value if it is one path (no spaces) that names a place outside roots, else None."""
+    v = value.strip()
+    if not v or len(v) > 500 or re.search(r"\s", v) or _URL.match(v):
+        return None
+    if v.startswith("~") or _HOME.match(v):
+        return v
+    absolute = v.startswith(("/", "\\\\")) or bool(re.match(r"^[A-Za-z]:[\\/]", v))
+    if not absolute and ".." not in re.split(r"[\\/]", v):
+        return None
+    if v.lower() in _DEVICES:
+        return None
+    target = Path(v.replace("\\", "/"))
+    return None if _within(target if target.is_absolute() else cwd / target, roots) else v
+
+
+def check_craft_args(where: Where, argv: List[str]) -> None:
+    """Refuse an argument that names a place outside the agent's folder: a path, an option=path, or a string
+    inside JSON (alone, or after an id as in text.insert={...})."""
+    p = places(where)
+    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
+    cwd = p.personal.resolve()
+    for arg in argv:
+        found = [arg, arg.split("=", 1)[-1]]
+        m = _JSON_TEXT.match(arg.strip())
+        if m:
+            try:
+                found += _json_strings(json.loads(m.group(2)))
+            except ValueError:
+                pass
+        for text in found:
+            bad = _outside_value(text, roots, cwd)
+            if bad:
+                raise ToolError(f"The argument '{bad}' is outside your folder. Only {roots[0]} and the folders "
+                                "inside it can be used. Use paths inside your folder.")
+
+
+def find_in_output(text: str, needle: str) -> str:
+    """The parts of a program's output that contain needle (not case-sensitive): the items of a JSON list, or
+    the lines of text, where an indented line belongs to the line above it."""
+    needle = needle.strip().lower()
+    if not needle:
+        return text
+    body = text.strip()
+    if body[:1] == "[":
+        try:
+            items = json.loads(body)
+        except ValueError:
+            items = None
+        if isinstance(items, list):
+            lines = [_craft_json(i) for i in items]
+            return "\n".join(l for l in lines if needle in l.lower())
+    blocks: List[str] = []
+    for line in text.splitlines():
+        if line[:1].isspace() and blocks:
+            blocks[-1] += "\n" + line
+        else:
+            blocks.append(line)
+    return "\n".join(b for b in blocks if needle in b.lower())
+
+
+def _craft_missing(app: str) -> str:
+    from . import craft_skills
+    return craft_skills.missing(app)
+
+
+def run_craft(where: Where, args: Dict[str, Any]) -> str:
+    from . import artcraft
+    app = str(_require(args, "app") or "").strip().lower()
+    for suffix in (".exe", "-cli", "_cli"):
+        if app.endswith(suffix):
+            app = app[:-len(suffix)]
+    if app not in artcraft.APP_IDS:
+        raise ToolError("app must be one of: " + ", ".join(artcraft.APP_IDS) + ".")
+    argv = craft_argv(_require(args, "args"), app)
+    program = artcraft.cli_program(app)
+    if program is None:
+        raise ToolError(_craft_missing(app))
+    check_craft_args(where, argv)
+    folder = places(where).personal.resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    base, temp = _temp_dir(folder)
+    env = _run_env(where, temp)
+    try:
+        result = _run_capped([str(program)] + argv, "", str(folder), env, TERMINAL_TIMEOUT, _run_kwargs())
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 206 or exc.errno == errno.E2BIG:
+            raise ToolError("The arguments are too long for one command. Write them to a file with write_file and "
+                            "use the app's script option instead.")
+        raise ToolError(f"Could not start {program.name}: {exc.strerror or exc}")
+    finally:
+        _finish_temp(base, temp)
+    needle = args.get("find")
+    if isinstance(needle, str) and needle.strip() and result["stdout"]:
+        kept = find_in_output(result["stdout"], needle)
+        result = {**result, "stdout": kept if kept else f"(no line contains '{needle.strip()}')"}
+    return _report(result, "(The program printed nothing.)")
 
 
 def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
@@ -1274,7 +1640,8 @@ def read_text(where: Where, args: Dict[str, Any]) -> str:
 # the terminal skill for ls/cat/mkdir/rm and the Workspace tab remains available
 # to the user.
 FILE_TOOLS = ()
-EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file")
+EXECUTION_TOOLS = ("run_python", "run_python_file", "run_rust", "run_rust_file", "run_terminal", "run_terminal_file",
+                   RUN_CRAFT)
 # Actions that work in the agent's folder, so the agent is told about the folder.
 FOLDER_TOOLS = EXECUTION_TOOLS + ("run_cas", "read_text")
 HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
@@ -1291,6 +1658,7 @@ HANDLERS: Dict[str, Callable[[Where, Dict[str, Any]], str]] = {
     "run_rust_file": run_rust_file,
     "run_terminal": run_terminal,
     "run_terminal_file": run_terminal_file,
+    RUN_CRAFT: run_craft,
     "generate_image": generate_image,
     "run_cas": run_cas,
     "read_text": read_text,
