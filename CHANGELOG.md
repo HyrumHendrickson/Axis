@@ -4,6 +4,26 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.4] - 2026-10-30
+
+### Added
+- **Tools in the sidebar.** Images, Art Craft and OCR are inside a new **Tools** group, which opens and closes. It opens by itself when you are on one of those pages, and shows **Working…** while closed if one of them is busy.
+- **Choose the workspace folder.** The Workspace's **Folder** menu lets you choose any folder on the computer for agents and the Workspace to work in, or go back to the default (`Axis/shared`). The choice is kept in `Axis/workspace-settings.json`. The top of a drive and Axis's own data folder cannot be chosen. If the chosen folder disappears, Axis uses the default and says so.
+- **A folder for one chat.** The **Folder** menu in an agent's chat keeps that chat's agent in a folder of its own instead of the workspace folder. The choice is saved with the chat. A new chat starts in the workspace folder.
+- **Terminal commands an agent sees.** The agent panels on the Terminal and Workspace pages have a **Terminal commands** menu (Off, 1, 3, 5, 10, 25 or 100). The agent is shown that many of your newest commands with their output, up to about 16,000 characters. The default is 5.
+- API: `GET`/`PUT /api/workspace`, `GET /api/folders`; `/api/chat` takes `folder` and `terminal_commands`; saved chats have a `folder` field; the file routes accept `_images`.
+
+### Changed
+- **Pictures go to `Axis/images`.** Every picture Axis makes, on the Images page or by an agent, is saved there instead of in the workspace. The gallery always shows that folder and has **Open folder** and **Show in folder**. Pictures made before 4.3.4 stay where they were, and older chats still show them. `GET /api/images/gallery` no longer takes `place`.
+- **Agents stay in their folder.** Run Python now also refuses to read files, look inside folders, or change to a folder outside the agent's folder. It may still read Python's own files and the system's program folders, which code needs to run. Terminal and Rust code from an agent is read before it runs and refused when it names a place outside the folder: a full path, a `..` that climbs out, the home folder, or a bare `cd`. These are guards against mistakes, not a sandbox. The Workspace **Run** button, which you use yourself, is not checked.
+- Scratch files of an agent's terminal and Rust programs stay inside its folder.
+
+### Removed
+- **The Skills page.** Agents still choose their skills in their own settings, and the skills API is unchanged, but skills can no longer be made or edited on a page of their own.
+
+### Fixed
+- Folder buttons in the picture chooser showed an oversized icon that covered their names.
+
 ### Fixed
 - On Windows, finding the Microsoft C++ build tools never worked: `cmd.exe` was given a command with backslash-escaped quotes, which it cannot read. Axis then reported Rust as not installed or unverifiable, and started the build tools installer again each time. `cmd.exe` now gets one command line it can read. The same fix makes the terminal action work with `cmd` on Windows.
 - A found C++ build environment is remembered for the rest of the run, so programs an agent starts no longer wait for it each time.

@@ -1,0 +1,2358 @@
+From 516126fafe4001d47be6be93b90661370016ad5f Mon Sep 17 00:00:00 2001
+From: Axis <axis@localhost>
+Date: Fri, 30 Oct 2026 13:17:58 +0000
+Subject: [PATCH] Axis 4.3.4: Tools sidebar group, choosable workspace and chat
+ folders, terminal command history for agents, pictures in Axis/images
+
+- Sidebar: Images, Art Craft and OCR move into a collapsible Tools group; the Skills page is removed.
+- Workspace folder can be any folder on the computer (Axis/workspace-settings.json); default Axis/shared.
+- A chat can keep its agent in a folder of its own, saved with the chat.
+- Agents cannot leave their folder: Run Python also blocks reads, listings and folder changes outside it;
+  terminal and Rust code naming places outside the folder is refused before it runs.
+- Agent panels choose how many recent terminal commands (with output) the agent sees.
+- Every generated picture is saved in Axis/images instead of the workspace.
+- New routes: GET/PUT /api/workspace, GET /api/folders.
+---
+ CHANGELOG.md          |  20 +++
+ README.md             |   7 +-
+ axis/VERSION          |   2 +-
+ axis/agents.py        |   9 +-
+ axis/chats.py         |  12 +-
+ axis/images.py        |  22 +--
+ axis/paths.py         |  82 ++++++++-
+ axis/server.py        | 185 ++++++++++++++++----
+ axis/terminal.py      |  45 ++++-
+ axis/tools.py         | 203 +++++++++++++++++++---
+ axis/web/index.html   | 383 +++++++++++++++++++++++-------------------
+ docs/api.md           |  13 +-
+ docs/architecture.md  |   8 +-
+ docs/configuration.md |   4 +
+ docs/user-guide.md    |  40 +++--
+ tests/test_axis.py    | 187 +++++++++++++++++++--
+ 16 files changed, 928 insertions(+), 294 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 285b88b..84ed8cf 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,26 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++## [4.3.4] - 2026-10-30
++
++### Added
++- **Tools in the sidebar.** Images, Art Craft and OCR are inside a new **Tools** group, which opens and closes. It opens by itself when you are on one of those pages, and shows **Working…** while closed if one of them is busy.
++- **Choose the workspace folder.** The Workspace's **Folder** menu lets you choose any folder on the computer for agents and the Workspace to work in, or go back to the default (`Axis/shared`). The choice is kept in `Axis/workspace-settings.json`. The top of a drive and Axis's own data folder cannot be chosen. If the chosen folder disappears, Axis uses the default and says so.
++- **A folder for one chat.** The **Folder** menu in an agent's chat keeps that chat's agent in a folder of its own instead of the workspace folder. The choice is saved with the chat. A new chat starts in the workspace folder.
++- **Terminal commands an agent sees.** The agent panels on the Terminal and Workspace pages have a **Terminal commands** menu (Off, 1, 3, 5, 10, 25 or 100). The agent is shown that many of your newest commands with their output, up to about 16,000 characters. The default is 5.
++- API: `GET`/`PUT /api/workspace`, `GET /api/folders`; `/api/chat` takes `folder` and `terminal_commands`; saved chats have a `folder` field; the file routes accept `_images`.
++
++### Changed
++- **Pictures go to `Axis/images`.** Every picture Axis makes, on the Images page or by an agent, is saved there instead of in the workspace. The gallery always shows that folder and has **Open folder** and **Show in folder**. Pictures made before 4.3.4 stay where they were, and older chats still show them. `GET /api/images/gallery` no longer takes `place`.
++- **Agents stay in their folder.** Run Python now also refuses to read files, look inside folders, or change to a folder outside the agent's folder. It may still read Python's own files and the system's program folders, which code needs to run. Terminal and Rust code from an agent is read before it runs and refused when it names a place outside the folder: a full path, a `..` that climbs out, the home folder, or a bare `cd`. These are guards against mistakes, not a sandbox. The Workspace **Run** button, which you use yourself, is not checked.
++- Scratch files of an agent's terminal and Rust programs stay inside its folder.
++
++### Removed
++- **The Skills page.** Agents still choose their skills in their own settings, and the skills API is unchanged, but skills can no longer be made or edited on a page of their own.
++
++### Fixed
++- Folder buttons in the picture chooser showed an oversized icon that covered their names.
++
+ ### Fixed
+ - On Windows, finding the Microsoft C++ build tools never worked: `cmd.exe` was given a command with backslash-escaped quotes, which it cannot read. Axis then reported Rust as not installed or unverifiable, and started the build tools installer again each time. `cmd.exe` now gets one command line it can read. The same fix makes the terminal action work with `cmd` on Windows.
+ - A found C++ build environment is remembered for the rest of the run, so programs an agent starts no longer wait for it each time.
+diff --git a/README.md b/README.md
+index c2f8f9e..5e843b5 100644
+--- a/README.md
++++ b/README.md
+@@ -30,11 +30,12 @@
+ Axis runs a small web app on your computer and opens it in a window of its own. It talks to a model served locally by **Ollama** or **llama.cpp**.
+ 
+ - **Chat** directly with a model, or with agents you design.
+-- **Agents** have their own system prompt, standing instructions, skills, and private folder.
++- **Agents** have their own system prompt, standing instructions, and skills. They work in the workspace folder (`Axis/shared`, or any folder you choose), or in a folder you choose for one chat, and cannot leave it.
+ - **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
+-- **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Every skill, built in or your own, can be edited, shows exactly what it sends to the model, and built-in ones can be reset to default.
++- **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Choose them in each agent's settings.
+ - **Past chats** are saved automatically and can be resumed at any time. Any message you sent can be edited and sent again.
+-- **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
++- **Tools** in the sidebar holds Images, Art Craft and OCR.
++- **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp) and saved in `Axis/images`.
+ - **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
+ - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
+ - **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.
+diff --git a/axis/VERSION b/axis/VERSION
+index e91d9be..eda862a 100644
+--- a/axis/VERSION
++++ b/axis/VERSION
+@@ -1 +1 @@
+-4.3.3
++4.3.4
+diff --git a/axis/agents.py b/axis/agents.py
+index 9be4c5f..2ab11df 100644
+--- a/axis/agents.py
++++ b/axis/agents.py
+@@ -3,7 +3,8 @@
+ Each agent lives in ~/Axis/agents/<name>/:
+ 
+     agent.json   settings
+-Files made by agents are saved in ~/Axis/shared, the one workspace shared by every agent.
++Files made by agents are saved in the workspace folder shared by every agent: ~/Axis/shared, or the
++folder the user chose for the Workspace (paths.workspace_root). A chat can use a folder of its own.
+ 
+ Settings:
+ * system_prompt  who the agent is (sent as the system message)
+@@ -29,7 +30,7 @@ from . import chats as chat_lib
+ from . import runner
+ from . import skills as skill_lib
+ from . import tools as tool_lib
+-from .paths import axis_home, remove_tree, shared_root
++from .paths import axis_home, remove_tree, shared_root, workspace_root
+ 
+ DEFAULT_PROMPT = "You are a concise and helpful assistant."
+ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+@@ -82,7 +83,7 @@ class Agent:
+ 
+     @property
+     def workspace(self) -> Path:
+-        return shared_root()
++        return workspace_root()
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = asdict(self)
+@@ -409,7 +410,7 @@ def shared_folder(agent: Optional[Agent]) -> Optional[Path]:
+     """The one workspace shared by every agent that can work with files."""
+     if agent is None:
+         return None
+-    root = shared_root()
++    root = workspace_root()
+     root.mkdir(parents=True, exist_ok=True)
+     return root
+ 
+diff --git a/axis/chats.py b/axis/chats.py
+index 459e8e4..25a207b 100644
+--- a/axis/chats.py
++++ b/axis/chats.py
+@@ -2,9 +2,10 @@
+ 
+ Each chat is ~/Axis/chats/<id>.json:
+ 
+-    {"id", "agent", "title", "created", "updated", "messages": [...]}
++    {"id", "agent", "title", "folder", "created", "updated", "messages": [...]}
+ 
+-agent is "" for Direct chat. title is "" unless the user renamed the chat; the
++agent is "" for Direct chat. folder is the full path of the folder the chat keeps its agent
++in, or "" for the workspace folder (it is checked when the chat sends a message). title is "" unless the user renamed the chat; the
+ list shows the first message instead. Chats are only deleted by the user, or
+ together with their agent.
+ """
+@@ -24,6 +25,7 @@ from .paths import axis_home
+ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,63}$")
+ MAX_MESSAGES = 2000
+ MAX_TITLE = 200
++MAX_FOLDER = 4096
+ 
+ _LOCK = threading.Lock()
+ _META: Dict[str, Tuple[float, Dict[str, Any]]] = {}  # path -> (mtime, summary) so listing stays fast
+@@ -60,6 +62,7 @@ def summary(chat: Dict[str, Any]) -> Dict[str, Any]:
+         "agent": chat.get("agent") or "",
+         "title": chat.get("title") or _first_line(first) or "Untitled chat",
+         "custom_title": bool(chat.get("title")),
++        "folder": chat.get("folder") or "",
+         "created": chat.get("created") or "",
+         "updated": chat.get("updated") or "",
+         "messages": len(msgs),
+@@ -134,13 +137,16 @@ def save(chat_id: str, data: Dict[str, Any], agent: str) -> Dict[str, Any]:
+     title = data.get("title") or ""
+     if not isinstance(title, str):
+         raise ChatError("title must be text.")
++    folder = data.get("folder") or ""
++    if not isinstance(folder, str) or len(folder) > MAX_FOLDER:
++        raise ChatError("folder must be a folder's full path.")
+     with _LOCK:
+         try:
+             old = _read(path) if path.is_file() else {}
+         except ChatError:
+             old = {}
+         chat = {
+-            "id": chat_id, "agent": agent, "title": title.strip()[:MAX_TITLE],
++            "id": chat_id, "agent": agent, "title": title.strip()[:MAX_TITLE], "folder": folder.strip(),
+             "created": old.get("created") or _now(), "updated": _now(), "messages": messages,
+         }
+         _write(chat)
+diff --git a/axis/images.py b/axis/images.py
+index 3836515..2c218e9 100644
+--- a/axis/images.py
++++ b/axis/images.py
+@@ -16,10 +16,11 @@ Stored in ~/Axis:
+     image-settings.json        where sd-cli is, the folder it runs in, the default model
+     image-models/<id>.json     one file per image model
+ 
+-Pictures made in the Images tab go to ~/Axis/shared/images. Pictures an agent
+-makes with the generate_image action go to images/ in that agent's own folder.
+-Each images/ folder keeps a hidden index (.axis-images.json) with the prompt and
+-settings of every picture, for the gallery.
++Every picture Axis makes, in the Images tab or with an agent's generate_image
++action, goes to ~/Axis/images (paths.images_folder), never into the workspace.
++The folder keeps a hidden index (.axis-images.json) with the prompt and settings
++of every picture, for the gallery. Pictures made before Axis 4.3.4 stay where they
++were saved (images/ in the shared folder).
+ 
+ Editing a picture (image to image): when a request names an init image, the same
+ model starts from that picture instead of from noise. strength (0 to 1) sets how far
+@@ -607,7 +608,8 @@ _LOCK = threading.Lock()  # one picture at a time: they compete for the same GPU
+ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
+              on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False,
+              init_image: Optional[Path] = None, init_name: str = "") -> Dict[str, Any]:
+-    """Make one picture in folder/images. Returns its index record (with "path").
++    """Make one picture in folder (normally paths.images_folder()). Returns its index record (with "path",
++    the file's name inside folder).
+ 
+     With init_image the picture is an edit of that file (image to image); init_name is
+     how the source is shown in the gallery (for example "shared:uploads/cat.png").
+@@ -635,7 +637,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
+     while not _LOCK.acquire(timeout=1.0):
+         emit({"queued": True})  # also notices a browser that has gone away
+     try:
+-        out_dir = folder / IMAGES_DIR
++        out_dir = folder
+         out_dir.mkdir(parents=True, exist_ok=True)
+         name = _file_name(params["prompt"])
+         out_file, n = out_dir / f"{name}.png", 2
+@@ -695,7 +697,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
+     shown = {k: v for k, v in params.items() if k != "init_image"}   # the full path stays private
+     if init_image is not None:
+         shown["edited_from"] = init_name or init_image.name
+-    record = {"file": out_file.name, "path": f"{IMAGES_DIR}/{out_file.name}", "model": model["name"],
++    record = {"file": out_file.name, "path": out_file.name, "model": model["name"],
+               "model_id": model["id"], **shown, "seconds": seconds, "source": source,
+               "created": datetime.now().isoformat(timespec="seconds")}
+     _add_to_index(out_dir, record)
+@@ -1000,8 +1002,8 @@ def _add_to_index(out_dir: Path, record: Dict[str, Any]) -> None:
+ 
+ 
+ def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
+-    """Pictures in folder/images, newest first, with their prompts where known."""
+-    out_dir = folder / IMAGES_DIR
++    """Pictures in folder (normally paths.images_folder()), newest first, with their prompts where known."""
++    out_dir = folder
+     if not out_dir.is_dir():
+         return []
+     items = _read_json(out_dir / INDEX_NAME, [])
+@@ -1015,7 +1017,7 @@ def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
+             mtime = f.stat().st_mtime
+         except OSError:
+             continue
+-        info.update({"file": f.name, "path": f"{IMAGES_DIR}/{f.name}", "mtime": mtime})
++        info.update({"file": f.name, "path": f.name, "mtime": mtime})
+         info.setdefault("created", datetime.fromtimestamp(mtime).isoformat(timespec="seconds"))
+         result.append(info)
+     result.sort(key=lambda i: i["mtime"], reverse=True)
+diff --git a/axis/paths.py b/axis/paths.py
+index aa1b4d1..b8b216b 100644
+--- a/axis/paths.py
++++ b/axis/paths.py
+@@ -1,7 +1,13 @@
+-"""Where Axis keeps its data."""
++"""Where Axis keeps its data.
++
++The workspace is the folder agents and the Workspace tab work in. It is ~/Axis/shared unless the
++user chose another folder; the choice is kept in ~/Axis/workspace-settings.json. A chat can also use
++a folder of its own (see check_work_folder). Pictures Axis makes always go to ~/Axis/images.
++"""
+ 
+ from __future__ import annotations
+ 
++import json
+ import os
+ import shutil
+ import stat
+@@ -19,6 +25,80 @@ def shared_root() -> Path:
+     return axis_home() / "shared"
+ 
+ 
++def images_folder() -> Path:
++    """Where every picture Axis makes is saved (the Images tab and the generate_image action)."""
++    return axis_home() / "images"
++
++
++def _workspace_settings() -> Path:
++    return axis_home() / "workspace-settings.json"
++
++
++class FolderError(Exception):
++    pass
++
++
++def check_work_folder(value: object) -> Path:
++    """A folder the user chose for the workspace or for one chat, as an absolute, resolved path.
++
++    Any existing folder may be chosen except the top of a drive or file system, and Axis's own data
++    folder (the shared folder inside it is allowed), so agents cannot change Axis's settings or models.
++    """
++    if not isinstance(value, str) or not value.strip():
++        raise FolderError("Choose a folder.")
++    raw = Path(value.strip()).expanduser()
++    if not raw.is_absolute():
++        raise FolderError("Give the folder's full path, for example /home/you/projects or C:\\Users\\you\\projects.")
++    try:
++        folder = raw.resolve()
++    except OSError as exc:
++        raise FolderError(f"That folder cannot be used: {exc.strerror or exc}") from exc
++    if not folder.is_dir():
++        raise FolderError(f"Folder '{value.strip()}' does not exist.")
++    if folder.parent == folder:
++        raise FolderError("The top of a drive cannot be used. Choose a folder inside it.")
++    home = axis_home()
++    if inside(folder, home) and not inside(folder, shared_root()):
++        raise FolderError(f"Folders inside {home} hold Axis's own data and cannot be used, except {shared_root()}.")
++    return folder
++
++
++def workspace_root() -> Path:
++    """The folder agents and the Workspace tab use: the one the user chose, or ~/Axis/shared."""
++    try:
++        data = json.loads(_workspace_settings().read_text(encoding="utf-8"))
++        chosen = data.get("folder") if isinstance(data, dict) else None
++        if chosen:
++            return check_work_folder(chosen)
++    except (OSError, ValueError, FolderError):
++        pass   # no setting, or the chosen folder is gone: use the default
++    return shared_root()
++
++
++def workspace_setting() -> dict:
++    """What the Workspace folder setting holds, for the page."""
++    chosen = ""
++    try:
++        data = json.loads(_workspace_settings().read_text(encoding="utf-8"))
++        chosen = str(data.get("folder") or "") if isinstance(data, dict) else ""
++    except (OSError, ValueError):
++        pass
++    root = workspace_root()
++    return {"folder": str(root), "default": str(shared_root()), "is_default": root == shared_root(),
++            "missing": chosen if chosen and root == shared_root() else ""}
++
++
++def set_workspace_root(value: object) -> dict:
++    """Use value as the workspace folder; an empty value goes back to ~/Axis/shared."""
++    folder = "" if value in (None, "") else str(check_work_folder(value))
++    path = _workspace_settings()
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_suffix(".json.tmp")
++    tmp.write_text(json.dumps({"folder": folder}, indent=2), encoding="utf-8")
++    os.replace(tmp, path)
++    return workspace_setting()
++
++
+ def models_root() -> Path:
+     """Model files Axis downloads: models/llm (GGUF for llama.cpp) and models/image (Stable Diffusion)."""
+     return axis_home() / "models"
+diff --git a/axis/server.py b/axis/server.py
+index ed83f1f..28f0d36 100644
+--- a/axis/server.py
++++ b/axis/server.py
+@@ -18,7 +18,8 @@ Routes:
+   GET    /api/agents/<name>/files           files in the shared workspace (flat list)
+   POST   /api/agents/<name>/open-folder     show the shared workspace in Explorer/Finder
+   GET    /api/files/<name>?path=dir         one folder of an agent's folder (the Workspace tab)
+-                                            (<name> "_shared" means the folder shared by agents)
++                                            (<name> "_shared" means the workspace folder shared by agents,
++                                            and "_images" the folder of pictures Axis made)
+   GET    /api/files/<name>/view?path=file   a file prepared for preview
+   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
+   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
+@@ -41,8 +42,15 @@ Routes:
+   POST   /api/chat                          stream a reply as newline-delimited JSON
+                                             (a user message may carry "images": [{place, path}] for
+                                             models that read pictures; "terminal": id shows the agent
+-                                            that terminal's recent output; "workspace": {place, path, file}
+-                                            shows the agent the Workspace folder the user is looking at)
++                                            that terminal's recent commands and output, "terminal_commands": n
++                                            how many of them (0 for none, default 5); "workspace":
++                                            {place, path, file} shows the agent the Workspace folder the user
++                                            is looking at; "folder": a full path keeps the agent in that folder
++                                            for this chat instead of the workspace folder)
++  GET    /api/workspace                     the workspace folder {folder, default, is_default, missing}
++  PUT    /api/workspace                     use another folder as the workspace {folder} ("" for the default)
++  GET    /api/folders?path=p                the folders inside p, for choosing a folder {path, parent, folders,
++                                            roots, home} (no path: the home folder)
+   GET    /api/terminal                      open terminals
+   POST   /api/terminal                      open a terminal {place?, path?, shell?} in that folder (default: shared)
+   GET    /api/terminal/<id>?since=n         output from offset n {text, next, reset, alive, exit}
+@@ -59,7 +67,7 @@ Routes:
+   POST   /api/images/models                 add an image model
+   PUT    /api/images/models/<id>            change an image model
+   DELETE /api/images/models/<id>            remove an image model (its files are not touched)
+-  GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
++  GET    /api/images/gallery                pictures Axis made, in ~/Axis/images (newest first)
+   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
+                                             ("preview": true also streams each step as a small picture;
+                                             "init_image": {place, path} and "strength" edit that picture)
+@@ -111,7 +119,7 @@ from pathlib import Path
+ from typing import Any, Dict, List, Optional, Union
+ 
+ from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
+-from .paths import remove_tree, shared_root
++from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
+ 
+ WEB_DIR = Path(__file__).resolve().parent / "web"
+ MAX_BODY = 5 * 1024 * 1024
+@@ -137,33 +145,99 @@ def page() -> bytes:
+ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+ 
+ 
+-# The Workspace tab's name for the shared folder. It can never clash with an agent,
+-# because agent names must start with a letter or number.
++# The Workspace tab's names for the workspace folder and the pictures folder. They can never clash
++# with an agent, because agent names must start with a letter or number.
+ SHARED_NAME = "_shared"
++IMAGES_NAME = "_images"
+ 
+ 
+ class SharedPlace:
+-    """Stands in for an agent in the file routes so the shared folder can be browsed."""
++    """Stands in for an agent in the file routes so the workspace folder can be browsed."""
+ 
+     name = SHARED_NAME
+ 
+     @property
+     def workspace(self) -> Path:
+-        return shared_root()
++        return workspace_root()
+ 
+ 
+-Place = Union[agents.Agent, SharedPlace]
++class ImagesPlace:
++    """The folder where every picture Axis makes is saved (~/Axis/images)."""
++
++    name = IMAGES_NAME
++
++    @property
++    def workspace(self) -> Path:
++        return images_folder()
++
++
++Place = Union[agents.Agent, SharedPlace, ImagesPlace]
+ 
+ 
+ def place(name: str) -> Place:
+     if name == SHARED_NAME:
+-        shared_root().mkdir(parents=True, exist_ok=True)
++        workspace_root().mkdir(parents=True, exist_ok=True)
+         return SharedPlace()
++    if name == IMAGES_NAME:
++        images_folder().mkdir(parents=True, exist_ok=True)
++        return ImagesPlace()
+     return agents.load(name)
+ 
+ 
+ def _owner(agent: Place) -> str:
+-    return "the shared folder" if isinstance(agent, SharedPlace) else f"{agent.name}'s folder"
++    if isinstance(agent, SharedPlace):
++        return "the workspace folder"
++    if isinstance(agent, ImagesPlace):
++        return "the images folder"
++    return f"{agent.name}'s folder"
++
++
++MAX_FOLDERS = 2000   # folders listed by /api/folders
++
++
++def _roots() -> List[str]:
++    """The tops of the file systems: drive letters on Windows, / elsewhere."""
++    if os.name != "nt":
++        return ["/"]
++    import string
++    return [f"{d}:\\" for d in string.ascii_uppercase if os.path.isdir(f"{d}:\\")]
++
++
++def folder_choices(raw: str) -> Dict[str, Any]:
++    """The folders inside one folder of the computer, so the page can let the user choose one.
++
++    Only names of folders are listed, never files. This shows the user their own computer; agents
++    never call it.
++    """
++    home = Path.home()
++    try:
++        folder = Path(raw).expanduser().resolve() if raw else home
++    except OSError as exc:
++        raise agents.AgentError(f"That folder cannot be opened: {exc.strerror or exc}") from exc
++    if not folder.is_absolute():
++        raise agents.AgentError("Give the folder's full path.")
++    if not folder.is_dir():
++        raise agents.AgentError(f"Folder '{raw}' does not exist.")
++    found: List[Dict[str, str]] = []
++    try:
++        with os.scandir(folder) as it:
++            for entry in it:
++                try:
++                    if entry.is_dir() and not entry.name.startswith("."):
++                        found.append({"name": entry.name, "path": str(folder / entry.name)})
++                except OSError:
++                    continue
++    except OSError as exc:
++        raise agents.AgentError(f"Axis cannot look inside '{folder}' ({exc.strerror or exc}).") from exc
++    found.sort(key=lambda e: e["name"].lower())
++    usable = True
++    try:
++        check_work_folder(str(folder))
++    except FolderError:
++        usable = False
++    return {"path": str(folder), "parent": "" if folder.parent == folder else str(folder.parent),
++            "folders": found[:MAX_FOLDERS], "more": max(0, len(found) - MAX_FOLDERS), "roots": _roots(),
++            "home": str(home), "usable": usable}
+ 
+ 
+ MAX_NAME_BYTES = 200   # leaves room for " (2)" and a temporary prefix inside the 255-byte limit of most file systems
+@@ -549,7 +623,7 @@ def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
+ 
+ def run_script(agent: "Place", rel: str) -> Dict[str, Any]:
+     """Run a Workspace program with the action matching its file type."""
+-    shared = None if isinstance(agent, SharedPlace) else agents.shared_folder(agent)
++    shared = agents.shared_folder(agent) if isinstance(agent, agents.Agent) else None
+     started = time.monotonic()
+     try:
+         where = tools.Places(agent.workspace, shared)
+@@ -580,17 +654,40 @@ def folder_path(agent: "Place", rel: str) -> Path:
+     return folder
+ 
+ 
+-def with_terminal(messages: List[Dict[str, Any]], sid: Any) -> List[Dict[str, Any]]:
+-    """Show the agent the newest output of a terminal, added to the newest message."""
+-    if not sid:
++DEFAULT_TERMINAL_COMMANDS = 5
++
++
++def terminal_commands(value: Any) -> int:
++    """How many of the newest terminal commands an agent is shown (0 to terminal.MAX_COMMANDS)."""
++    if value is None or value == "":
++        return DEFAULT_TERMINAL_COMMANDS
++    try:
++        n = int(value)
++    except (TypeError, ValueError):
++        raise agents.AgentError("terminal_commands must be a whole number.") from None
++    return max(0, min(n, terminal.MAX_COMMANDS))
++
++
++def with_terminal(messages: List[Dict[str, Any]], sid: Any, commands: int = DEFAULT_TERMINAL_COMMANDS) -> List[Dict[str, Any]]:
++    """Show the agent the newest commands of a terminal and their output, added to the newest message.
++
++    commands is how many of the commands typed into it (counting back from the newest) are shown,
++    each with what it printed. 0 shows nothing.
++    """
++    if not sid or commands <= 0:
+         return messages
+     try:
+         session = terminal.get(str(sid))
+     except terminal.TerminalError:
+         return messages
+-    shot = session.snapshot().strip("\n") or "(nothing yet)"
++    shot, shown = session.recent(commands)
++    shot = shot.strip("\n") or "(nothing yet)"
++    if shown:
++        what = f"The last {shown} command{'' if shown == 1 else 's'} typed into it and their output"
++    else:
++        what = "Its output (no commands have been typed into it yet)"
+     note = (f"\n\n---\nThe user's terminal ({session.shell}, started in {session.cwd}). "
+-            f"Its newest output, which you can see but not type into:\n```\n{shot}\n```")
++            f"{what}, which you can see but not type into:\n```\n{shot}\n```")
+     last = messages[-1]
+     return messages[:-1] + [{**last, "content": last["content"] + note}]
+ 
+@@ -622,6 +719,8 @@ def with_workspace(messages: List[Dict[str, Any]], ctx: Any, agent: Optional[age
+         listing = folder_listing(where, str(ctx.get("path") or ""))
+     except (agents.AgentError, tools.ToolError):
+         return messages
++    if isinstance(where, ImagesPlace):
++        return messages
+     shared = isinstance(where, SharedPlace)
+     own = agent is not None and not shared and where.name == agent.name
+     has_shared = shared and agent is not None and skills.SHARED_SKILL in agent.skills
+@@ -659,6 +758,17 @@ def with_workspace(messages: List[Dict[str, Any]], ctx: Any, agent: Optional[age
+     return messages[:-1] + [{**last, "content": last["content"] + "\n\n" + "\n".join(lines)}]
+ 
+ 
++def chat_folder(value: Any) -> Optional[Path]:
++    """The folder one chat keeps its agent in, or None for the workspace folder."""
++    if value in (None, ""):
++        return None
++    try:
++        folder = check_work_folder(value)
++    except FolderError as exc:
++        raise agents.AgentError(f"The chat's folder cannot be used. {exc}") from exc
++    return None if folder == workspace_root() else folder
++
++
+ def open_folder(path: Path) -> None:
+     if os.name == "nt":
+         os.startfile(str(path))  # type: ignore[attr-defined]
+@@ -799,6 +909,17 @@ class Handler(BaseHTTPRequestHandler):
+             return self._json(200, backend.describe(self.server.model_url))
+         elif parts[1:] == ["chat"] and method == "POST":
+             return self._chat()
++        elif parts[1:] == ["workspace"]:
++            try:
++                if method == "GET":
++                    return self._json(200, workspace_setting())
++                if method == "PUT":
++                    body = self._body()
++                    return self._json(200, set_workspace_root(body.get("folder") if isinstance(body, dict) else None))
++            except FolderError as exc:
++                raise agents.AgentError(str(exc)) from exc
++        elif parts[1:] == ["folders"] and method == "GET":
++            return self._json(200, folder_choices(param("path")))
+ 
+         elif n >= 2 and parts[1] == "agents":
+             if n == 2 and method == "GET":
+@@ -870,7 +991,8 @@ class Handler(BaseHTTPRequestHandler):
+                 where = place(str(body.get("place") or SHARED_NAME))
+                 rel = str(body.get("path") or "")
+                 folder = folder_path(where, rel)
+-                label = rel.rsplit("/", 1)[-1] if rel else ("shared" if isinstance(where, SharedPlace) else where.name)
++                label = rel.rsplit("/", 1)[-1] if rel else (where.workspace.name if isinstance(where, SharedPlace) else
++                                                             "images" if isinstance(where, ImagesPlace) else where.name)
+                 return self._json(201, terminal.start(folder, label, str(body.get("shell") or "")).public())
+             if n >= 3:
+                 session = terminal.get(parts[2])
+@@ -915,7 +1037,7 @@ class Handler(BaseHTTPRequestHandler):
+             if parts[2:] == ["settings"] and method == "PUT":
+                 return self._json(200, images.save_settings(self._body()))
+             if parts[2:] == ["gallery"] and method == "GET":
+-                return self._json(200, {"images": images.gallery(place(param("place") or SHARED_NAME).workspace)})
++                return self._json(200, {"images": images.gallery(images_folder())})
+             if parts[2:] == ["generate"] and method == "POST":
+                 return self._generate()
+             if n >= 3 and parts[2] == "models":
+@@ -1096,8 +1218,7 @@ class Handler(BaseHTTPRequestHandler):
+         body = self._body()
+         if not isinstance(body, dict):
+             raise agents.AgentError("Request body must be a JSON object.")
+-        where = place(str(body.get("place") or SHARED_NAME))
+-        source = "images tab" if isinstance(where, SharedPlace) else "images tab (agent folder)"
++        source = "images tab"
+         init_image, init_name = None, ""
+         if body.get("init_image") is not None:
+             src_place, init_image = image_ref(body["init_image"], "picture to edit")
+@@ -1119,9 +1240,9 @@ class Handler(BaseHTTPRequestHandler):
+                 raise ClientGone() from exc  # stops sd-cli: the user pressed Cancel or left
+ 
+         try:
+-            record = images.generate(body, where.workspace, source=source, on_event=emit,
++            record = images.generate(body, images_folder(), source=source, on_event=emit,
+                                      preview=body.get("preview") is True, init_image=init_image, init_name=init_name)
+-            emit({"image": {**record, "place": where.name}})
++            emit({"image": {**record, "place": IMAGES_NAME}})
+             emit({"done": True})
+         except ClientGone:
+             return
+@@ -1171,16 +1292,20 @@ class Handler(BaseHTTPRequestHandler):
+         if not isinstance(body, dict):
+             raise agents.AgentError("Request body must be a JSON object.")
+         agent = agents.load(body["agent"]) if body.get("agent") else None
++        folder = chat_folder(body.get("folder")) if agent else None
++        commands = terminal_commands(body.get("terminal_commands"))
+         messages = agents.build_messages(agent, body.get("messages"))
+         if body.get("terminal_tool") and agent:
+             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
+                             "\n\nThe user temporarily granted you the run_terminal tool for this conversation. "
+                             "Use it only when needed and explain what you ran."}
+-        if agent and body.get("location") == SHARED_NAME:
++        if folder is not None:
+             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
+-                            "\n\nThe selected command location is the Shared folder."}
+-        messages = attach_images(with_workspace(with_terminal(messages, body.get("terminal")),
+-                                                body.get("workspace"), agent))
++                            f"\n\nFor this chat your folder is {folder}. Every action you take works inside it, "
++                            "and you cannot leave it."}
++        # With a folder of its own, the agent cannot reach the Workspace folder, and with_workspace says so.
++        messages = attach_images(with_workspace(with_terminal(messages, body.get("terminal"), commands),
++                                                body.get("workspace"), agent if folder is None else None))
+ 
+         self.send_response(200)
+         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+@@ -1204,8 +1329,8 @@ class Handler(BaseHTTPRequestHandler):
+                 allowed = allowed + ["run_terminal"]
+             execution_workspace = agent.workspace if agent else None
+             execution_shared = agents.shared_folder(agent)
+-            if agent and body.get("location") == SHARED_NAME:
+-                execution_workspace = shared_root()
++            if folder is not None:   # the chat's own folder: the agent is kept inside it alone
++                execution_workspace = folder
+                 execution_shared = None
+             runner.reply(conn, model, messages, emit,
+                          tool_names=allowed, workspace=execution_workspace,
+diff --git a/axis/terminal.py b/axis/terminal.py
+index 0c18871..79f8c7b 100644
+--- a/axis/terminal.py
++++ b/axis/terminal.py
+@@ -11,7 +11,10 @@ editor to do it), except on Windows, where cmd prints each command it reads.
+ 
+ Unlike Run Python, a terminal is not guarded: it runs with the user's own
+ rights. Only the user types into it. Agents may be shown its recent output
+-(snapshot) but never write to it.
++(snapshot), or its newest commands with their output (recent), but never write to it.
++
++Each line typed into a terminal marks where a command starts in the output, so
++recent(n) can show an agent exactly the last n commands and what they printed.
+ 
+ Output is kept in a rolling buffer. Clients read it by offset (read), so the
+ page can poll for what is new and an agent can be shown the newest part.
+@@ -35,7 +38,9 @@ from typing import Any, Dict, List, Optional
+ MAX_BUFFER = 400_000        # characters kept per session
+ MAX_INPUT = 64 * 1024
+ MAX_SESSIONS = 12
+-SNAPSHOT_CHARS = 6000       # what an agent is shown
++SNAPSHOT_CHARS = 6000       # what an agent is shown by snapshot()
++MAX_COMMANDS = 100          # the most commands an agent can be shown, and the most marks kept
++RECENT_CHARS = 16000        # the most characters an agent is shown by recent()
+ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+ 
+ 
+@@ -112,6 +117,7 @@ class Session:
+         self._lock = threading.Lock()
+         self._text = ""
+         self._base = 0                       # characters dropped from the front of the buffer
++        self._marks: List[int] = []          # where each typed line starts in the output (absolute offsets)
+         self.exit_code: Optional[int] = None
+         shell_info = _shell(shell)
+         self.shell = shell_info["name"]
+@@ -171,6 +177,7 @@ class Session:
+             raise TerminalError("That input is too long.")
+         if not self.alive:
+             raise TerminalError("This terminal has closed. Open a new one.")
++        self._mark(text)
+         if self.echo:
+             self._append(text)
+         data = text.replace("\r\n", "\n")
+@@ -183,6 +190,40 @@ class Session:
+         except (OSError, ValueError) as exc:
+             raise TerminalError("This terminal has closed. Open a new one.") from exc
+ 
++    def _mark(self, text: str) -> None:
++        """Remember where each line in text starts in the output, so commands can be counted."""
++        lines = text.replace("\r\n", "\n").split("\n")[:-1]   # only finished lines run
++        if not lines:
++            return
++        with self._lock:
++            at = self._base + len(self._text)
++            for line in lines:
++                if line.strip():
++                    self._marks.append(at)
++                if self.echo:
++                    at += len(line) + 1
++            del self._marks[:-MAX_COMMANDS]
++
++    def recent(self, commands: int, chars: int = RECENT_CHARS) -> "tuple[str, int]":
++        """The last `commands` commands typed into this terminal and their output, as plain text.
++
++        Returns (text, number of commands shown). The text starts where the first of them was typed;
++        with fewer commands typed than asked for, it is all the output kept. Only the newest `chars`
++        characters are returned.
++        """
++        commands = max(0, min(int(commands), MAX_COMMANDS))
++        if commands == 0:
++            return "", 0
++        with self._lock:
++            marks = [m for m in self._marks if m >= self._base]
++            start = marks[-commands] if len(marks) >= commands else self._base
++            text = self._text[start - self._base:]
++            shown = min(commands, len(marks))
++        text = clean(text)
++        if len(text) > chars:
++            text = "[... the start was cut off ...]\n" + text[-chars:]
++        return text, shown
++
+     def interrupt(self) -> None:
+         """Stop the command that is running (like Ctrl+C), keeping the shell."""
+         if not self.alive:
+diff --git a/axis/tools.py b/axis/tools.py
+index a4880e9..cc38454 100644
+--- a/axis/tools.py
++++ b/axis/tools.py
+@@ -1,15 +1,21 @@
+-"""Actions an agent can take. File actions work inside Axis's shared workspace.
+-
+-Paths that start with "shared/" also point into ~/Axis/shared for compatibility.
+-Python code and program files run from the shared workspace. A guard blocks
+-writing, deleting or renaming files outside the workspace and starting other
+-programs. The guard keeps ordinary code contained; it is not a security sandbox
+-against deliberately hostile code.
++"""Actions an agent can take. File actions work inside the agent's folder: the workspace
++folder (~/Axis/shared, or the folder the user chose), or the folder chosen for one chat.
++
++Paths that start with "shared/" also point into the workspace folder for compatibility.
++Python code and program files run from the folder. A guard blocks writing, deleting,
++renaming or listing files outside the folder, changing to another folder, reading
++outside it (except Python's own files and the system's program folders) and starting
++other programs. Terminal and Rust code from an agent is read before it runs and refused
++when it names a place outside the folder. Both keep ordinary code contained; neither is
++a security sandbox against deliberately hostile code.
++
++Pictures made with generate_image go to ~/Axis/images, not into the folder.
+ """
+ 
+ from __future__ import annotations
+ 
+ import os
++import re
+ import shutil
+ import subprocess
+ import sys
+@@ -20,6 +26,7 @@ from pathlib import Path
+ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+ 
+ from . import images, web_tools
++from .paths import images_folder
+ 
+ SHARED_PREFIX = "shared"
+ SHARED_ENV = "AXIS_SHARED_DIR"
+@@ -150,7 +157,7 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
+ TOOL_SPECS.update(web_tools.SPECS)
+ TOOL_SPECS["generate_image"] = {
+     "description": "Make a picture from a text description with a local Stable Diffusion model. "
+-    "The picture is saved as a PNG in images/ in your folder and shown to the user. "
++    "The picture is saved as a PNG in Axis's images folder (not in your folder) and shown to the user. "
+     "Describe the subject, style, lighting and composition in the prompt.",
+     "parameters": {
+         "type": "object",
+@@ -337,22 +344,43 @@ def delete_file(ws: Where, args: Dict[str, Any]) -> str:
+ # Runs inside the child Python. Reads the program from stdin, installs the
+ # guard, then runs the program. AXIS_ROOT is the folder the guard protects (the
+ # working directory when unset); AXIS_SCRIPT names the program when it is a file.
++#
++# The guard keeps the program in its folder: it may not write, delete, rename or
++# list anything outside it, change to another folder, or start programs. It may
++# read outside the folder only from Python's own installation and packages and
++# from the operating system's program folders, which code needs to run at all.
+ BOOTSTRAP = r'''
+ import os, sys
+ _code = sys.stdin.read()
+-_ROOTS = [os.path.normcase(os.path.realpath(os.environ.get("AXIS_ROOT") or os.getcwd()))]
++_norm = lambda p: os.path.normcase(os.path.realpath(p))
++_ROOTS = [_norm(os.environ.get("AXIS_ROOT") or os.getcwd())]
+ if os.environ.get("AXIS_SHARED_DIR"):
+-    _ROOTS.append(os.path.normcase(os.path.realpath(os.environ["AXIS_SHARED_DIR"])))
++    _ROOTS.append(_norm(os.environ["AXIS_SHARED_DIR"]))
++_READ = [p for p in dict.fromkeys([sys.prefix, sys.base_prefix, sys.exec_prefix, os.path.dirname(sys.executable)]
++                                   + [p for p in sys.path if p]) if p]
++try:
++    import site
++    _READ += site.getsitepackages() + [site.getusersitepackages()]
++except Exception:
++    pass
++if os.name == "nt":
++    _READ += [os.environ.get(k, "") for k in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles")]
++else:
++    _READ += ["/usr", "/lib", "/lib32", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/dev", "/proc", "/sys",
++              "/System", "/Library", "/private/etc", "/nix/store"]
++_READ = [_norm(p) for p in _READ if p]
+ sys.dont_write_bytecode = True
+ sys.path.insert(0, os.getcwd())
+-def _inside(p):
++def _under(p, roots):
+     if isinstance(p, int):
+         return True
+     try:
+-        full = os.path.normcase(os.path.realpath(os.fsdecode(p)))
++        full = _norm(os.fsdecode(p))
+     except Exception:
+         return False
+-    return any(full == r or full.startswith(r.rstrip(os.sep) + os.sep) for r in _ROOTS)
++    return any(full == r or full.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
++_inside = lambda p: _under(p, _ROOTS)
++_readable = lambda p: _under(p, _ROOTS) or _under(p, _READ)
+ _WRITE = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_TRUNC", 0)
+ _ONE = {"os.remove", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod", "os.chown", "os.utime", "shutil.rmtree", "os.removexattr", "os.setxattr"}
+ _TWO = {"os.rename", "os.link"}
+@@ -365,6 +393,14 @@ def _guard(event, args):
+         writing = any(c in mode for c in "wax+") if isinstance(mode, str) else bool((flags or 0) & _WRITE)
+         if writing and not _inside(path):
+             _deny("writing outside your folder is not allowed: " + str(path))
++        if not writing and path is not None and not _readable(path):
++            _deny("reading files outside your folder is not allowed: " + str(path))
++    elif event in ("os.listdir", "os.scandir"):
++        if args and args[0] is not None and not _readable(args[0]):
++            _deny("looking inside folders outside your folder is not allowed: " + str(args[0]))
++    elif event == "os.chdir":
++        if args and not _inside(args[0]):
++            _deny("changing to a folder outside your folder is not allowed: " + str(args[0]))
+     elif event in _ONE:
+         if args and not _inside(args[0]):
+             _deny("changing files outside your folder is not allowed: " + str(args[0]))
+@@ -591,10 +627,12 @@ def run_python_file(where: Where, args: Dict[str, Any]) -> str:
+     return f"Ran {result['path']}.\n" + _report(result)
+ 
+ 
+-def _run_env(where: Where) -> Dict[str, str]:
+-    """Build the environment for a program started by an agent."""
++def _run_env(where: Where, temp: Optional[Path] = None) -> Dict[str, str]:
++    """Build the environment for a program started by an agent. With temp, scratch files go there."""
+     p = places(where)
+     env = dict(os.environ)
++    if temp is not None:
++        env.update({"TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp)})
+     if p.shared is not None:
+         p.shared.mkdir(parents=True, exist_ok=True)
+         env[SHARED_ENV] = str(p.shared.resolve())
+@@ -612,6 +650,102 @@ def _run_env(where: Where) -> Dict[str, str]:
+     return env
+ 
+ 
++# ------------------------------------------------- keeping programs in their folder
++# A shell or a compiled Rust program cannot be watched while it runs the way Python can, so before an
++# agent's terminal or Rust code runs, Axis reads it and refuses code that names a place outside the
++# folder: a full path, a ".." that climbs out, the home folder, or a bare "cd". This catches ordinary
++# mistakes and ordinary attempts; like the Python guard it is not a sandbox against hostile code.
++
++_DEVICES = {"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/urandom",
++            "/dev/random", "nul", "con"}
++_URL = re.compile(r"\b[a-zA-Z][\w+.-]*://\S+")
++_STOP = r"""\s'"`;|&<>(){}\[\],"""            # characters that end a path in code
++_LEAD = r"""(?:^|(?<=[\s='"`(:;,>|<\[{]))"""    # what may come just before a path
++_POSIX_ABS = re.compile(_LEAD + "(/[^" + _STOP + "]*)")
++_WIN_ABS = re.compile(r"""(?:^|(?<=[\s='"`(;,>|<\[{]))([A-Za-z]:(?:[\\/][^""" + _STOP + r"""]*)?|\\\\[^""" + _STOP
++                      + "]+)(?=$|[" + _STOP + "])")
++_DOTDOT = re.compile(_LEAD + r"((?:[^" + _STOP + r"]*[\\/])?\.\.(?:[\\/][^" + _STOP + "]*)?)(?=$|[" + _STOP + "])")
++_HOME = re.compile(_LEAD + r"~(?=$|[\w/\\" + _STOP + r"])|\$\{?(?:HOME|OLDPWD|USERPROFILE)\b|"
++                   r"%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|SystemDrive|APPDATA|LOCALAPPDATA)%|"
++                   r"\$env:(?:USERPROFILE|HOME|HOMEPATH|HOMEDRIVE|SystemDrive|APPDATA|LOCALAPPDATA)\b", re.IGNORECASE)
++_BARE_CD = re.compile(r"(?:^|[;&|(\n{])\s*(?:cd|chdir|pushd|set-location|sl)(?:\s+(?:-|/d|~))?\s*(?=$|[;&|)\n}])",
++                      re.IGNORECASE | re.MULTILINE)
++_RUST_STRING = re.compile(r'r(#*)"(.*?)"\1|"((?:[^"\\]|\\.)*)"', re.DOTALL)
++_RUST_HOME = re.compile(r"\bhome_dir\b|\bset_current_dir\b")
++
++
++def _within(path: Path, roots: List[Path]) -> bool:
++    try:
++        full = path.resolve()
++    except (OSError, RuntimeError):
++        return False
++    return any(full == r or r in full.parents for r in roots)
++
++
++def _outside_in(text: str, roots: List[Path], cwd: Path) -> Optional[str]:
++    """The first place outside roots that text names, or None."""
++    text = _URL.sub(" ", text)
++    found = _HOME.search(text)
++    if found:
++        return found.group(0)
++    candidates: List[str] = []
++    if os.name == "nt":
++        candidates += _WIN_ABS.findall(text)
++        candidates += [m for m in _POSIX_ABS.findall(text) if m in ("/", "\\")]   # /x is usually an option there
++    else:
++        candidates += _POSIX_ABS.findall(text)
++    for ref in candidates:
++        if ref in ("/", "\\") and re.search(r"\s[/\\]\s+[\d$(]", text):
++            continue   # division in arithmetic, like $((4 / 2))
++        if ref.rstrip(":").lower() in _DEVICES or ref.lower() in _DEVICES:
++            continue
++        if not _within(Path(ref), roots):
++            return ref
++    for ref in _DOTDOT.findall(text):
++        target = Path(ref.replace("\\", "/"))
++        if not _within(target if target.is_absolute() else cwd / target, roots):
++            return ref
++    return None
++
++
++def _strip_comments(code: str) -> str:
++    kept = []
++    for line in code.splitlines():
++        bare = line.strip().lower()
++        if bare.startswith("#") or bare.startswith("::") or bare.startswith("rem ") or bare == "rem":
++            continue
++        kept.append(line)
++    return "\n".join(kept)
++
++
++def check_terminal_code(where: Where, code: str, cwd: Optional[Path] = None) -> None:
++    """Refuse terminal code from an agent that names a place outside its folder."""
++    p = places(where)
++    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
++    body = _strip_comments(code)
++    if _BARE_CD.search(body):
++        raise ToolError("A cd without a folder leaves your folder. Give a folder inside it, like cd notes.")
++    bad = _outside_in(body, roots, Path(cwd or p.personal).resolve())
++    if bad:
++        raise ToolError(f"The code names '{bad}', which is outside your folder. Only {roots[0]} and the folders "
++                        "inside it can be used. Use paths inside your folder.")
++
++
++def check_rust_code(where: Where, code: str, cwd: Optional[Path] = None) -> None:
++    """Refuse Rust code from an agent that names a place outside its folder in its text."""
++    p = places(where)
++    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
++    if _RUST_HOME.search(code):
++        raise ToolError("The program asks for the home folder or changes its folder, which would leave your folder. "
++                        "Use paths inside your folder.")
++    for m in _RUST_STRING.finditer(code):
++        literal = m.group(2) if m.group(2) is not None else m.group(3)
++        bad = _outside_in(literal.replace("\\\\", "\\") if m.group(3) is not None else literal, roots, Path(cwd or p.personal).resolve())
++        if bad:
++            raise ToolError(f"The program names '{bad}', which is outside your folder. Only {roots[0]} and the "
++                            "folders inside it can be used. Use paths inside your folder.")
++
++
+ def _run_kwargs() -> Dict[str, Any]:
+     if os.name == "nt":
+         return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+@@ -648,7 +782,7 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str
+         raise ToolError("code must be a non-empty Rust program.")
+     folder = Path(cwd or places(where).personal).resolve()
+     base, temp = _temp_dir(folder)
+-    env = _run_env(where)
++    env = _run_env(where, temp)
+     source = temp / script
+     binary = temp / ("program.exe" if os.name == "nt" else "program")
+     try:
+@@ -659,7 +793,7 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str
+                 artcraft.ensure_cpp_tools()
+             except artcraft.ArtCraftError as exc:
+                 raise ToolError(str(exc)) from exc
+-            env = _run_env(where)
++            env = _run_env(where, temp)
+         compiler = _rustc(env)
+         compile_result = _run_capped([compiler, "--edition", "2021", str(source), "-o", str(binary)], "",
+                                      str(folder), env, RUST_TIMEOUT, _run_kwargs())
+@@ -671,10 +805,14 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str
+ 
+ 
+ def run_rust(where: Where, args: Dict[str, Any]) -> str:
+-    return _report(_rust_code(where, _require(args, "code")))
++    code = _require(args, "code")
++    if isinstance(code, str):
++        check_rust_code(where, code)
++    return _report(_rust_code(where, code))
+ 
+ 
+-def run_rust_file_result(where: Where, rel: Any) -> Dict[str, Any]:
++def run_rust_file_result(where: Where, rel: Any, checked: bool = False) -> Dict[str, Any]:
++    """Compile and run a .rs file. checked=True (an agent ran it) first refuses code that leaves the folder."""
+     root, path, prefix = locate(where, rel)
+     if not path.is_file():
+         raise ToolError(f"{rel} is not a file in your folder.")
+@@ -688,12 +826,14 @@ def run_rust_file_result(where: Where, rel: Any) -> Dict[str, Any]:
+     code = data.decode("utf-8", errors="replace")
+     if code.startswith("\ufeff"):
+         code = code[1:]
++    if checked:
++        check_rust_code(where, code, cwd=path.parent)
+     result = _rust_code(where, code, cwd=path.parent, script=path.name)
+     return {**result, "path": _show(root, path, prefix)}
+ 
+ 
+ def run_rust_file(where: Where, args: Dict[str, Any]) -> str:
+-    result = run_rust_file_result(where, _require(args, "path"))
++    result = run_rust_file_result(where, _require(args, "path"), checked=True)
+     return f"Ran {result['path']}.\n" + _report(result)
+ 
+ 
+@@ -748,6 +888,7 @@ def _terminal_code(where: Where, code: str, shell: Any = "auto", cwd: Optional[P
+     elif selected in ("powershell", "pwsh"):
+         suffix = ".ps1"
+     base, temp = _temp_dir(folder)
++    env.update({"TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp)})   # scratch files stay in the folder
+     script = temp / ("program" + suffix)
+     try:
+         with script.open("w", encoding="utf-8", newline="\r\n" if selected == "cmd" else "\n") as stream:
+@@ -759,10 +900,14 @@ def _terminal_code(where: Where, code: str, shell: Any = "auto", cwd: Optional[P
+ 
+ 
+ def run_terminal(where: Where, args: Dict[str, Any]) -> str:
+-    return _report(_terminal_code(where, _require(args, "code"), args.get("shell", "auto")))
++    code = _require(args, "code")
++    if isinstance(code, str):
++        check_terminal_code(where, code)
++    return _report(_terminal_code(where, code, args.get("shell", "auto")))
+ 
+ 
+-def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto") -> Dict[str, Any]:
++def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto", checked: bool = False) -> Dict[str, Any]:
++    """Run a shell program file. checked=True (an agent ran it) first refuses code that leaves the folder."""
+     root, path, prefix = locate(where, rel)
+     if not path.is_file():
+         raise ToolError(f"{rel} is not a file in your folder.")
+@@ -777,12 +922,14 @@ def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto") -> Dic
+         ext = path.suffix.lower()
+         selected = {".ps1": "powershell", ".bat": "cmd", ".cmd": "cmd", ".sh": "bash", ".bash": "bash",
+                     ".zsh": "sh", ".fish": "sh"}.get(ext, "auto")
++    if checked:
++        check_terminal_code(where, code, cwd=path.parent)
+     result = _terminal_code(where, code, selected, cwd=path.parent, suffix=path.suffix or ".sh")
+     return {**result, "path": _show(root, path, prefix)}
+ 
+ 
+ def run_terminal_file(where: Where, args: Dict[str, Any]) -> str:
+-    result = run_terminal_file_result(where, _require(args, "path"), args.get("shell", "auto"))
++    result = run_terminal_file_result(where, _require(args, "path"), args.get("shell", "auto"), checked=True)
+     return f"Ran {result['path']}.\n" + _report(result)
+ 
+ 
+@@ -908,13 +1055,15 @@ def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
+ 
+ def generate_image(ws: Where, args: Dict[str, Any],
+                    on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False) -> str:
+-    p = places(ws)
++    """Make a picture. It goes to Axis's images folder, never into the agent's folder."""
+     try:
+-        rec = images.generate(args, p.personal, source="agent", on_event=on_event, preview=preview)
++        rec = images.generate(args, images_folder(), source="agent", on_event=on_event, preview=preview)
+     except images.ImageError as exc:
+         raise ToolError(str(exc)) from exc
+-    return (f"Saved {rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
+-            f"model {rec['model']}, {rec['seconds']} s). The user can see the picture.")
++    # The page finds the picture from "Saved images/<file>" and "images folder" in this text (see imagePath).
++    return (f"Saved images/{rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
++            f"model {rec['model']}, {rec['seconds']} s) in Axis's images folder, which is not your folder. "
++            "The user can see the picture.")
+ 
+ 
+ # File management is intentionally not exposed as an agent skill. Agents can use
+diff --git a/axis/web/index.html b/axis/web/index.html
+index 7f3a815..6f3418a 100644
+--- a/axis/web/index.html
++++ b/axis/web/index.html
+@@ -84,6 +84,11 @@ button.upd:hover { filter: brightness(1.12); }
+ .nav-item[aria-current="true"] { background: var(--panel-active); box-shadow: inset 3px 0 0 var(--panel-ink); }
+ .nav-item small { display: block; color: var(--panel-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ .nav-empty { color: var(--panel-muted); font-size: 13px; padding: 4px 10px; }
++.nav-group { display: flex; align-items: center; gap: 8px; }
++.nav-group > span:first-child { flex: 1; min-width: 0; }
++.nav-chevron { flex: none; width: 8px; height: 8px; border-right: 2px solid var(--panel-muted); border-bottom: 2px solid var(--panel-muted); transform: rotate(-45deg); transition: transform .15s; margin-right: 4px; }
++.nav-group[aria-expanded="true"] .nav-chevron { transform: rotate(45deg); }
++.nav-sub { margin: 2px 0 4px 14px; padding-left: 6px; border-left: 1px solid var(--panel-line); }
+ 
+ /* ---------- buttons ---------- */
+ .btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
+@@ -207,6 +212,11 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .picker .crumbs { padding: 8px 16px 0; margin: 0; }
+ .picker-body { overflow-y: auto; padding: 12px 16px 16px; }
+ .picker-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
++.picker-dirs .btn { display: inline-flex; align-items: center; gap: 6px; }
++.picker-dirs .fb-ico { display: inline-flex; width: 16px; height: 16px; flex: none; }
++.picker-dirs .fb-ico svg { width: 16px; height: 16px; }
++.folder-bar { display: flex; gap: 6px; padding: 10px 16px 0; }
++.folder-path { flex: 1; min-width: 0; font: 13px/1.4 var(--mono); }
+ .picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+ .picker-grid button { border: 1px solid var(--line); border-radius: 6px; padding: 0; background: var(--code); cursor: pointer; overflow: hidden; text-align: left; }
+ .picker-grid button:hover, .picker-grid button:focus-visible { border-color: var(--accent); }
+@@ -264,8 +274,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .skill-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 10px; background: var(--surface); }
+ .skill-card h4 { margin: 0; font-size: 15px; display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+ .skill-card p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+-.skill-card .instr { white-space: pre-wrap; color: var(--ink); font-size: 13px; margin-top: 8px; border-left: 3px solid var(--line); padding-left: 10px; }
+-.tag { font: 600 12px/1 var(--sans); color: var(--link); }
+ .pick { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; background: var(--surface); cursor: pointer; }
+ .pick input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+ .pick span { display: block; color: var(--muted); font-size: 13px; }
+@@ -275,15 +283,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .files small { color: var(--muted); font-family: var(--sans); }
+ .path { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
+ 
+-.skill-card h4 .skill-name { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+-.skill-tools { display: flex; gap: 14px; flex: none; }
+-.tag.edited { color: var(--warn); }
+-.sends { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+-.sends > summary, .sends-sub > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--link); }
+-.sends-sub { margin-top: 8px; }
+-.sends pre { margin: 6px 0 10px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+-.sends .step-label { margin-top: 10px; }
+-.sends .hint { margin: 4px 0 0; }
+ 
+ /* ---------- files ---------- */
+ .fb { display: grid; grid-template-columns: minmax(240px, 360px) 1fr; flex: 1; min-height: 0; }
+@@ -347,8 +346,9 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .term-empty { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
+ .term-side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+ .term-side-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+-.term-side-head label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+-.term-side-head select { flex: 1; min-width: 0; }
++.term-side-head label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex: 1 1 160px; min-width: 0; white-space: nowrap; }
++.term-side-head label.check { flex: 0 1 auto; }
++.term-side-head select { flex: 1; min-width: 64px; }
+ .term-side .thread { padding: 12px 14px; background: var(--bg); }
+ .term-side .msg.user { max-width: 95%; }
+ .term-side .msg-u { max-width: 95%; } .term-side .msg-u .msg.user { max-width: 100%; }
+@@ -587,7 +587,9 @@ const S = {
+   nameEdit: null,               // { mode: "new" | "rename", ... } while a file or folder name is being typed in the Workspace list
+   view: { kind: "chat", agent: DIRECT },
+   modelChoice: {},              // target -> model picked in the dropdown
+-  chatLocation: {},             // target -> selected terminal/workspace location
++  chatFolders: {},              // target -> folder chosen for a new chat before its first message ("" is the workspace)
++  wsFolder: null,               // last /api/workspace result: the workspace folder and whether it is the default
++  termCommands: 5,              // how many of the newest terminal commands, with their output, an agent sees
+   streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
+   drafts: {},                   // target -> unsent text in the message box
+   errors: {},                   // target -> the last error, shown until the next message
+@@ -606,7 +608,7 @@ const S = {
+   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
+   imageSelected: null,          // the picture shown large in the Images tab
+   imageError: null,
+-  galleryPlace: "_shared",      // whose images/ folder the gallery shows
++  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR)
+   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
+   manageError: "",              // the last error from a Models page action
+   install: null,                // the install form of the Models sub-tab that is open (one of installs)
+@@ -680,12 +682,16 @@ const getHistory = (target) => chatMessages(S.current[target]);
+ const savingChats = {};    // id -> promise chain, so saves of one chat reach Axis in order
+ function saveChat(id, agent, msgs) {
+   if (S.deletedChats.has(id)) return;
+-  const c = S.chats[id] || (S.chats[id] = { id, agent, title: "", messages: [] });
++  let c = S.chats[id];
++  if (!c) {   // a new chat takes the folder chosen for it before its first message
++    c = S.chats[id] = { id, agent, title: "", folder: S.chatFolders[agent] || "", messages: [] };
++    delete S.chatFolders[agent];
++  }
+   c.messages = msgs.slice(); c.agent = agent;
+   savingChats[id] = (savingChats[id] || Promise.resolve()).then(async () => {
+     if (S.deletedChats.has(id)) return;
+     if (c.messages.length) {
+-      await api("/api/chats/" + encodeURIComponent(id), { method: "PUT", body: { agent: c.agent, title: c.title || "", messages: c.messages } });
++      await api("/api/chats/" + encodeURIComponent(id), { method: "PUT", body: { agent: c.agent, title: c.title || "", folder: c.folder || "", messages: c.messages } });
+       c.saved = true;
+     } else if (c.saved) {   // the only message was taken back: nothing left to keep
+       await api("/api/chats/" + encodeURIComponent(id), { method: "DELETE" }).catch(() => {});
+@@ -713,6 +719,7 @@ function loadChat(id) {   // resolves "ok", "missing" or an error message
+ }
+ function openChat(agent, id) {
+   if (S.current[agent] !== id) delete S.errors[agent];
++  if (!id) delete S.chatFolders[agent];   // a new chat starts in the workspace folder
+   if (id) S.current[agent] = id; else delete S.current[agent];
+   saveCurrent();
+   go({ kind: "chat", agent });
+@@ -878,13 +885,25 @@ function renderNav() {
+       Object.keys(S.streams).some((k) => k !== DIRECT)),
+     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
+     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
+-    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
+     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
+-    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
+-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
+-    item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
++    toolsGroup(item),
+   );
+ }
++const TOOL_VIEWS = ["images", "art", "ocr"];
++// Images, Art Craft and OCR sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
++function toolsGroup(item) {
++  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob };
++  const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
++  const anyBusy = Object.values(busy).some(Boolean);
++  const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
++    "aria-controls": "nav-tools", onclick: () => { S.toolsOpen = !open; store("axis.toolsOpen", S.toolsOpen); renderNav(); } },
++    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft and OCR")),
++    h("span", { class: "nav-chevron", "aria-hidden": "true" }));
++  return [head, open ? h("div", { class: "nav-sub", id: "nav-tools" },
++    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), busy.images),
++    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), busy.art),
++    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr)) : null];
++}
+ 
+ async function quitAxis() {
+   const busy = Object.keys(S.streams).length > 0 || !!S.imageJob;
+@@ -955,10 +974,23 @@ function currentModel(target) {
+   const agent = target ? agentByName(target) : null;
+   return matchModel(S.modelChoice[target], models) || matchModel(agent && agent.model, models) || models[0] || "";
+ }
+-function chatLocation(target) {
+-  const agent = target && agentByName(target);
+-  return agent && S.chatLocation[target] === SHARED ? SHARED : (agent ? agent.name : "");
++// The folder a chat keeps its agent in: "" means the workspace folder. Saved with the chat.
++function chatFolder(target) {
++  if (!target || !agentByName(target)) return "";
++  const id = S.current[target], chat = id && S.chats[id];
++  return chat ? (chat.folder || "") : (S.chatFolders[target] || "");
++}
++function setChatFolder(target, folder) {
++  const id = S.current[target], chat = id && S.chats[id];
++  if (chat) { chat.folder = folder; if (chat.messages.length) saveChat(id, chat.agent, chat.messages); }
++  else S.chatFolders[target] = folder;
+ }
++async function chooseChatFolder(target) {
++  const folder = await pickFolder("Choose the folder for this chat", chatFolder(target) || (S.wsFolder && S.wsFolder.folder) || "");
++  if (folder) { setChatFolder(target, folder); toast(`${target} will work only in ${folder}`); }
++  if (viewing(target)) renderChat();
++}
++const folderName = (path) => String(path).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+ function terminalToolFor(target) {
+   if (S.view.kind === "terminal" && S.term.side && S.term.agent === target) return !!S.term.terminalTool;
+   if (S.view.kind === "workspace" && S.ide.side && S.ide.agent === target) return !!S.ide.terminalTool;
+@@ -973,7 +1005,6 @@ function renderMain() {
+   if (S.view.kind === "edit") return renderEditor();
+   if (S.view.kind === "agents") return renderAgents();
+   if (S.view.kind === "terminal") return renderTerminal();
+-  if (S.view.kind === "skills") return renderSkills();
+   if (S.view.kind === "workspace") return renderWorkspace();
+   if (S.view.kind === "models") return renderModels();
+   if (S.view.kind === "history") return renderHistory();
+@@ -1024,10 +1055,15 @@ function renderChat() {
+   const select = h("select", { "aria-label": "Model", disabled: !ready() || !!stream,
+     onchange: (e) => { S.modelChoice[target] = e.target.value; renderChat(); } },
+     models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
+-  const location = h("select", { "aria-label": "Agent location", disabled: !!stream,
+-    onchange: (e) => { S.chatLocation[target] = e.target.value; renderChat(); } },
+-    [[SHARED, "Shared folder"]].map(([v, label]) => {
+-      const o = h("option", { value: v }, label); o.selected = chatLocation(target) === v; return o;
++  const own = chatFolder(target);
++  const location = h("select", { "aria-label": "The folder this agent works in", disabled: !!stream,
++    title: own ? `${target} works only in ${own}` : `${target} works only in the workspace folder` + (S.wsFolder ? ` (${S.wsFolder.folder})` : ""),
++    onchange: (e) => {
++      if (e.target.value === "\u0000choose") chooseChatFolder(target);
++      else { setChatFolder(target, e.target.value); renderChat(); }
++    } },
++    [["", "Workspace folder"], ...(own ? [[own, folderName(own)]] : []), ["\u0000choose", "Choose a folder\u2026"]].map(([v, label]) => {
++      const o = h("option", { value: v }, label); o.selected = v === own; return o;
+     }));
+   const hasHistory = getHistory(target).length > 0;
+ 
+@@ -1036,7 +1072,7 @@ function renderChat() {
+     h("h2", {}, agent ? agent.name : "Direct chat",
+       chat && hasHistory ? h("small", { class: "chat-sub" }, chatTitle(chat)) : null),
+     ready() ? h("label", {}, "Model", select) : null,
+-    agent ? h("label", {}, "Location", location) : null,
++    agent ? h("label", {}, "Folder", location) : null,
+     agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
+     hasHistory ? h("button", { class: "btn small", title: "Download this conversation as a Markdown file", onclick: () => exportChat(target) }, "Export") : null,
+     h("button", { class: "btn small", title: "Earlier conversations" + (agent ? " with " + agent.name : ""),
+@@ -1235,6 +1271,10 @@ const STEP_TEXT = {
+   generate_image: ["Making a picture of", "Made a picture of"],
+ };
+ const SHARED = "_shared";   // the Workspace tab's name for the folder agents share
++const IMAGES = "_images";   // Axis's images folder, where every picture Axis makes is saved
++function revealFile(place, path) {
++  api(filesUrl(place, "reveal", path), { method: "POST" }).catch((e) => toast(e.message));
++}
+ function hasShared(agent) {
+   return agent === SHARED || S.agents.some((x) => x.name === agent);
+ }
+@@ -1270,16 +1310,21 @@ function stepView(p, agent, wasOpen) {
+     else if (p.name === "make_folder" && path) body.append(link("Open folder in Workspace", path, false));
+     else if (["run_python_file", "run_rust_file", "run_terminal_file"].includes(p.name) && path) body.append(link("Open in Workspace", path, true));
+     else if (["run_python", "run_rust", "run_terminal", "list_files"].includes(p.name)) body.append(link("Browse this agent\u2019s files", "", false));
+-    else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Workspace", imagePath(p), true));
++    else if (p.name === "generate_image" && imagePath(p)) {
++      const pic = imagePath(p);
++      body.append(h("button", { class: "link", style: "margin-top:8px", onclick: () => revealFile(pic.place, pic.path) }, "Show in folder"));
++    }
+   }
+   const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
+   if (wasOpen) d.open = true;
+   return d;
+ }
+-// The picture a generate_image step saved, from its result ("Saved images/x.png (...)").
++// The picture a generate_image step saved, from its result ("Saved images/x.png (...)"), as { place, path }.
++// Since Axis 4.3.4 it is in Axis's images folder (the result says so); older chats saved it in the shared folder.
+ function imagePath(p) {
+-  const m = p.ok && typeof p.output === "string" ? p.output.match(/^Saved (images\/\S+?\.(?:png|jpe?g|webp)) /) : null;
+-  return m ? m[1] : "";
++  const m = p.ok && typeof p.output === "string" ? p.output.match(/^Saved images\/(\S+?\.(?:png|jpe?g|webp)) /) : null;
++  if (!m) return null;
++  return /images folder/.test(p.output) ? { place: IMAGES, path: m[1] } : { place: SHARED, path: "images/" + m[1] };
+ }
+ function chatImage(p, agent) {
+   if (p.output === undefined && p.preview && S.imagePreview) {
+@@ -1287,12 +1332,12 @@ function chatImage(p, agent) {
+     return h("figure", { class: "chat-image", role: "status" }, previewImg(p, p.preview.image, a.width, a.height, a.prompt),
+       h("small", {}, `Step ${p.preview.step} of ${p.preview.steps}`));
+   }
+-  const path = imagePath(p);
+-  if (!agent || !path) return null;
+-  const src = filesUrl(agent, "raw", path);
++  const pic = imagePath(p);
++  if (!agent || !pic) return null;
++  const src = filesUrl(pic.place, "raw", pic.path);
+   return h("figure", { class: "chat-image" },
+-    h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || path, loading: "lazy" })),
+-    h("small", {}, path));
++    h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || pic.path, loading: "lazy" })),
++    h("small", {}, pic.place === IMAGES ? "images/" + pic.path : pic.path));
+ }
+ function partsView(parts, agent, openSteps) {
+   return parts.flatMap((p) => {
+@@ -1608,7 +1653,7 @@ async function send(target, { resend = false, terminal, workspace } = {}) {
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview,
+         terminal: terminal || null, workspace: workspace || null, terminal_tool: terminalToolFor(target),
+-        location: chatLocation(target) || null }) });
++        folder: chatFolder(target) || null, terminal_commands: S.termCommands }) });
+     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
+     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+     for (;;) {
+@@ -1762,8 +1807,7 @@ function renderEditor() {
+       h("p", { class: "hint" }, "Instructions added to the end of every message you send this agent."),
+       configList),
+     h("div", { class: "section" },
+-      h("div", { class: "section-head" }, h("h3", {}, "Skills"),
+-        h("button", { class: "btn small", type: "button", onclick: () => go({ kind: "skills" }) }, "Manage skills")),
++      h("div", { class: "section-head" }, h("h3", {}, "Skills")),
+       h("p", { class: "hint" }, "Choose what this agent can do. Skills are added to its instructions."),
+       skillPicker),
+     existing ? workspaceSection(existing) : null,
+@@ -1885,13 +1929,13 @@ async function readablePicture(ref, placeName, dir) {
+   return { place: placeName, path: await uploadPicture(placeName, dir, pic.name, pic.blob) };
+ }
+ 
+-const placeLabel = (n) => n === SHARED ? "Shared folder" : n;
++const placeLabel = (n) => n === SHARED ? "Workspace folder" : n === IMAGES ? "Images folder" : n;
+ 
+-// A dialog for choosing a picture from the shared folder or any agent's folder.
++// A dialog for choosing a picture from the workspace folder or Axis's images folder.
+ // Resolves to { place, path }, or null when closed without choosing.
+ function pickPicture(title, startPlace) {
+   return new Promise((resolve) => {
+-    const places = [SHARED, ...S.agents.map((a) => a.name)];
++    const places = [SHARED, IMAGES];
+     const state = { place: places.includes(startPlace) ? startPlace : SHARED, dir: "" };
+     let chosen = null;
+     const body = h("div", { class: "picker-body" });
+@@ -1907,7 +1951,7 @@ function pickPicture(title, startPlace) {
+     const open = (dir) => { state.dir = dir; load(); };
+     async function load() {
+       const { place: where, dir } = state;
+-      fill(crumbs, h("button", { onclick: () => open("") }, where === SHARED ? "shared" : where),
++      fill(crumbs, h("button", { onclick: () => open("") }, placeLabel(where)),
+         (dir ? dir.split("/") : []).map((seg, i, all) => [h("span", {}, "/"), h("button", { onclick: () => open(all.slice(0, i + 1).join("/")) }, seg)]));
+       fill(body, h("p", { class: "hint" }, "Loading\u2026"));
+       let data;
+@@ -1924,7 +1968,7 @@ function pickPicture(title, startPlace) {
+         pics.length ? h("div", { class: "picker-grid" }, pics.map((e) => h("button", { title: e.path,
+           onclick: () => { chosen = { place: where, path: e.path }; dlg.close(); } },
+           h("img", { src: filesUrl(where, "raw", e.path), alt: e.name, loading: "lazy" }), h("small", {}, e.name))))
+-          : h("p", { class: "hint" }, "No pictures in this folder." + (dirs.some((e) => e.name === "images") ? " Pictures made in Axis are in images." : "")));
++          : h("p", { class: "hint" }, "No pictures in this folder." + (where === SHARED ? " Pictures made in Axis are in the Images folder." : "")));
+     }
+     document.body.append(dlg);
+     dlg.showModal();
+@@ -1932,6 +1976,45 @@ function pickPicture(title, startPlace) {
+   });
+ }
+ 
++// A dialog for choosing any folder on this computer. Only folder names are shown, never files.
++// Resolves to the folder's full path, or null when closed without choosing.
++function pickFolder(title, start) {
++  return new Promise((resolve) => {
++    let chosen = null, current = null;
++    const body = h("div", { class: "picker-body" });
++    const where = h("input", { type: "text", class: "folder-path", "aria-label": "Folder path", spellcheck: "false",
++      onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); load(where.value.trim()); } } });
++    const use = h("button", { class: "btn small primary", disabled: true,
++      onclick: () => { if (current && current.usable) { chosen = current.path; dlg.close(); } } }, "Use this folder");
++    const dlg = h("dialog", { class: "picker", "aria-label": title },
++      h("div", { class: "picker-inner" },
++        h("div", { class: "picker-head" }, h("h3", {}, title), use, h("button", { class: "btn small", onclick: () => dlg.close() }, "Cancel")),
++        h("div", { class: "folder-bar" }, where, h("button", { class: "btn small", onclick: () => load(where.value.trim()) }, "Go")),
++        body));
++    dlg.addEventListener("close", () => { dlg.remove(); resolve(chosen); });
++    async function load(path) {
++      fill(body, h("p", { class: "hint" }, "Loading\u2026"));
++      let d;
++      try { d = await api("/api/folders?path=" + encodeURIComponent(path || "")); }
++      catch (e) { return fill(body, h("p", { class: "form-error" }, e.message), current ? h("button", { class: "btn small", onclick: () => load(current.path) }, "Back") : null); }
++      current = d; where.value = d.path; use.disabled = !d.usable;
++      use.title = d.usable ? "Agents will work in " + d.path : "This folder cannot be used. Choose a folder inside it.";
++      fill(body,
++        h("div", { class: "picker-dirs" },
++          d.parent ? h("button", { class: "btn small", onclick: () => load(d.parent) }, "Up one folder") : null,
++          h("button", { class: "btn small", onclick: () => load(d.home) }, "Home"),
++          d.roots.length > 1 ? d.roots.map((r) => h("button", { class: "btn small", onclick: () => load(r) }, r)) : null),
++        d.usable ? null : h("p", { class: "hint" }, "The top of a drive and Axis\u2019s own data folder cannot be used. Open a folder inside."),
++        d.folders.length ? h("div", { class: "picker-dirs" }, d.folders.map((f) => h("button", { class: "btn small", onclick: () => load(f.path) }, icon("dir"), f.name)))
++          : h("p", { class: "hint" }, "There are no folders inside this one."),
++        d.more ? h("p", { class: "hint" }, `${d.more} more folders are not shown. Type a path above to go to one.`) : null);
++    }
++    document.body.append(dlg);
++    dlg.showModal();
++    load(start || "");
++  });
++}
++
+ function parseCsv(text, limit) {
+   const rows = []; let row = [], cell = "", q = false;
+   for (let i = 0; i < text.length && rows.length < limit; i++) {
+@@ -1946,12 +2029,33 @@ function parseCsv(text, limit) {
+   return rows;
+ }
+ 
++// The workspace folder: ~/Axis/shared unless the user chose another one. Agents work in it.
++async function loadWsFolder() {
++  try { S.wsFolder = await api("/api/workspace"); } catch (e) { toast(e.message); }
++  return S.wsFolder;
++}
++async function setWsFolder(folder) {
++  if (!leaveEdit()) return;
++  try { S.wsFolder = await api("/api/workspace", { method: "PUT", body: { folder } }); }
++  catch (e) { return toast(e.message); }
++  S.workspace = { agent: SHARED, dir: "", file: "" };
++  toast(S.wsFolder.is_default ? "Using the default workspace folder" : "Workspace folder: " + S.wsFolder.folder);
++  if (S.view.kind === "workspace") renderWorkspace();
++}
++async function chooseWsFolder() {
++  const folder = await pickFolder("Choose the workspace folder", S.wsFolder ? S.wsFolder.folder : "");
++  if (folder) setWsFolder(folder);
++}
++
+ let workspaceTimer = null;
+ function renderWorkspace() {
+   if (S.workspace.agent !== SHARED) S.workspace = { agent: SHARED, dir: "", file: "" };
+   const f = S.workspace;
+   S.nameEdit = null;
+-  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
++  if (!S.wsFolder) { loadWsFolder().then(() => { if (S.view.kind === "workspace" && S.wsFolder) renderWorkspace(); }); }
++  const wf = S.wsFolder;
++  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace",
++    wf ? h("small", { class: "chat-sub", title: wf.folder }, wf.is_default ? "Default folder" : wf.folder) : null));
+   if (!f.agent) {
+     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
+       h("h3", {}, "No agents yet"),
+@@ -1960,6 +2064,10 @@ function renderWorkspace() {
+     return;
+   }
+   bar.append(
++    popMenu("Folder", [
++      { label: "Choose another folder\u2026", onclick: chooseWsFolder },
++      wf && !wf.is_default ? { label: "Use the default folder", onclick: () => setWsFolder("") } : null,
++    ], "Choose the folder agents work in" + (wf ? ` (now ${wf.folder})` : "")),
+     h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
+       h("button", { class: "btn small", id: "ide-dock-btn", title: "Show or hide a terminal under the files", onclick: () => setDock(!S.ide.dock) }, "Terminal"),
+       h("button", { class: "btn small", id: "ide-side-btn", title: "Show or hide a chat with an agent that can see this folder", onclick: toggleSide }, "Agent")));
+@@ -1967,7 +2075,7 @@ function renderWorkspace() {
+   const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
+   const segs = f.dir ? f.dir.split("/") : [];
+   const crumb = (label, dir) => dropTarget(h("button", { onclick: () => openDir(dir), title: dir ? dir : "Top of this folder" }, label), dir);
+-  crumbs.append(crumb("shared", ""));
++  crumbs.append(crumb(wf ? folderName(wf.folder) : "workspace", ""));
+   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), crumb(seg, segs.slice(0, i + 1).join("/"))));
+   const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
+   const tools = h("div", { class: "crumb-tools" },
+@@ -1990,7 +2098,9 @@ function renderWorkspace() {
+   const main = h("div", { class: "ide-main", id: "ide-main" },
+     h("div", { class: "fb", id: "fb" }, list, view),
+     h("section", { class: "dock", id: "dock", "aria-label": "Terminal and run output" }));
+-  fill($("main"), bar, h("div", { class: "crumbbar" }, crumbs, tools),
++  const missing = wf && wf.missing ? h("div", { class: "note" }, `The folder you chose, ${wf.missing}, is gone, so the default folder is used. `,
++    h("button", { class: "link", onclick: chooseWsFolder }, "Choose another folder")) : null;
++  fill($("main"), bar, missing, h("div", { class: "crumbbar" }, crumbs, tools),
+     h("div", { class: "ide" + (S.ide.side ? " with-side" : ""), id: "ide" }, main, S.ide.side ? sidePanel() : null));
+   syncIdeButtons();
+   drawDock();
+@@ -2152,7 +2262,7 @@ async function uploadFiles(fileList, dir = S.workspace.dir) {
+       done++;
+     } catch (e) { toast(e.name === "TypeError" ? `Could not upload ${file.name} (folders cannot be uploaded).` : e.message); }
+   }
+-  if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${dir ? dir : agent === SHARED ? "the shared folder" : agent}`);
++  if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${dir ? dir : agent === SHARED ? "the workspace folder" : placeLabel(agent)}`);
+   if (S.view.kind === "workspace" && S.workspace.agent === agent) loadListing(true);
+ }
+ /* ---- naming: a new file or folder, or a new name for one, is typed in the list itself.
+@@ -2304,7 +2414,7 @@ async function movePath(path, to) {
+   if (affectsOpen && !leaveEdit()) return;
+   try {
+     const { moved } = await api(filesUrl(agent, "move", path, "&to=" + encodeURIComponent(to)), { method: "POST" });
+-    toast(`Moved ${path.split("/").pop()} to ${to || (agent === SHARED ? "shared" : agent)}`);
++    toast(`Moved ${path.split("/").pop()} to ${to || (agent === SHARED ? "the top of the workspace folder" : placeLabel(agent))}`);
+     if (S.workspace.agent !== agent) return;
+     if (affectsOpen) { S.workspace.file = moved + open.slice(path.length); showFile(); }
+     loadListing(true);
+@@ -2356,7 +2466,7 @@ async function loadListing(force) {
+     rows.push(line);
+   }
+   if (!data.entries.length && !(S.nameEdit && S.nameEdit.mode === "new")) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
+-    f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat, or use New file."));
++    f.agent === SHARED ? "This folder is empty. Agents can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat, or use New file."));
+   fill(list, rows);
+   if (S.nameEdit) focusNameEdit();
+ }
+@@ -2607,7 +2717,7 @@ function renderTerminal() {
+   }
+   const t = activeTerm();
+   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal"),
+-    h("button", { class: "btn small", title: "Open a terminal in the shared folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
++    h("button", { class: "btn small", title: "Open a terminal in the workspace folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
+     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
+     t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
+     h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
+@@ -2625,8 +2735,8 @@ function renderTerminal() {
+   } else {
+     main = h("div", { class: "term-empty" }, h("div", { class: "empty" },
+       h("h3", {}, "No terminal is open"),
+-      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in an agent\u2019s folder or the shared folder. Use the terminal button on any folder in Workspace, or open one here."),
+-      h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the shared folder")));
++      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in the workspace folder or a folder inside it. Use the terminal button on any folder in Workspace, or open one here."),
++      h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the workspace folder")));
+   }
+   fill($("main"), bar, tabs, h("div", { class: "term" + (T.side ? " with-side" : "") }, main,
+     T.side ? h("aside", { class: "term-side", id: "term-side", "aria-label": "Agent that can see the terminal" }) : null));
+@@ -2852,7 +2962,11 @@ function renderSideChat(cfg) {
+   const terminalAccess = cfg.terminalAccess ? h("label", { class: "check", title: "Temporarily let this agent run terminal commands" },
+     h("input", { type: "checkbox", checked: !!cfg.terminalAccess(), onchange: (e) => { cfg.setTerminalAccess(e.target.checked); renderSideChat(cfg); } }),
+     "Allow terminal commands") : null;
+-  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), terminalAccess,
++  const history = cfg.terminalCommands ? h("label", { title: "How many of your newest terminal commands, with what they printed, the agent sees with each message" },
++    "Terminal commands", h("select", { "aria-label": "Terminal commands the agent sees",
++      onchange: (e) => { S.termCommands = Number(e.target.value); store("axis.termCommands", S.termCommands); renderSideChat(cfg); } },
++      TERM_COMMAND_CHOICES.map(([n, label]) => { const o = h("option", { value: n }, label); o.selected = n === S.termCommands; return o; }))) : null;
++  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), history, terminalAccess,
+     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
+       onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
+     h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
+@@ -2892,6 +3006,14 @@ function askFrom(agentName, askId) {
+   send(agentName);
+ }
+ 
++// Choices for how many of the newest terminal commands (each with its output) an agent is shown. Axis caps the total
++// at about 16,000 characters, keeping the newest part.
++const TERM_COMMAND_CHOICES = [[0, "Off"], [1, "1"], [3, "3"], [5, "5"], [10, "10"], [25, "25"], [100, "100"]];
++function termShareText(target) {
++  const n = S.termCommands;
++  if (!n) return `${target} does not see the terminal.`;
++  return `Each message shows ${target} the last ${n === 1 ? "command" : n + " commands"} typed into the terminal and their output. It can read them but not type into it.`;
++}
+ const TERM_CHAT = {
+   host: "term-side", askId: "term-ask", hintId: "term-hint",
+   get state() { return S.term; },
+@@ -2900,8 +3022,9 @@ const TERM_CHAT = {
+   noAgents: "Make an agent first. It can then see this terminal and help you with it.",
+   placeholder: (t) => `Ask ${t} about this terminal`,
+   hint: (t, model) => S.term.active
+-    ? `Each message shows ${t} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
+-    : `Open a terminal and ${t} will see its output with each message.`,
++    ? `${termShareText(t)} Using ${model}.`
++    : `Open a terminal and ${t} will see its commands and output with each message.`,
++  terminalCommands: true,
+   ask: () => askFrom(S.term.agent, "term-ask"),
+   terminalAccess: () => S.term.terminalTool,
+   setTerminalAccess: (on) => { S.term.terminalTool = on; },
+@@ -2917,12 +3040,14 @@ const IDE_CHAT = {
+   ask: () => askFrom(S.ide.agent, "ide-ask"),
+   terminalAccess: () => S.ide.terminalTool,
+   setTerminalAccess: (on) => { S.ide.terminalTool = on; },
++  terminalCommands: true,
+   headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
+ };
+ const renderTermChat = () => renderSideChat(TERM_CHAT);
+ const renderIdeChat = () => renderSideChat(IDE_CHAT);
+ function ideHint(target, model) {
+-  const terminal = $("term-out") ? ", and the newest output of the terminal while it is open" : "";
++  const n = S.termCommands;
++  const terminal = $("term-out") && n ? `, and the last ${n === 1 ? "command" : n + " commands"} in the terminal with their output while it is open` : "";
+   return `Each message shows ${target} the folder you are in (${folderLabel()}) and which file is open${terminal}. It can read them but cannot change anything or type into the terminal. Using ${model}.`;
+ }
+ function updateIdeHint() {
+@@ -3686,8 +3811,8 @@ function ocrSettingsCard(m) {
+ }
+ 
+ /* ---------------------------------------------------------------- images */
+-// Pictures made with stable-diffusion.cpp. The Images tab saves to the shared folder (shared/images);
+-// agents with the Image generation skill save to images/ in their own folder.
++// Pictures made with stable-diffusion.cpp. Every picture, from this tab or from an agent, is saved in
++// Axis's images folder (~/Axis/images, the place IMAGES), never in the workspace.
+ const RESOLUTIONS = [
+   [384, 384, "Square, small"], [512, 512, "Square"], [768, 768, "Square, large"], [1024, 1024, "Square, XL"],
+   [512, 768, "Portrait 2:3"], [768, 512, "Landscape 3:2"], [832, 1216, "Portrait, XL"], [1216, 832, "Landscape, XL"],
+@@ -3853,7 +3978,7 @@ function renderImages() {
+     }
+     const buttons = () => [
+       h("button", { class: "btn small", disabled: !!job, onclick: () => filePick.click() }, "Upload"),
+-      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose from Workspace"),
++      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose a saved picture"),
+       src ? h("button", { class: "btn small", disabled: !!job, onclick: () => { f.source = null; saveImageForm(); renderImages(); } }, "Clear") : null];
+     const box = h("div", { class: "ig-source",
+       ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
+@@ -3909,7 +4034,7 @@ function renderImages() {
+           : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0 || (editing && !f.source), onclick: generateImage },
+               editing ? "Edit picture" : "Generate")),
+     h("div", { style: "margin-top:8px" }, imagePreviewToggle(!!job)),
+-    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images"
++    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in Axis\u2019s images folder"
+       + (editing ? "; the original is left as it is." : ".")),
+     model && model.missing.length ? h("p", { class: "form-error" }, `Missing files: ${model.missing.join(", ")}. Fix the paths on the Models page.`) : null);
+ 
+@@ -3959,34 +4084,36 @@ function drawStage() {
+     sel.negative_prompt ? h("p", { class: "ig-meta" }, "Negative: " + sel.negative_prompt) : null,
+     h("p", { class: "ig-meta" }, meta || sel.file),
+     sel.edited_from ? h("p", { class: "ig-meta" }, "Edited from ",
+-      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (r) openInWorkspace(r.place, r.path, true); } }, sel.edited_from.replace(/^_shared:/, "shared/").replace(":", "/"))) : null,
++      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (!r) return;
++        if (r.place === IMAGES) { S.imageSelected = (S.gallery || []).find((g) => g.path === r.path) || S.imageSelected; renderImages(); }
++        else openInWorkspace(r.place, r.path, true); } },
++        sel.edited_from.replace(/^_shared:/, "workspace/").replace(/^_images:/, "images/").replace(":", "/"))) : null,
+     h("div", { class: "fb-actions", style: "margin:10px 0 0" },
+       h("button", { class: "btn small", title: "Use this picture as the start of a new one", onclick: () => setSource({ place: sel.place, path: sel.path }) }, "Edit this picture"),
+       sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
+       sel.seed !== undefined ? h("button", { class: "btn small", title: "Same settings and seed, so you can adjust the prompt", onclick: () => reuse(true) }, "Reuse with seed") : null,
+       h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
+-      h("button", { class: "btn small", onclick: () => openInWorkspace(sel.place, sel.path, true) }, "Open in Workspace"),
++      h("button", { class: "btn small", title: "Select the picture in Explorer or Finder", onclick: () => revealFile(sel.place, sel.path) }, "Show in folder"),
+       h("button", { class: "btn small danger", onclick: () => deleteImage(sel) }, "Delete"))));
+ }
+ 
+ async function loadGallery() {
+   const box = $("ig-gallery"); if (!box) return;
+-  const place = S.galleryPlace = (S.galleryPlace === SHARED || agentByName(S.galleryPlace)) ? S.galleryPlace : SHARED;
++  const place = IMAGES;
+   let list;
+-  try { list = (await api("/api/images/gallery?place=" + encodeURIComponent(place))).images.map((i) => ({ ...i, place })); }
++  try { list = (await api("/api/images/gallery")).images.map((i) => ({ ...i, place })); }
+   catch (e) { return fill(box, h("p", { class: "form-error" }, e.message)); }
+-  if (S.view.kind !== "images" || place !== S.galleryPlace) return;
++  if (S.view.kind !== "images") return;
+   S.gallery = list;
+   if (!S.imageSelected && !S.imageJob && !S.imageError && list.length) { S.imageSelected = list[0]; drawStage(); }
+-  const pick = h("select", { "aria-label": "Show pictures from", onchange: (e) => { S.galleryPlace = e.target.value; loadGallery(); } },
+-    [[SHARED, "Shared folder"], ...S.agents.map((a) => [a.name, a.name])].map(([v, label]) => { const o = h("option", { value: v }, label); o.selected = v === place; return o; }));
+-  fill(box, h("div", { class: "ig-head" }, h("h3", {}, "Gallery"), h("label", { class: "hint", style: "margin:0;display:flex;gap:6px;align-items:center" }, "From", pick),
++  fill(box, h("div", { class: "ig-head" }, h("h3", {}, "Gallery"),
++      h("button", { class: "link", title: "Open Axis's images folder in Explorer or Finder", onclick: () => revealFile(IMAGES, "") }, "Open folder"),
+       h("span", { class: "hint", style: "margin:0" }, `${list.length} picture${list.length === 1 ? "" : "s"}`)),
+     list.length ? h("div", { class: "ig-grid" }, list.map((img) => h("button", { class: "ig-thumb", title: img.prompt || img.file,
+       "aria-current": S.imageSelected && S.imageSelected.path === img.path && S.imageSelected.place === img.place ? "true" : "false",
+       onclick: () => { S.imageSelected = img; S.imageError = null; drawStage(); loadGallery(); } },
+       h("img", { src: imageUrl(img.place, img.path), alt: img.prompt || img.file, loading: "lazy" }))))
+-    : h("p", { class: "hint" }, place === SHARED ? "Pictures you make here are saved in shared/images and listed here." : `${place} has not made any pictures yet. Give it the Image generation skill.`));
++    : h("p", { class: "hint" }, "Pictures you and your agents make are saved in Axis\u2019s images folder and listed here."));
+ }
+ 
+ async function deleteImage(img) {
+@@ -4051,7 +4178,7 @@ async function generateImage() {
+   }
+   clearTimeout(frame);
+   S.imageJob = null;
+-  if (result) { S.imageSelected = { ...result, place: SHARED }; S.galleryPlace = SHARED; }
++  if (result) S.imageSelected = { ...result, place: IMAGES };
+   else if (error) S.imageError = error;
+   if (document.hidden && result) S.unseen = true;
+   streamsChanged();
+@@ -4416,7 +4543,7 @@ function renderOcr() {
+     h("button", { class: "btn small", disabled: !!job, onclick: async () => {
+       const r = await pickPicture("Choose a picture to read", src ? src.place : SHARED);
+       if (!r) return;
+-      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose from Workspace"),
++      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose a saved picture"),
+     src ? h("button", { class: "btn small", disabled: !!job, onclick: () => setOcrSource(null) }, "Clear") : null];
+   let shown = null;
+   if (src) {
+@@ -4444,7 +4571,7 @@ function renderOcr() {
+     h("div", { class: "ig-go" },
+       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
+         : h("button", { class: "btn primary", disabled: !model || !src, onclick: runOcr }, "Read text")),
+-    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in shared/uploads."));
++    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."));
+   const main = h("div", { class: "ig-main" }, h("div", { id: "ocr-stage" }));
+   fill($("main"), bar, h("div", { class: "ig" }, form, main));
+   drawOcr();
+@@ -4477,7 +4604,7 @@ function drawOcr() {
+       h("button", { class: "btn small", onclick: async () => {
+         try {
+           const path = await uploadPicture(SHARED, "ocr", stem + ".txt", new Blob([r.text], { type: "text/plain" }));
+-          toast("Saved as shared/" + path); openInWorkspace(SHARED, path, true);
++          toast("Saved as " + path + " in the workspace folder"); openInWorkspace(SHARED, path, true);
+         } catch (e) { toast(e.message); } } }, "Save to Workspace"),
+       h("button", { class: "btn small", onclick: () => download(stem + ".txt", r.text, "text/plain") }, "Download .txt")) : null));
+ }
+@@ -4522,104 +4649,6 @@ async function runOcr() {
+   else if (result || error) toast(error ? "Reading the text failed" : "Text ready on the OCR page");
+ }
+ 
+-/* ---------------------------------------------------------------- skills */
+-function renderSkills() {
+-  const builtin = S.skills.filter((sk) => sk.builtin && !sk.group);
+-  const craft = S.skills.filter((sk) => sk.builtin && sk.group === ART_CRAFT_GROUP);
+-  const custom = S.skills.filter((sk) => !sk.builtin);
+-  const usedBy = (id) => S.agents.filter((a) => a.skills.includes(id)).map((a) => a.name);
+-  const users = (id) => { const u = usedBy(id); return u.length ? "Used by " + u.join(", ") : "Not used by any agent"; };
+-
+-  const editor = (sk, onDone) => {
+-    const err = h("p", { class: "form-error", role: "alert", hidden: true });
+-    const name = h("input", { type: "text", value: sk ? sk.name : "", maxlength: 80, placeholder: "for example: Plain English", "aria-label": "Skill name" });
+-    const desc = h("input", { type: "text", value: sk ? sk.description : "", maxlength: 300, placeholder: "One line shown when choosing skills", "aria-label": "Description" });
+-    const instr = h("textarea", { rows: 5, placeholder: "What the agent should do when using this skill", "aria-label": "Instructions" });
+-    instr.value = sk ? sk.instructions : "";
+-    const save = async () => {
+-      err.hidden = true;
+-      const data = { name: name.value, description: desc.value, instructions: instr.value };
+-      try {
+-        if (sk) await api("/api/skills/" + encodeURIComponent(sk.id), { method: "PUT", body: data });
+-        else await api("/api/skills", { method: "POST", body: data });
+-        await loadSkills(); toast(sk ? "Skill saved" : "Skill created"); onDone();
+-      } catch (e) { err.textContent = e.message; err.hidden = false; }
+-    };
+-    const form = h("form", { class: "form skill-card", onsubmit: (e) => { e.preventDefault(); save(); } }, err,
+-      sk && sk.builtin ? h("p", { class: "hint" }, "This skill is built in. You can change what it tells the model; its actions stay as they are. Reset to default on its card undoes your changes.") : null,
+-      h("div", { class: "field" }, h("label", {}, "Name"), name),
+-      h("div", { class: "field" }, h("label", {}, "Description"), desc),
+-      h("div", { class: "field" }, h("label", {}, "Instructions"), instr),
+-      h("div", { class: "form-actions" },
+-        h("button", { class: "btn primary", type: "submit" }, sk ? "Save skill" : "Create skill"),
+-        h("button", { class: "btn", type: "button", onclick: onDone }, "Cancel")));
+-    setTimeout(() => name.focus(), 0);
+-    return form;
+-  };
+-
+-  // Everything the skill sends to the model, fetched from Axis each time it is opened so it always matches the saved text.
+-  const sendsView = (sk) => {
+-    const body = h("div", {}, h("p", { class: "hint" }, "Loading\u2026"));
+-    const d = h("details", { class: "sends", ontoggle: () => { if (d.open) load(); } },
+-      h("summary", {}, "What this sends to the model"), body);
+-    async function load() {
+-      try {
+-        const x = await api(`/api/skills/${encodeURIComponent(sk.id)}/sends`);
+-        fill(body,
+-          h("div", { class: "step-label" }, "Added to the system message"), h("pre", {}, x.system),
+-          x.tools.length ? [
+-            h("div", { class: "step-label" }, "Actions given to the model"), h("pre", {}, JSON.stringify(x.tools, null, 2)),
+-            h("details", { class: "sends-sub" }, h("summary", {}, "The same actions as text, for a model without tool support"), h("pre", {}, x.tools_text)),
+-          ] : h("p", { class: "hint" }, "This skill gives the model no actions. It only adds the text above."),
+-          x.notes.map((n) => h("p", { class: "hint" }, n)));
+-      } catch (e) { fill(body, h("p", { class: "form-error" }, e.message)); }
+-    }
+-    return d;
+-  };
+-
+-  const resetSkill = async (sk) => {
+-    if (!confirm(`Put ${sk.name} back to its default text? Your changes to it are lost.`)) return;
+-    try { await api("/api/skills/" + encodeURIComponent(sk.id) + "/reset", { method: "POST" }); await loadSkills(); toast("Back to the default"); renderSkills(); }
+-    catch (e) { toast(e.message); }
+-  };
+-  const deleteSkill = async (sk) => {
+-    if (!confirm(`Delete the skill ${sk.name}? Agents using it will stop using it.`)) return;
+-    try { await api("/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
+-          await Promise.all([loadSkills(), loadAgents()]); toast("Skill deleted"); renderSkills(); }
+-    catch (e) { toast(e.message); }
+-  };
+-  const skillCard = (sk) => {
+-    const card = h("div", { class: "skill-card" },
+-      h("h4", {}, h("span", { class: "skill-name" }, sk.name,
+-          sk.builtin ? h("span", { class: "tag" }, "Built in") : null, sk.modified ? h("span", { class: "tag edited" }, "Edited") : null),
+-        h("span", { class: "skill-tools" },
+-          h("button", { class: "link", onclick: () => card.replaceWith(editor(sk, renderSkills)) }, "Edit"),
+-          sk.builtin ? h("button", { class: "link", disabled: !sk.modified, title: sk.modified ? "Put the text back the way Axis ships it" : "Already the default",
+-            onclick: () => resetSkill(sk) }, "Reset to default") : null,
+-          sk.builtin ? null : h("button", { class: "link", style: "color:var(--bad)", onclick: () => deleteSkill(sk) }, "Delete"))),
+-      sk.description ? h("p", {}, sk.description) : null,
+-      h("p", {}, users(sk.id)),
+-      sendsView(sk));
+-    return card;
+-  };
+-
+-  const newSlot = h("div", {});
+-  $("main").replaceChildren(
+-    h("div", { class: "bar" }, menuButton(), h("h2", {}, "Skills"),
+-      h("button", { class: "btn small primary", onclick: () => fill(newSlot, editor(null, renderSkills)) }, "New skill")),
+-    h("div", { class: "editor" }, h("div", { class: "form" },
+-      newSlot,
+-      h("div", { class: "skill-group" }, h("h3", {}, "Your skills"),
+-        h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
+-        custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
+-      h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
+-        h("p", { class: "hint" }, "These let an agent act: Python, Rust, terminal code, web search and Wikipedia. Edit changes what a skill tells the model; Reset to default undoes it."),
+-        builtin.map(skillCard)),
+-      h("div", { class: "skill-group" }, h("h3", {}, ART_CRAFT_GROUP),
+-        h("p", { class: "hint" }, "One skill for each app on the Art Craft page. It teaches an agent that app\u2019s command line, and works once the app is installed. On macOS the app download has no command-line program, so these skills need one added by hand."),
+-        craft.map(skillCard)))));
+-}
+-
+ /* ---------------------------------------------------------------- update */
+ let updTimer = null, updOpen = false;
+ async function refreshUpdate() {
+@@ -4737,6 +4766,10 @@ window.addEventListener("beforeunload", (e) => {
+   }
+   S.term.side = recall("axis.termSide", true) !== false;
+   S.term.agent = String(recall("axis.termAgent", "") || "");
++  S.toolsOpen = recall("axis.toolsOpen", false) === true;
++  const tc = recall("axis.termCommands", 5);
++  if (TERM_COMMAND_CHOICES.some(([n]) => n === tc)) S.termCommands = tc;
++  loadWsFolder();
+   const tab = recall("axis.modelsTab", "chat");
+   if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
+   const attached = recall("axis.attachments", {});
+diff --git a/docs/api.md b/docs/api.md
+index fb39339..df2c15d 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -30,7 +30,10 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ 
+ | Method | Path | What it does |
+ |--------|------|--------------|
+-| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's recent output; "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only) |
++| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's newest commands and their output, and "terminal_commands": n how many (0 to 100, 0 for none, default 5); "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only; "folder": a full path keeps the agent in that folder for this chat instead of the workspace folder) |
++| `GET` | `/api/workspace` | the workspace folder {folder, default, is_default, missing} (missing names a chosen folder that is gone) |
++| `PUT` | `/api/workspace` | use another folder as the workspace {folder}; `""` goes back to `Axis/shared`. The top of a drive and folders inside `Axis` (except `Axis/shared`) are refused |
++| `GET` | `/api/folders?path=p` | the folders inside p, for choosing a folder {path, parent, folders: [{name, path}], more, roots, home, usable}; without path, the home folder. Folder names only, never files |
+ 
+ ## Agents
+ 
+@@ -48,7 +51,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ 
+ | Method | Path | What it does |
+ |--------|------|--------------|
+-| `GET` | `/api/files/<name>?path=dir` | one folder of an agent's folder (the Workspace tab) (<name> "_shared" means the folder shared by agents) |
++| `GET` | `/api/files/<name>?path=dir` | one folder of an agent's folder (the Workspace tab) (<name> "_shared" means the workspace folder, "_images" the folder of pictures Axis made) |
+ | `GET` | `/api/files/<name>/view?path=file` | a file prepared for preview |
+ | `GET` | `/api/files/<name>/raw?path=file` | the file itself (images, downloads) |
+ | `POST` | `/api/files/<name>/reveal?path=x` | select the file in Explorer/Finder |
+@@ -79,7 +82,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ |--------|------|--------------|
+ | `GET` | `/api/chats` | saved chats (newest first, without messages) |
+ | `GET` | `/api/chats/<id>` | one saved chat with its messages |
+-| `PUT` | `/api/chats/<id>` | create or replace a saved chat |
++| `PUT` | `/api/chats/<id>` | create or replace a saved chat {agent, title?, folder?, messages}; folder is the chat's own folder ("" for the workspace folder) |
+ | `PATCH` | `/api/chats/<id>` | rename a saved chat |
+ | `DELETE` | `/api/chats/<id>` | delete a saved chat |
+ 
+@@ -88,7 +91,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ | Method | Path | What it does |
+ |--------|------|--------------|
+ | `GET` | `/api/terminal` | open terminals |
+-| `POST` | `/api/terminal` | open a terminal {place?, path?, shell?} in that folder (default: shared); Windows accepts `cmd`, `powershell`, or `pwsh` |
++| `POST` | `/api/terminal` | open a terminal {place?, path?, shell?} in that folder (default: the workspace folder); Windows accepts `cmd`, `powershell`, or `pwsh` |
+ | `GET` | `/api/terminal/<id>?since=n` | output from offset n {text, next, reset, alive, exit} |
+ | `POST` | `/api/terminal/<id>/input` | type into the terminal {text} |
+ | `POST` | `/api/terminal/<id>/interrupt` | stop the running command (Ctrl+C) |
+@@ -103,7 +106,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ | `POST` | `/api/images/models` | add an image model |
+ | `PUT` | `/api/images/models/<id>` | change an image model |
+ | `DELETE` | `/api/images/models/<id>` | remove an image model (its files are not touched) |
+-| `GET` | `/api/images/gallery?place=x` | pictures in a folder's images/ ("_shared" or an agent) |
++| `GET` | `/api/images/gallery` | pictures Axis made, in `Axis/images` (newest first); read them through the file routes as `_images` |
+ | `POST` | `/api/images/generate` | make a picture, streaming progress as newline-delimited JSON ("preview": true also streams each step as a small picture; "init_image": {place, path} and "strength" edit that picture) |
+ 
+ ## OCR
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 7528724..7db3cb2 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -58,7 +58,9 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
+ 
+ | State | Where | Module |
+ |-------|-------|--------|
+-| Agents | `~/Axis/agents/<name>/agent.json` and `workspace/` | `agents.py` |
++| Agents | `~/Axis/agents/<name>/agent.json` | `agents.py` |
++| The workspace folder agents work in | `~/Axis/shared`, or the folder named in `~/Axis/workspace-settings.json` | `paths.py` |
++| Pictures Axis makes | `~/Axis/images` | `images.py`, `paths.py` |
+ | Custom skills | `~/Axis/skills/<id>.json` | `skills.py` |
+ | Edits to built-in skills | `~/Axis/skills/built-in/<id>.json` (removed by Reset to default) | `skills.py` |
+ | Chats | `~/Axis/chats/<id>.json` | `chats.py` |
+@@ -84,7 +86,9 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
+ 
+ - **Requests:** `Handler._trusted` accepts only requests whose `Host` (and `Origin`, when present) is this Axis.
+ - **Paths:** `tools.resolve` turns any user or agent path into an absolute path and refuses anything outside the folder. Every file route uses it.
+-- **Python:** `tools.py` runs agent code with a guard that blocks writes and process launches outside the folder, plus a time limit. It is a guard against mistakes, not a sandbox.
++- **Python:** `tools.py` runs agent code with a guard that blocks writes, listings, folder changes and process launches outside the folder, and reads outside it except Python's own files and the system's program folders, plus a time limit. It is a guard against mistakes, not a sandbox.
++- **Terminal and Rust code from agents:** `tools.check_terminal_code` and `tools.check_rust_code` read the code before it runs and refuse it when it names a place outside the folder. Nothing watches the program while it runs.
++- **Chosen folders:** `paths.check_work_folder` checks every folder chosen for the workspace or a chat: it must exist, and it may not be the top of a drive or inside `~/Axis` (except `~/Axis/shared`).
+ - **Downloads:** `hub.py` and `engines.py` verify sizes and SHA-256 checksums before using a file.
+ 
+ ## Tests
+diff --git a/docs/configuration.md b/docs/configuration.md
+index b53a6bf..ccc6218 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -108,3 +108,7 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
+ Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
+ 
+ The page only answers requests from this computer and only from its own page, so other websites open in your browser cannot use it.
++
++## The workspace folder
++
++Agents and the Workspace work in `Axis/shared` unless you choose another folder with **Folder** on the Workspace page. The choice is saved in `Axis/workspace-settings.json` as `{"folder": "<full path>"}`; an empty value, or a folder that no longer exists, means `Axis/shared`. Pictures Axis makes are always saved in `Axis/images`.
+diff --git a/docs/user-guide.md b/docs/user-guide.md
+index a4dd253..3f4ad3f 100644
+--- a/docs/user-guide.md
++++ b/docs/user-guide.md
+@@ -25,6 +25,8 @@ Open **Agents** in the sidebar and click **New agent**. The Agents page lists ev
+ | Skills | Which skills the agent may use. |
+ | Folder | Where the agent's files are kept. **Open folder** shows it in Explorer or Finder. |
+ 
++**The agent's folder.** Agents work in the workspace folder (see [Workspace](#workspace)). In an agent's chat, the **Folder** menu can keep that chat's agent in another folder instead: choose **Choose a folder…**, open any folder on the computer, and click **Use this folder**. The choice is saved with the chat; a new chat starts in the workspace folder again. Either way the agent cannot leave its folder: its Python code cannot read, write, list, or change to anything outside it (it may still read Python's own files and the system's program folders, which code needs to run), and terminal or Rust code that names a place outside the folder (a full path, a `..` that climbs out, the home folder, or a bare `cd`) is refused before it runs. These guards catch mistakes; they are not a sandbox against code written to get around them. Pictures an agent makes always go to `Axis/images`.
++
+ Use **Duplicate** to copy an agent's settings. **Delete agent** removes the agent, its folder, every file in it, and all of its chats.
+ 
+ <details>
+@@ -53,7 +55,7 @@ The config block is attached to your newest message each time and is not shown i
+ 
+ ## Skills
+ 
+-Open **Skills** in the sidebar. Every agent chooses from the same library.
++Choose an agent's skills in its settings (**Edit agent**). Every agent chooses from the same library.
+ 
+ | Built-in skill | Capability |
+ |----------------|------------|
+@@ -82,7 +84,7 @@ Notes:
+ - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
+ - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
+ 
+-**Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** on the Skills page and in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in the shared workspace, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. Edit a skill's text if a newer app release changes a command.
++**Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in its folder, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. If a newer app release changes a command, edit the skill's file in `Axis/skills/built-in`.
+ 
+ **Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). **Edit** and **Delete** are on each card. Deleting a skill removes it from every agent that used it.
+ 
+@@ -116,7 +118,7 @@ Every conversation is saved automatically. Open **Past chats** in the sidebar to
+ 
+ ## Images
+ 
+-Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](installation.md#model-engines)).
++Open **Tools** in the sidebar, then **Images**. Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](installation.md#model-engines)).
+ 
+ **Install by name.** On the **Models** page, choose **Image model**, type a name, and click **Install**. Axis downloads every file the model needs from Hugging Face and sets it up with settings that suit it.
+ 
+@@ -169,15 +171,15 @@ Then click **Add files I already have** and enter the same files and settings:
+ 
+    Relative paths start at the **working folder**: the folder above `bin` when `sd-cli` is in a `bin` folder, otherwise `sd-cli`'s own folder. You can set it explicitly in the sd-cli settings. A single-file SD 1.5 or SDXL model goes in **Checkpoint**; Flux and SD3 use **CLIP-L** and **T5-XXL**. Anything else `sd-cli` accepts goes in **Extra arguments**.
+ 
+-**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/shared/images`. The gallery supports **Reuse settings**, **Reuse with seed**, **Download**, **Open in Workspace**, and **Delete**. One picture is made at a time.
++**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/images`, never in the workspace. The gallery shows that folder (**Open folder** opens it) and supports **Reuse settings**, **Reuse with seed**, **Download**, **Show in folder**, and **Delete**. One picture is made at a time.
+ 
+-**Edit a picture.** On the Images tab, switch from **Create** to **Edit a picture**. Drop a picture on the box, click **Upload**, or choose one with **Choose from Workspace**, describe how it should look, and set **Strength**: low keeps most of the original, high changes more (image to image, using the image models you have). **Keep the picture’s shape** makes the result the same shape as the original. The result goes to the gallery like any other picture.
++**Edit a picture.** On the Images tab, switch from **Create** to **Edit a picture**. Drop a picture on the box, click **Upload**, or choose one with **Choose a saved picture** (from the workspace folder or the images folder), describe how it should look, and set **Strength**: low keeps most of the original, high changes more (image to image, using the image models you have). **Keep the picture’s shape** makes the result the same shape as the original. The result goes to the gallery like any other picture.
+ 
+-**Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `images/` in the agent's folder and shown in the chat.
++**Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `Axis/images`, not in the agent's folder, and shown in the chat.
+ 
+ ## OCR
+ 
+-Axis reads the text in pictures with one of two kinds of engine:
++Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures with one of two kinds of engine:
+ 
+ - **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
+ - **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
+@@ -208,21 +210,23 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
+ 
+ ## Art Craft
+ 
+-Open **Art Craft** in the sidebar to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
++Open **Tools** in the sidebar, then **Art Craft**, to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
+ 
+ - **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
+ - **Open** starts the app. It keeps running if you quit Axis.
+ - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, Axis downloads Microsoft's C++ Build Tools when a Rust build needs the MSVC linker.
+ - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
+ - When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
+-- Agents can drive an installed app through its command line with the matching skill under **Art Craft apps** on the Skills page (see [Skills](#skills)).
++- Agents can drive an installed app through its command line with the matching skill under **Art Craft apps** in its settings (see [Skills](#skills)).
+ - **Delete** removes the app (every version, and any settings kept in its folder) or Rust, after asking. Installing over an installed app is never done, so settings are safe.
+ 
+ ## Workspace
+ 
+ Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
+ 
+-**Layout.** The top bar has two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. There is only one folder, the shared workspace, so there is no folder menu. Under the bar, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
++**Layout.** The top bar has a **Folder** menu and two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. Under the bar, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
++
++**The workspace folder.** Agents and the Workspace work in one folder, `Axis/shared` by default; its path is shown under **Workspace**. **Folder** > **Choose another folder…** opens a chooser where you can open any folder on the computer (or type its path) and click **Use this folder**. **Use the default folder** goes back to `Axis/shared`. The top of a drive and Axis's own data folder cannot be chosen. If the folder you chose is later moved or deleted, Axis uses the default and shows a note.
+ 
+ **Files**
+ - Navigate folders on the left and open files on the right.
+@@ -236,7 +240,7 @@ Open **Workspace** in the sidebar to browse, change, and run what agents have ma
+ 
+ **The bottom panel (terminal and output).** Click **Terminal** (or the arrow at the right end of the panel) to show or hide it. Drag its top edge, or focus it and press the up and down arrow keys, to change its height. Showing it for the first time opens a terminal in the folder you are looking at. Each terminal is a tab (**×** closes it), **New terminal** opens another in the current folder, and the terminal button on a folder row opens one in that folder. See [Terminal](#terminal) for typing. **Run** on a `.py`, `.rs`, `.sh`, `.bash`, `.ps1`, `.bat`, or `.cmd` file runs it and shows its output (printed text, errors, and exit code) in an **Output** tab of the same panel; **Run again** repeats it. Rust files are compiled first. These runs stop after one minute and use your permissions; they are not a security sandbox. While editing, **Save and run** does both. Closing the panel does not stop terminals.
+ 
+-**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, the newest output of the open terminal (about 6,000 characters). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the folder belongs to another agent, or is the shared folder and the agent lacks the Shared folder skill, the agent is told it cannot reach those files itself.
++**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
+ 
+ ## Terminal
+ 
+@@ -246,8 +250,8 @@ Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal
+ - **Type directly in the terminal**, as in any terminal: your text appears after the prompt with a cursor, and **Enter** runs the line. Left and Right move the cursor (with Ctrl, a word at a time), Home and End (or Ctrl+A and Ctrl+E) go to the ends, Backspace and Delete edit, Ctrl+U and Ctrl+K cut to the start or end, Ctrl+W deletes the word before the cursor, Up and Down recall earlier commands, and Page Up and Page Down scroll the output. What you type to a running program, such as an answer to a question, stays visible. Tab completion is not available.
+ - **Ctrl+C** copies when text is selected; otherwise it discards the line you are typing and stops the running command (macOS and Linux). **Stop command** does the same. **Clear** (or Ctrl+L) clears the output shown.
+ - **Paste** puts text on the line. A pasted line is not run until you press Enter. Pasting several lines asks first, since each would run at once.
+-- A terminal runs with your own permissions and is not confined to the agent's folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
+-- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal: with each message it is shown the newest output of the open terminal (about 6,000 characters). It can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
++- A terminal you type into runs with your own permissions and is not confined to any folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
++- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
+ 
+ ## Models tab
+ 
+@@ -284,21 +288,21 @@ Axis/                       in your home folder (override with AXIS_HOME)
+ ├── agents/
+ │   └── <name>/
+ │       ├── agent.json      the agent's settings
+-│       └── workspace/      the agent's folder: every file it makes goes here
+ ├── chats/                  saved conversations, one .json file each
+ ├── engine-settings.json    llama-server path, context size, extra arguments
+ ├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
+ │                           artcraft/ (the Craft apps) and rust/ (portable Rust)
+ ├── image-models/           image model definitions, one .json file each
+ ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
++├── images/                 every picture Axis makes (Images page and agents)
+ ├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index
+ ├── models/
+ │   ├── llm/                GGUF chat models for llama.cpp, one folder per Hugging Face repository
+ │   ├── image/              Stable Diffusion files Axis downloaded
+ │   └── ocr/                OCR models: tessdata/ (Tesseract languages), easyocr/ and doctr/ (PyTorch weights)
+ ├── run/                    programs Axis started (to recover them after a crash)
+-├── shared/                 folder shared by agents with the Shared folder skill
+-│   └── images/             pictures made in the Images tab
+-└── skills/                 your custom skills, one .json file each
+-    └── built-in/           your edits to built-in skills, one .json file each (deleted by Reset to default)
++├── shared/                 the default workspace folder, where agents work
++├── skills/                 your custom skills, one .json file each
++│   └── built-in/           your edits to built-in skills, one .json file each
++└── workspace-settings.json the workspace folder you chose, if not the default
+ ```
+diff --git a/tests/test_axis.py b/tests/test_axis.py
+index e0acfa8..d22c6aa 100644
+--- a/tests/test_axis.py
++++ b/tests/test_axis.py
+@@ -26,7 +26,7 @@ from pathlib import Path
+ from unittest import mock
+ 
+ from test_manage import QuickServer
+-from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, terminal, tools
++from axis import agents, appwindow, backend, cli, images, paths, runner, server, shortcut, skills, terminal, tools
+ 
+ LAST_REQUEST: dict = {}
+ REQUESTS: list = []
+@@ -1043,7 +1043,7 @@ class TestFileManagement(Base):
+         self.assertEqual((shared / "note.txt").read_bytes(), b"for everyone")
+         status, body = request(self.base + "/view?path=missing.txt")
+         self.assertEqual(status, 404)
+-        self.assertIn("the shared folder", body)
++        self.assertIn("the workspace folder", body)
+         self.assertEqual(request(self.base + "?path=../agents")[0], 400)
+ 
+     def test_upload_never_overwrites(self):
+@@ -1551,12 +1551,12 @@ class TestImages(Base):
+         self.assertTrue(any(str(m) in written for m in (model, model.resolve())), written)
+         gallery = images.gallery(shared)
+         self.assertEqual([g["prompt"] for g in gallery], ["a lighthouse on a cliff"])
+-        listing = tools.list_files(shared, {"path": "images"})
++        listing = tools.list_files(shared, {})
+         self.assertNotIn(images.INDEX_NAME, listing)
+         with self.assertRaises(images.ImageError) as ctx:
+             images.generate({"prompt": "FAIL please"}, shared)
+         self.assertIn("out of memory", str(ctx.exception))
+-        self.assertEqual(len(list((shared / "images").glob("*.png"))), 1)
++        self.assertEqual(len(list(shared.glob("*.png"))), 1)
+ 
+     def test_step_previews(self):
+         self.add_model()
+@@ -1570,7 +1570,7 @@ class TestImages(Base):
+         self.assertTrue(shots)
+         self.assertTrue(all(s["image"].startswith("data:image/png;base64,") and s["steps"] == 4 for s in shots))
+         self.assertEqual(base64.b64decode(shots[-1]["image"].split(",", 1)[1])[8:13], b"step4")
+-        self.assertEqual(len(list((shared / "images").glob("*.png"))), 2)   # the preview file is not kept
++        self.assertEqual(len(list(shared.glob("*.png"))), 2)   # the preview file is not kept
+         self.assertTrue((shared / rec["path"]).is_file())
+         cmd = images.build_command(self.cli, images.find_model(None), images.resolve_params(images.find_model(None), {"prompt": "x"}),
+                                    Path("o.png"), self.root, Path("p.png"))
+@@ -1683,7 +1683,7 @@ class TestImages(Base):
+         with self.assertRaises(RuntimeError):
+             images.generate({"prompt": "x"}, Path(self.home) / "shared", on_event=stop)
+         self.assertFalse(images._LOCK.locked())
+-        self.assertEqual(list((Path(self.home) / "shared" / "images").glob("*.png")), [])
++        self.assertEqual(list((Path(self.home) / "shared").glob("*.png")), [])
+ 
+     def test_agent_tool(self):
+         self.add_model()
+@@ -1694,8 +1694,10 @@ class TestImages(Base):
+         ok, out = tools.execute(agent.workspace, "create_image", {"description": "a red fox"}, ["generate_image"])
+         self.assertTrue(ok, out)
+         self.assertTrue(out.startswith("Saved images/"), out)
+-        self.assertEqual(len(list((agent.workspace / "images").glob("*.png"))), 1)
+-        self.assertEqual([f["path"].startswith("images/") for f in agents.list_workspace(agent)], [True])
++        self.assertIn("images folder", out)   # the page finds the picture by these words
++        # The picture goes to ~/Axis/images, never into the agent's folder.
++        self.assertEqual(len(list(paths.images_folder().glob("*.png"))), 1)
++        self.assertEqual(agents.list_workspace(agent), [])
+         ok, out = tools.execute(agent.workspace, "generate_image", {"prompt": "x", "model": "nope"}, ["generate_image"])
+         self.assertFalse(ok)
+         self.assertIn("Unknown image model", out)
+@@ -1714,12 +1716,13 @@ class TestImages(Base):
+         events = chat_events(text)
+         self.assertEqual(events[-1], {"done": True}, events)
+         image = next(e["image"] for e in events if "image" in e)
+-        self.assertEqual((image["place"], image["steps"], image["width"]), ("_shared", 2, 256))
+-        gallery = json.loads(request(url + "/api/images/gallery?place=_shared")[1])["images"]
++        self.assertEqual((image["place"], image["steps"], image["width"]), ("_images", 2, 256))
++        gallery = json.loads(request(url + "/api/images/gallery")[1])["images"]
+         self.assertEqual(gallery[0]["path"], image["path"])
+-        listing = json.loads(request(url + "/api/files/_shared?path=images")[1])
++        listing = json.loads(request(url + "/api/files/_images")[1])
+         self.assertEqual([e["name"] for e in listing["entries"]], [image["file"]])
+-        view = json.loads(request(url + "/api/files/_shared/view?path=" + urllib.parse.quote(image["path"]))[1])
++        self.assertFalse((Path(self.home) / "shared" / "images").exists())   # nothing goes to the workspace
++        view = json.loads(request(url + "/api/files/_images/view?path=" + urllib.parse.quote(image["path"]))[1])
+         self.assertEqual(view["kind"], "image")
+         events = chat_events(request(url + "/api/images/generate", "POST", {"prompt": " "})[1])
+         self.assertIn("error", events[-1])
+@@ -2220,9 +2223,15 @@ class TestWorkspaceRoutes(Base):
+ 
+     def test_terminal_output_reaches_the_agent(self):
+         session = mock.Mock(shell="bash", cwd=self.ws)
+-        session.snapshot.return_value = "$ make\nerror: missing file\n"
++        session.recent.return_value = ("$ make\nerror: missing file\n", 1)
+         with mock.patch.object(terminal, "get", return_value=session):
+             msgs = server.with_terminal([{"role": "user", "content": "why?"}], "t1")
++            session.recent.assert_called_with(server.DEFAULT_TERMINAL_COMMANDS)
++            self.assertIn("The last 1 command", msgs[0]["content"])
++            server.with_terminal([{"role": "user", "content": "why?"}], "t1", 12)
++            session.recent.assert_called_with(12)
++            # 0 shows the agent nothing from the terminal.
++            self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "t1", 0)[0]["content"], "x")
+         self.assertTrue(msgs[0]["content"].startswith("why?"))
+         self.assertIn("error: missing file", msgs[0]["content"])
+         self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "missing")[0]["content"], "x")
+@@ -2341,5 +2350,157 @@ class TestWorkspaceRoutes(Base):
+         self.assertEqual(terminal.clean("\x1b[1;32mok\x1b[0m\r\nprogress 10%\rprogress 100%\n"), "ok\nprogress 100%\n")
+ 
+ 
++class TestWorkFolders(Base):
++    """The workspace folder setting, a chat's own folder, and keeping agents inside them."""
++
++    def setUp(self):
++        super().setUp()
++        self.other = Path(tempfile.mkdtemp())
++        self.addCleanup(shutil.rmtree, self.other, True)
++        self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
++
++    def test_workspace_folder_setting(self):
++        shared = Path(self.home) / "shared"
++        self.assertEqual(paths.workspace_root(), shared)
++        st = json.loads(request(self.url + "/api/workspace")[1])
++        self.assertTrue(st["is_default"])
++        code, body = request(self.url + "/api/workspace", "PUT", {"folder": str(self.other)})
++        self.assertEqual(code, 200, body)
++        self.assertEqual(json.loads(body)["folder"], str(self.other.resolve()))
++        self.assertEqual(paths.workspace_root(), self.other.resolve())
++        agent = agents.create({"name": "a"})
++        self.assertEqual(agent.workspace, self.other.resolve())
++        (self.other / "here.txt").write_text("x")
++        names = [e["name"] for e in json.loads(request(self.url + "/api/files/_shared")[1])["entries"]]
++        self.assertIn("here.txt", names)
++        # A folder that is gone falls back to the default, and the page is told which one was missing.
++        gone = self.other / "gone"
++        gone.mkdir()
++        paths.set_workspace_root(str(gone))
++        gone.rmdir()
++        st = paths.workspace_setting()
++        self.assertEqual((st["folder"], st["missing"]), (str(shared), str(gone.resolve())))
++        self.assertEqual(request(self.url + "/api/workspace", "PUT", {"folder": ""})[0], 200)
++        self.assertTrue(paths.workspace_setting()["is_default"])
++
++    def test_folders_that_cannot_be_used(self):
++        for bad in ("relative/path", str(self.other / "missing"), Path(self.other).anchor, self.home,
++                    str(Path(self.home) / "models")):
++            with self.subTest(bad=bad):
++                with self.assertRaises(paths.FolderError):
++                    paths.check_work_folder(bad)
++                self.assertEqual(request(self.url + "/api/workspace", "PUT", {"folder": bad})[0] // 100, 4)
++        (Path(self.home) / "shared" / "project").mkdir(parents=True)
++        self.assertEqual(paths.check_work_folder(str(Path(self.home) / "shared" / "project")),
++                         (Path(self.home) / "shared" / "project").resolve())
++
++    def test_folder_browser(self):
++        (self.other / "b").mkdir()
++        (self.other / "a").mkdir()
++        (self.other / ".hidden").mkdir()
++        (self.other / "file.txt").write_text("x")
++        data = json.loads(request(self.url + "/api/folders?path=" + urllib.parse.quote(str(self.other)))[1])
++        self.assertEqual([f["name"] for f in data["folders"]], ["a", "b"])   # folders only, sorted, no hidden ones
++        self.assertEqual(data["parent"], str(self.other.resolve().parent))
++        self.assertTrue(data["usable"])
++        self.assertTrue(data["roots"])
++        self.assertEqual(request(self.url + "/api/folders?path=" + urllib.parse.quote(str(self.other / "no")))[0], 404)
++        home = json.loads(request(self.url + "/api/folders")[1])
++        self.assertEqual(home["path"], str(Path.home().resolve()))
++
++    def test_chat_keeps_the_agent_in_its_folder(self):
++        agents.create({"name": "a", "skills": ["run-python"]})
++        seen = {}
++
++        def fake_reply(conn, model, messages, emit, tool_names, workspace, shared, image_preview):
++            seen.update(workspace=workspace, shared=shared, text=messages[-1]["content"])
++
++        with mock.patch.object(runner, "reply", side_effect=fake_reply):
++            body = {"agent": "a", "messages": [{"role": "user", "content": "hi"}], "folder": str(self.other)}
++            events = chat_events(request(self.url + "/api/chat", "POST", body)[1])
++            self.assertEqual(events[-1], {"done": True}, events)
++            self.assertEqual((seen["workspace"], seen["shared"]), (self.other.resolve(), None))
++            self.assertIn("cannot leave it", seen["text"])
++            body["folder"] = ""
++            chat_events(request(self.url + "/api/chat", "POST", body)[1])
++            self.assertEqual(seen["workspace"], Path(self.home) / "shared")
++            body["folder"] = str(self.other / "missing")
++            code, text = request(self.url + "/api/chat", "POST", body)
++            self.assertEqual(code, 404, text)
++        # The folder is kept with the chat.
++        chat_id = "abcdefgh-1234"
++        request(self.url + "/api/chats/" + chat_id, "PUT", {"agent": "a", "folder": str(self.other),
++                                                             "messages": [{"role": "user", "content": "x"}]})
++        self.assertEqual(json.loads(request(self.url + "/api/chats/" + chat_id)[1])["folder"], str(self.other))
++
++    def test_python_cannot_leave_its_folder(self):
++        ws = self.other / "ws"
++        ws.mkdir()
++        (self.other / "secret.txt").write_text("private")
++        cases = {
++            "print(open('../secret.txt').read())": "reading files outside",
++            "import os; print(os.listdir('..'))": "looking inside folders outside",
++            "import os; os.chdir('..')": "changing to a folder outside",
++            "open('../x.txt', 'w')": "writing outside",
++        }
++        for code, why in cases.items():
++            with self.subTest(code=code):
++                result = tools.run_code(ws, code)
++                self.assertNotEqual(result["exit"], 0)
++                self.assertIn(why, result["stderr"])
++        ok = tools.run_code(ws, "import json, os\nopen('a.txt', 'w').write('1')\nprint(os.listdir('.'), json.dumps(1))")
++        self.assertEqual(ok["exit"], 0, ok)
++
++    def test_terminal_and_rust_code_that_leaves_the_folder_is_refused(self):
++        ws = self.other / "ws"
++        (ws / "sub").mkdir(parents=True)
++        for code in ("ls -la", "echo hi > out.txt && cat out.txt", "cd sub && ls", "python3 x.py 2>/dev/null",
++                     "curl https://example.com/a/b -o page.html", "echo $((4 / 2))", f"cat {ws / 'sub'}"):
++            with self.subTest(code=code):
++                tools.check_terminal_code(ws, code)
++        for code in ("cat ../secret.txt", "cd", "cd ~", "cat ~/.bashrc", "echo $HOME", "ls ..", "cd -",
++                     "type %USERPROFILE%\\x", str(Path(self.other).anchor) + "x"):
++            with self.subTest(code=code):
++                with self.assertRaises(tools.ToolError):
++                    tools.check_terminal_code(ws, code)
++        tools.check_rust_code(ws, 'fn main() { std::fs::write("out.txt", "hi").unwrap(); println!("{}", 4/2); }')
++        for code in ('fn main() { std::fs::read("../x").unwrap(); }', 'fn main() { std::env::home_dir(); }',
++                     'fn main() { std::fs::read("' + str(Path(self.other).anchor).replace("\\", "\\\\") + 'x"); }'):
++            with self.subTest(code=code):
++                with self.assertRaises(tools.ToolError):
++                    tools.check_rust_code(ws, code)
++        # The agent's action is refused before anything runs; the Workspace Run button (the user) is not checked.
++        ok, out = tools.execute(ws, "run_terminal", {"code": "cat ../secret.txt"}, ["run_terminal"])
++        self.assertFalse(ok)
++        self.assertIn("outside your folder", out)
++
++    def test_terminal_counts_commands(self):
++        if os.name == "nt":
++            self.skipTest("the terminal test uses a POSIX shell")
++        t = terminal.start(self.other, "count")
++        self.addCleanup(terminal.close_all)
++        for word in ("one", "two", "three"):   # type each command once the one before has answered
++            t.write(f"echo {word}-out\n")
++            for _ in range(60):
++                if f"{word}-out\n" in terminal.clean(t.read(0)["text"]).replace(f"echo {word}-out", ""):
++                    break
++                time.sleep(0.05)
++        text, shown = t.recent(1)
++        self.assertEqual(shown, 1)
++        self.assertIn("three-out", text)
++        self.assertNotIn("two-out", text)
++        text, shown = t.recent(2)
++        self.assertEqual(shown, 2)
++        self.assertIn("two-out", text)
++        self.assertNotIn("one-out", text)
++        text, shown = t.recent(50)          # more than were typed: everything kept
++        self.assertEqual(shown, 3)
++        self.assertIn("one-out", text)
++        self.assertEqual(t.recent(0), ("", 0))
++        self.assertEqual(server.terminal_commands(None), server.DEFAULT_TERMINAL_COMMANDS)
++        self.assertEqual(server.terminal_commands(10_000), terminal.MAX_COMMANDS)
++        self.assertEqual(server.terminal_commands(-3), 0)
++
++
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.43.0
+

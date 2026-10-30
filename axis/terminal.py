@@ -11,7 +11,10 @@ editor to do it), except on Windows, where cmd prints each command it reads.
 
 Unlike Run Python, a terminal is not guarded: it runs with the user's own
 rights. Only the user types into it. Agents may be shown its recent output
-(snapshot) but never write to it.
+(snapshot), or its newest commands with their output (recent), but never write to it.
+
+Each line typed into a terminal marks where a command starts in the output, so
+recent(n) can show an agent exactly the last n commands and what they printed.
 
 Output is kept in a rolling buffer. Clients read it by offset (read), so the
 page can poll for what is new and an agent can be shown the newest part.
@@ -35,7 +38,9 @@ from typing import Any, Dict, List, Optional
 MAX_BUFFER = 400_000        # characters kept per session
 MAX_INPUT = 64 * 1024
 MAX_SESSIONS = 12
-SNAPSHOT_CHARS = 6000       # what an agent is shown
+SNAPSHOT_CHARS = 6000       # what an agent is shown by snapshot()
+MAX_COMMANDS = 100          # the most commands an agent can be shown, and the most marks kept
+RECENT_CHARS = 16000        # the most characters an agent is shown by recent()
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
 
 
@@ -112,6 +117,7 @@ class Session:
         self._lock = threading.Lock()
         self._text = ""
         self._base = 0                       # characters dropped from the front of the buffer
+        self._marks: List[int] = []          # where each typed line starts in the output (absolute offsets)
         self.exit_code: Optional[int] = None
         shell_info = _shell(shell)
         self.shell = shell_info["name"]
@@ -171,6 +177,7 @@ class Session:
             raise TerminalError("That input is too long.")
         if not self.alive:
             raise TerminalError("This terminal has closed. Open a new one.")
+        self._mark(text)
         if self.echo:
             self._append(text)
         data = text.replace("\r\n", "\n")
@@ -182,6 +189,40 @@ class Session:
             self.proc.stdin.flush()
         except (OSError, ValueError) as exc:
             raise TerminalError("This terminal has closed. Open a new one.") from exc
+
+    def _mark(self, text: str) -> None:
+        """Remember where each line in text starts in the output, so commands can be counted."""
+        lines = text.replace("\r\n", "\n").split("\n")[:-1]   # only finished lines run
+        if not lines:
+            return
+        with self._lock:
+            at = self._base + len(self._text)
+            for line in lines:
+                if line.strip():
+                    self._marks.append(at)
+                if self.echo:
+                    at += len(line) + 1
+            del self._marks[:-MAX_COMMANDS]
+
+    def recent(self, commands: int, chars: int = RECENT_CHARS) -> "tuple[str, int]":
+        """The last `commands` commands typed into this terminal and their output, as plain text.
+
+        Returns (text, number of commands shown). The text starts where the first of them was typed;
+        with fewer commands typed than asked for, it is all the output kept. Only the newest `chars`
+        characters are returned.
+        """
+        commands = max(0, min(int(commands), MAX_COMMANDS))
+        if commands == 0:
+            return "", 0
+        with self._lock:
+            marks = [m for m in self._marks if m >= self._base]
+            start = marks[-commands] if len(marks) >= commands else self._base
+            text = self._text[start - self._base:]
+            shown = min(commands, len(marks))
+        text = clean(text)
+        if len(text) > chars:
+            text = "[... the start was cut off ...]\n" + text[-chars:]
+        return text, shown
 
     def interrupt(self) -> None:
         """Stop the command that is running (like Ctrl+C), keeping the shell."""

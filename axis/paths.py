@@ -1,7 +1,13 @@
-"""Where Axis keeps its data."""
+"""Where Axis keeps its data.
+
+The workspace is the folder agents and the Workspace tab work in. It is ~/Axis/shared unless the
+user chose another folder; the choice is kept in ~/Axis/workspace-settings.json. A chat can also use
+a folder of its own (see check_work_folder). Pictures Axis makes always go to ~/Axis/images.
+"""
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -17,6 +23,80 @@ def axis_home() -> Path:
 def shared_root() -> Path:
     """The one workspace shared by every agent."""
     return axis_home() / "shared"
+
+
+def images_folder() -> Path:
+    """Where every picture Axis makes is saved (the Images tab and the generate_image action)."""
+    return axis_home() / "images"
+
+
+def _workspace_settings() -> Path:
+    return axis_home() / "workspace-settings.json"
+
+
+class FolderError(Exception):
+    pass
+
+
+def check_work_folder(value: object) -> Path:
+    """A folder the user chose for the workspace or for one chat, as an absolute, resolved path.
+
+    Any existing folder may be chosen except the top of a drive or file system, and Axis's own data
+    folder (the shared folder inside it is allowed), so agents cannot change Axis's settings or models.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise FolderError("Choose a folder.")
+    raw = Path(value.strip()).expanduser()
+    if not raw.is_absolute():
+        raise FolderError("Give the folder's full path, for example /home/you/projects or C:\\Users\\you\\projects.")
+    try:
+        folder = raw.resolve()
+    except OSError as exc:
+        raise FolderError(f"That folder cannot be used: {exc.strerror or exc}") from exc
+    if not folder.is_dir():
+        raise FolderError(f"Folder '{value.strip()}' does not exist.")
+    if folder.parent == folder:
+        raise FolderError("The top of a drive cannot be used. Choose a folder inside it.")
+    home = axis_home()
+    if inside(folder, home) and not inside(folder, shared_root()):
+        raise FolderError(f"Folders inside {home} hold Axis's own data and cannot be used, except {shared_root()}.")
+    return folder
+
+
+def workspace_root() -> Path:
+    """The folder agents and the Workspace tab use: the one the user chose, or ~/Axis/shared."""
+    try:
+        data = json.loads(_workspace_settings().read_text(encoding="utf-8"))
+        chosen = data.get("folder") if isinstance(data, dict) else None
+        if chosen:
+            return check_work_folder(chosen)
+    except (OSError, ValueError, FolderError):
+        pass   # no setting, or the chosen folder is gone: use the default
+    return shared_root()
+
+
+def workspace_setting() -> dict:
+    """What the Workspace folder setting holds, for the page."""
+    chosen = ""
+    try:
+        data = json.loads(_workspace_settings().read_text(encoding="utf-8"))
+        chosen = str(data.get("folder") or "") if isinstance(data, dict) else ""
+    except (OSError, ValueError):
+        pass
+    root = workspace_root()
+    return {"folder": str(root), "default": str(shared_root()), "is_default": root == shared_root(),
+            "missing": chosen if chosen and root == shared_root() else ""}
+
+
+def set_workspace_root(value: object) -> dict:
+    """Use value as the workspace folder; an empty value goes back to ~/Axis/shared."""
+    folder = "" if value in (None, "") else str(check_work_folder(value))
+    path = _workspace_settings()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"folder": folder}, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return workspace_setting()
 
 
 def models_root() -> Path:

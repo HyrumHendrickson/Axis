@@ -58,7 +58,9 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 
 | State | Where | Module |
 |-------|-------|--------|
-| Agents | `~/Axis/agents/<name>/agent.json` and `workspace/` | `agents.py` |
+| Agents | `~/Axis/agents/<name>/agent.json` | `agents.py` |
+| The workspace folder agents work in | `~/Axis/shared`, or the folder named in `~/Axis/workspace-settings.json` | `paths.py` |
+| Pictures Axis makes | `~/Axis/images` | `images.py`, `paths.py` |
 | Custom skills | `~/Axis/skills/<id>.json` | `skills.py` |
 | Edits to built-in skills | `~/Axis/skills/built-in/<id>.json` (removed by Reset to default) | `skills.py` |
 | Chats | `~/Axis/chats/<id>.json` | `chats.py` |
@@ -84,7 +86,9 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 
 - **Requests:** `Handler._trusted` accepts only requests whose `Host` (and `Origin`, when present) is this Axis.
 - **Paths:** `tools.resolve` turns any user or agent path into an absolute path and refuses anything outside the folder. Every file route uses it.
-- **Python:** `tools.py` runs agent code with a guard that blocks writes and process launches outside the folder, plus a time limit. It is a guard against mistakes, not a sandbox.
+- **Python:** `tools.py` runs agent code with a guard that blocks writes, listings, folder changes and process launches outside the folder, and reads outside it except Python's own files and the system's program folders, plus a time limit. It is a guard against mistakes, not a sandbox.
+- **Terminal and Rust code from agents:** `tools.check_terminal_code` and `tools.check_rust_code` read the code before it runs and refuse it when it names a place outside the folder. Nothing watches the program while it runs.
+- **Chosen folders:** `paths.check_work_folder` checks every folder chosen for the workspace or a chat: it must exist, and it may not be the top of a drive or inside `~/Axis` (except `~/Axis/shared`).
 - **Downloads:** `hub.py` and `engines.py` verify sizes and SHA-256 checksums before using a file.
 
 ## Tests

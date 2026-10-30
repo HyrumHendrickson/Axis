@@ -16,10 +16,11 @@ Stored in ~/Axis:
     image-settings.json        where sd-cli is, the folder it runs in, the default model
     image-models/<id>.json     one file per image model
 
-Pictures made in the Images tab go to ~/Axis/shared/images. Pictures an agent
-makes with the generate_image action go to images/ in that agent's own folder.
-Each images/ folder keeps a hidden index (.axis-images.json) with the prompt and
-settings of every picture, for the gallery.
+Every picture Axis makes, in the Images tab or with an agent's generate_image
+action, goes to ~/Axis/images (paths.images_folder), never into the workspace.
+The folder keeps a hidden index (.axis-images.json) with the prompt and settings
+of every picture, for the gallery. Pictures made before Axis 4.3.4 stay where they
+were saved (images/ in the shared folder).
 
 Editing a picture (image to image): when a request names an init image, the same
 model starts from that picture instead of from noise. strength (0 to 1) sets how far
@@ -607,7 +608,8 @@ _LOCK = threading.Lock()  # one picture at a time: they compete for the same GPU
 def generate(raw: Dict[str, Any], folder: Path, source: str = "",
              on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False,
              init_image: Optional[Path] = None, init_name: str = "") -> Dict[str, Any]:
-    """Make one picture in folder/images. Returns its index record (with "path").
+    """Make one picture in folder (normally paths.images_folder()). Returns its index record (with "path",
+    the file's name inside folder).
 
     With init_image the picture is an edit of that file (image to image); init_name is
     how the source is shown in the gallery (for example "shared:uploads/cat.png").
@@ -635,7 +637,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     while not _LOCK.acquire(timeout=1.0):
         emit({"queued": True})  # also notices a browser that has gone away
     try:
-        out_dir = folder / IMAGES_DIR
+        out_dir = folder
         out_dir.mkdir(parents=True, exist_ok=True)
         name = _file_name(params["prompt"])
         out_file, n = out_dir / f"{name}.png", 2
@@ -695,7 +697,7 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     shown = {k: v for k, v in params.items() if k != "init_image"}   # the full path stays private
     if init_image is not None:
         shown["edited_from"] = init_name or init_image.name
-    record = {"file": out_file.name, "path": f"{IMAGES_DIR}/{out_file.name}", "model": model["name"],
+    record = {"file": out_file.name, "path": out_file.name, "model": model["name"],
               "model_id": model["id"], **shown, "seconds": seconds, "source": source,
               "created": datetime.now().isoformat(timespec="seconds")}
     _add_to_index(out_dir, record)
@@ -1000,8 +1002,8 @@ def _add_to_index(out_dir: Path, record: Dict[str, Any]) -> None:
 
 
 def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
-    """Pictures in folder/images, newest first, with their prompts where known."""
-    out_dir = folder / IMAGES_DIR
+    """Pictures in folder (normally paths.images_folder()), newest first, with their prompts where known."""
+    out_dir = folder
     if not out_dir.is_dir():
         return []
     items = _read_json(out_dir / INDEX_NAME, [])
@@ -1015,7 +1017,7 @@ def gallery(folder: Path, limit: int = 500) -> List[Dict[str, Any]]:
             mtime = f.stat().st_mtime
         except OSError:
             continue
-        info.update({"file": f.name, "path": f"{IMAGES_DIR}/{f.name}", "mtime": mtime})
+        info.update({"file": f.name, "path": f.name, "mtime": mtime})
         info.setdefault("created", datetime.fromtimestamp(mtime).isoformat(timespec="seconds"))
         result.append(info)
     result.sort(key=lambda i: i["mtime"], reverse=True)

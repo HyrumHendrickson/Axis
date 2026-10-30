@@ -3,7 +3,8 @@
 Each agent lives in ~/Axis/agents/<name>/:
 
     agent.json   settings
-Files made by agents are saved in ~/Axis/shared, the one workspace shared by every agent.
+Files made by agents are saved in the workspace folder shared by every agent: ~/Axis/shared, or the
+folder the user chose for the Workspace (paths.workspace_root). A chat can use a folder of its own.
 
 Settings:
 * system_prompt  who the agent is (sent as the system message)
@@ -29,7 +30,7 @@ from . import chats as chat_lib
 from . import runner
 from . import skills as skill_lib
 from . import tools as tool_lib
-from .paths import axis_home, remove_tree, shared_root
+from .paths import axis_home, remove_tree, shared_root, workspace_root
 
 DEFAULT_PROMPT = "You are a concise and helpful assistant."
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -82,7 +83,7 @@ class Agent:
 
     @property
     def workspace(self) -> Path:
-        return shared_root()
+        return workspace_root()
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -409,7 +410,7 @@ def shared_folder(agent: Optional[Agent]) -> Optional[Path]:
     """The one workspace shared by every agent that can work with files."""
     if agent is None:
         return None
-    root = shared_root()
+    root = workspace_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

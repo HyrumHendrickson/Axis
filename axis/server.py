@@ -18,7 +18,8 @@ Routes:
   GET    /api/agents/<name>/files           files in the shared workspace (flat list)
   POST   /api/agents/<name>/open-folder     show the shared workspace in Explorer/Finder
   GET    /api/files/<name>?path=dir         one folder of an agent's folder (the Workspace tab)
-                                            (<name> "_shared" means the folder shared by agents)
+                                            (<name> "_shared" means the workspace folder shared by agents,
+                                            and "_images" the folder of pictures Axis made)
   GET    /api/files/<name>/view?path=file   a file prepared for preview
   GET    /api/files/<name>/raw?path=file    the file itself (images, downloads)
   POST   /api/files/<name>/reveal?path=x    select the file in Explorer/Finder
@@ -41,8 +42,15 @@ Routes:
   POST   /api/chat                          stream a reply as newline-delimited JSON
                                             (a user message may carry "images": [{place, path}] for
                                             models that read pictures; "terminal": id shows the agent
-                                            that terminal's recent output; "workspace": {place, path, file}
-                                            shows the agent the Workspace folder the user is looking at)
+                                            that terminal's recent commands and output, "terminal_commands": n
+                                            how many of them (0 for none, default 5); "workspace":
+                                            {place, path, file} shows the agent the Workspace folder the user
+                                            is looking at; "folder": a full path keeps the agent in that folder
+                                            for this chat instead of the workspace folder)
+  GET    /api/workspace                     the workspace folder {folder, default, is_default, missing}
+  PUT    /api/workspace                     use another folder as the workspace {folder} ("" for the default)
+  GET    /api/folders?path=p                the folders inside p, for choosing a folder {path, parent, folders,
+                                            roots, home} (no path: the home folder)
   GET    /api/terminal                      open terminals
   POST   /api/terminal                      open a terminal {place?, path?, shell?} in that folder (default: shared)
   GET    /api/terminal/<id>?since=n         output from offset n {text, next, reset, alive, exit}
@@ -59,7 +67,7 @@ Routes:
   POST   /api/images/models                 add an image model
   PUT    /api/images/models/<id>            change an image model
   DELETE /api/images/models/<id>            remove an image model (its files are not touched)
-  GET    /api/images/gallery?place=x        pictures in a folder's images/ ("_shared" or an agent)
+  GET    /api/images/gallery                pictures Axis made, in ~/Axis/images (newest first)
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
                                             ("preview": true also streams each step as a small picture;
                                             "init_image": {place, path} and "strength" edit that picture)
@@ -111,7 +119,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from . import __version__, agents, artcraft, backend, catalog, chats, engines, hub, images, jobs, manager, ocr, procs, runner, skills, terminal, tools, updates
-from .paths import remove_tree, shared_root
+from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_BODY = 5 * 1024 * 1024
@@ -137,33 +145,99 @@ def page() -> bytes:
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
 
 
-# The Workspace tab's name for the shared folder. It can never clash with an agent,
-# because agent names must start with a letter or number.
+# The Workspace tab's names for the workspace folder and the pictures folder. They can never clash
+# with an agent, because agent names must start with a letter or number.
 SHARED_NAME = "_shared"
+IMAGES_NAME = "_images"
 
 
 class SharedPlace:
-    """Stands in for an agent in the file routes so the shared folder can be browsed."""
+    """Stands in for an agent in the file routes so the workspace folder can be browsed."""
 
     name = SHARED_NAME
 
     @property
     def workspace(self) -> Path:
-        return shared_root()
+        return workspace_root()
 
 
-Place = Union[agents.Agent, SharedPlace]
+class ImagesPlace:
+    """The folder where every picture Axis makes is saved (~/Axis/images)."""
+
+    name = IMAGES_NAME
+
+    @property
+    def workspace(self) -> Path:
+        return images_folder()
+
+
+Place = Union[agents.Agent, SharedPlace, ImagesPlace]
 
 
 def place(name: str) -> Place:
     if name == SHARED_NAME:
-        shared_root().mkdir(parents=True, exist_ok=True)
+        workspace_root().mkdir(parents=True, exist_ok=True)
         return SharedPlace()
+    if name == IMAGES_NAME:
+        images_folder().mkdir(parents=True, exist_ok=True)
+        return ImagesPlace()
     return agents.load(name)
 
 
 def _owner(agent: Place) -> str:
-    return "the shared folder" if isinstance(agent, SharedPlace) else f"{agent.name}'s folder"
+    if isinstance(agent, SharedPlace):
+        return "the workspace folder"
+    if isinstance(agent, ImagesPlace):
+        return "the images folder"
+    return f"{agent.name}'s folder"
+
+
+MAX_FOLDERS = 2000   # folders listed by /api/folders
+
+
+def _roots() -> List[str]:
+    """The tops of the file systems: drive letters on Windows, / elsewhere."""
+    if os.name != "nt":
+        return ["/"]
+    import string
+    return [f"{d}:\\" for d in string.ascii_uppercase if os.path.isdir(f"{d}:\\")]
+
+
+def folder_choices(raw: str) -> Dict[str, Any]:
+    """The folders inside one folder of the computer, so the page can let the user choose one.
+
+    Only names of folders are listed, never files. This shows the user their own computer; agents
+    never call it.
+    """
+    home = Path.home()
+    try:
+        folder = Path(raw).expanduser().resolve() if raw else home
+    except OSError as exc:
+        raise agents.AgentError(f"That folder cannot be opened: {exc.strerror or exc}") from exc
+    if not folder.is_absolute():
+        raise agents.AgentError("Give the folder's full path.")
+    if not folder.is_dir():
+        raise agents.AgentError(f"Folder '{raw}' does not exist.")
+    found: List[Dict[str, str]] = []
+    try:
+        with os.scandir(folder) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        found.append({"name": entry.name, "path": str(folder / entry.name)})
+                except OSError:
+                    continue
+    except OSError as exc:
+        raise agents.AgentError(f"Axis cannot look inside '{folder}' ({exc.strerror or exc}).") from exc
+    found.sort(key=lambda e: e["name"].lower())
+    usable = True
+    try:
+        check_work_folder(str(folder))
+    except FolderError:
+        usable = False
+    return {"path": str(folder), "parent": "" if folder.parent == folder else str(folder.parent),
+            "folders": found[:MAX_FOLDERS], "more": max(0, len(found) - MAX_FOLDERS), "roots": _roots(),
+            "home": str(home), "usable": usable}
 
 
 MAX_NAME_BYTES = 200   # leaves room for " (2)" and a temporary prefix inside the 255-byte limit of most file systems
@@ -549,7 +623,7 @@ def save_text(agent: "Place", rel: str, data: bytes) -> Dict[str, Any]:
 
 def run_script(agent: "Place", rel: str) -> Dict[str, Any]:
     """Run a Workspace program with the action matching its file type."""
-    shared = None if isinstance(agent, SharedPlace) else agents.shared_folder(agent)
+    shared = agents.shared_folder(agent) if isinstance(agent, agents.Agent) else None
     started = time.monotonic()
     try:
         where = tools.Places(agent.workspace, shared)
@@ -580,17 +654,40 @@ def folder_path(agent: "Place", rel: str) -> Path:
     return folder
 
 
-def with_terminal(messages: List[Dict[str, Any]], sid: Any) -> List[Dict[str, Any]]:
-    """Show the agent the newest output of a terminal, added to the newest message."""
-    if not sid:
+DEFAULT_TERMINAL_COMMANDS = 5
+
+
+def terminal_commands(value: Any) -> int:
+    """How many of the newest terminal commands an agent is shown (0 to terminal.MAX_COMMANDS)."""
+    if value is None or value == "":
+        return DEFAULT_TERMINAL_COMMANDS
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise agents.AgentError("terminal_commands must be a whole number.") from None
+    return max(0, min(n, terminal.MAX_COMMANDS))
+
+
+def with_terminal(messages: List[Dict[str, Any]], sid: Any, commands: int = DEFAULT_TERMINAL_COMMANDS) -> List[Dict[str, Any]]:
+    """Show the agent the newest commands of a terminal and their output, added to the newest message.
+
+    commands is how many of the commands typed into it (counting back from the newest) are shown,
+    each with what it printed. 0 shows nothing.
+    """
+    if not sid or commands <= 0:
         return messages
     try:
         session = terminal.get(str(sid))
     except terminal.TerminalError:
         return messages
-    shot = session.snapshot().strip("\n") or "(nothing yet)"
+    shot, shown = session.recent(commands)
+    shot = shot.strip("\n") or "(nothing yet)"
+    if shown:
+        what = f"The last {shown} command{'' if shown == 1 else 's'} typed into it and their output"
+    else:
+        what = "Its output (no commands have been typed into it yet)"
     note = (f"\n\n---\nThe user's terminal ({session.shell}, started in {session.cwd}). "
-            f"Its newest output, which you can see but not type into:\n```\n{shot}\n```")
+            f"{what}, which you can see but not type into:\n```\n{shot}\n```")
     last = messages[-1]
     return messages[:-1] + [{**last, "content": last["content"] + note}]
 
@@ -621,6 +718,8 @@ def with_workspace(messages: List[Dict[str, Any]], ctx: Any, agent: Optional[age
         where = place(str(ctx["place"]))
         listing = folder_listing(where, str(ctx.get("path") or ""))
     except (agents.AgentError, tools.ToolError):
+        return messages
+    if isinstance(where, ImagesPlace):
         return messages
     shared = isinstance(where, SharedPlace)
     own = agent is not None and not shared and where.name == agent.name
@@ -657,6 +756,17 @@ def with_workspace(messages: List[Dict[str, Any]], ctx: Any, agent: Optional[age
         lines.append(f"The file open in the editor: {opened}")
     last = messages[-1]
     return messages[:-1] + [{**last, "content": last["content"] + "\n\n" + "\n".join(lines)}]
+
+
+def chat_folder(value: Any) -> Optional[Path]:
+    """The folder one chat keeps its agent in, or None for the workspace folder."""
+    if value in (None, ""):
+        return None
+    try:
+        folder = check_work_folder(value)
+    except FolderError as exc:
+        raise agents.AgentError(f"The chat's folder cannot be used. {exc}") from exc
+    return None if folder == workspace_root() else folder
 
 
 def open_folder(path: Path) -> None:
@@ -799,6 +909,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, backend.describe(self.server.model_url))
         elif parts[1:] == ["chat"] and method == "POST":
             return self._chat()
+        elif parts[1:] == ["workspace"]:
+            try:
+                if method == "GET":
+                    return self._json(200, workspace_setting())
+                if method == "PUT":
+                    body = self._body()
+                    return self._json(200, set_workspace_root(body.get("folder") if isinstance(body, dict) else None))
+            except FolderError as exc:
+                raise agents.AgentError(str(exc)) from exc
+        elif parts[1:] == ["folders"] and method == "GET":
+            return self._json(200, folder_choices(param("path")))
 
         elif n >= 2 and parts[1] == "agents":
             if n == 2 and method == "GET":
@@ -870,7 +991,8 @@ class Handler(BaseHTTPRequestHandler):
                 where = place(str(body.get("place") or SHARED_NAME))
                 rel = str(body.get("path") or "")
                 folder = folder_path(where, rel)
-                label = rel.rsplit("/", 1)[-1] if rel else ("shared" if isinstance(where, SharedPlace) else where.name)
+                label = rel.rsplit("/", 1)[-1] if rel else (where.workspace.name if isinstance(where, SharedPlace) else
+                                                             "images" if isinstance(where, ImagesPlace) else where.name)
                 return self._json(201, terminal.start(folder, label, str(body.get("shell") or "")).public())
             if n >= 3:
                 session = terminal.get(parts[2])
@@ -915,7 +1037,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts[2:] == ["settings"] and method == "PUT":
                 return self._json(200, images.save_settings(self._body()))
             if parts[2:] == ["gallery"] and method == "GET":
-                return self._json(200, {"images": images.gallery(place(param("place") or SHARED_NAME).workspace)})
+                return self._json(200, {"images": images.gallery(images_folder())})
             if parts[2:] == ["generate"] and method == "POST":
                 return self._generate()
             if n >= 3 and parts[2] == "models":
@@ -1096,8 +1218,7 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
-        where = place(str(body.get("place") or SHARED_NAME))
-        source = "images tab" if isinstance(where, SharedPlace) else "images tab (agent folder)"
+        source = "images tab"
         init_image, init_name = None, ""
         if body.get("init_image") is not None:
             src_place, init_image = image_ref(body["init_image"], "picture to edit")
@@ -1119,9 +1240,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ClientGone() from exc  # stops sd-cli: the user pressed Cancel or left
 
         try:
-            record = images.generate(body, where.workspace, source=source, on_event=emit,
+            record = images.generate(body, images_folder(), source=source, on_event=emit,
                                      preview=body.get("preview") is True, init_image=init_image, init_name=init_name)
-            emit({"image": {**record, "place": where.name}})
+            emit({"image": {**record, "place": IMAGES_NAME}})
             emit({"done": True})
         except ClientGone:
             return
@@ -1171,16 +1292,20 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise agents.AgentError("Request body must be a JSON object.")
         agent = agents.load(body["agent"]) if body.get("agent") else None
+        folder = chat_folder(body.get("folder")) if agent else None
+        commands = terminal_commands(body.get("terminal_commands"))
         messages = agents.build_messages(agent, body.get("messages"))
         if body.get("terminal_tool") and agent:
             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
                             "\n\nThe user temporarily granted you the run_terminal tool for this conversation. "
                             "Use it only when needed and explain what you ran."}
-        if agent and body.get("location") == SHARED_NAME:
+        if folder is not None:
             messages[-1] = {**messages[-1], "content": messages[-1]["content"] +
-                            "\n\nThe selected command location is the Shared folder."}
-        messages = attach_images(with_workspace(with_terminal(messages, body.get("terminal")),
-                                                body.get("workspace"), agent))
+                            f"\n\nFor this chat your folder is {folder}. Every action you take works inside it, "
+                            "and you cannot leave it."}
+        # With a folder of its own, the agent cannot reach the Workspace folder, and with_workspace says so.
+        messages = attach_images(with_workspace(with_terminal(messages, body.get("terminal"), commands),
+                                                body.get("workspace"), agent if folder is None else None))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -1204,8 +1329,8 @@ class Handler(BaseHTTPRequestHandler):
                 allowed = allowed + ["run_terminal"]
             execution_workspace = agent.workspace if agent else None
             execution_shared = agents.shared_folder(agent)
-            if agent and body.get("location") == SHARED_NAME:
-                execution_workspace = shared_root()
+            if folder is not None:   # the chat's own folder: the agent is kept inside it alone
+                execution_workspace = folder
                 execution_shared = None
             runner.reply(conn, model, messages, emit,
                          tool_names=allowed, workspace=execution_workspace,

@@ -1,15 +1,21 @@
-"""Actions an agent can take. File actions work inside Axis's shared workspace.
+"""Actions an agent can take. File actions work inside the agent's folder: the workspace
+folder (~/Axis/shared, or the folder the user chose), or the folder chosen for one chat.
 
-Paths that start with "shared/" also point into ~/Axis/shared for compatibility.
-Python code and program files run from the shared workspace. A guard blocks
-writing, deleting or renaming files outside the workspace and starting other
-programs. The guard keeps ordinary code contained; it is not a security sandbox
-against deliberately hostile code.
+Paths that start with "shared/" also point into the workspace folder for compatibility.
+Python code and program files run from the folder. A guard blocks writing, deleting,
+renaming or listing files outside the folder, changing to another folder, reading
+outside it (except Python's own files and the system's program folders) and starting
+other programs. Terminal and Rust code from an agent is read before it runs and refused
+when it names a place outside the folder. Both keep ordinary code contained; neither is
+a security sandbox against deliberately hostile code.
+
+Pictures made with generate_image go to ~/Axis/images, not into the folder.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from . import images, web_tools
+from .paths import images_folder
 
 SHARED_PREFIX = "shared"
 SHARED_ENV = "AXIS_SHARED_DIR"
@@ -150,7 +157,7 @@ TOOL_SPECS: Dict[str, Dict[str, Any]] = {
 TOOL_SPECS.update(web_tools.SPECS)
 TOOL_SPECS["generate_image"] = {
     "description": "Make a picture from a text description with a local Stable Diffusion model. "
-    "The picture is saved as a PNG in images/ in your folder and shown to the user. "
+    "The picture is saved as a PNG in Axis's images folder (not in your folder) and shown to the user. "
     "Describe the subject, style, lighting and composition in the prompt.",
     "parameters": {
         "type": "object",
@@ -337,22 +344,43 @@ def delete_file(ws: Where, args: Dict[str, Any]) -> str:
 # Runs inside the child Python. Reads the program from stdin, installs the
 # guard, then runs the program. AXIS_ROOT is the folder the guard protects (the
 # working directory when unset); AXIS_SCRIPT names the program when it is a file.
+#
+# The guard keeps the program in its folder: it may not write, delete, rename or
+# list anything outside it, change to another folder, or start programs. It may
+# read outside the folder only from Python's own installation and packages and
+# from the operating system's program folders, which code needs to run at all.
 BOOTSTRAP = r'''
 import os, sys
 _code = sys.stdin.read()
-_ROOTS = [os.path.normcase(os.path.realpath(os.environ.get("AXIS_ROOT") or os.getcwd()))]
+_norm = lambda p: os.path.normcase(os.path.realpath(p))
+_ROOTS = [_norm(os.environ.get("AXIS_ROOT") or os.getcwd())]
 if os.environ.get("AXIS_SHARED_DIR"):
-    _ROOTS.append(os.path.normcase(os.path.realpath(os.environ["AXIS_SHARED_DIR"])))
+    _ROOTS.append(_norm(os.environ["AXIS_SHARED_DIR"]))
+_READ = [p for p in dict.fromkeys([sys.prefix, sys.base_prefix, sys.exec_prefix, os.path.dirname(sys.executable)]
+                                   + [p for p in sys.path if p]) if p]
+try:
+    import site
+    _READ += site.getsitepackages() + [site.getusersitepackages()]
+except Exception:
+    pass
+if os.name == "nt":
+    _READ += [os.environ.get(k, "") for k in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles")]
+else:
+    _READ += ["/usr", "/lib", "/lib32", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/dev", "/proc", "/sys",
+              "/System", "/Library", "/private/etc", "/nix/store"]
+_READ = [_norm(p) for p in _READ if p]
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.getcwd())
-def _inside(p):
+def _under(p, roots):
     if isinstance(p, int):
         return True
     try:
-        full = os.path.normcase(os.path.realpath(os.fsdecode(p)))
+        full = _norm(os.fsdecode(p))
     except Exception:
         return False
-    return any(full == r or full.startswith(r.rstrip(os.sep) + os.sep) for r in _ROOTS)
+    return any(full == r or full.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+_inside = lambda p: _under(p, _ROOTS)
+_readable = lambda p: _under(p, _ROOTS) or _under(p, _READ)
 _WRITE = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_TRUNC", 0)
 _ONE = {"os.remove", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod", "os.chown", "os.utime", "shutil.rmtree", "os.removexattr", "os.setxattr"}
 _TWO = {"os.rename", "os.link"}
@@ -365,6 +393,14 @@ def _guard(event, args):
         writing = any(c in mode for c in "wax+") if isinstance(mode, str) else bool((flags or 0) & _WRITE)
         if writing and not _inside(path):
             _deny("writing outside your folder is not allowed: " + str(path))
+        if not writing and path is not None and not _readable(path):
+            _deny("reading files outside your folder is not allowed: " + str(path))
+    elif event in ("os.listdir", "os.scandir"):
+        if args and args[0] is not None and not _readable(args[0]):
+            _deny("looking inside folders outside your folder is not allowed: " + str(args[0]))
+    elif event == "os.chdir":
+        if args and not _inside(args[0]):
+            _deny("changing to a folder outside your folder is not allowed: " + str(args[0]))
     elif event in _ONE:
         if args and not _inside(args[0]):
             _deny("changing files outside your folder is not allowed: " + str(args[0]))
@@ -591,10 +627,12 @@ def run_python_file(where: Where, args: Dict[str, Any]) -> str:
     return f"Ran {result['path']}.\n" + _report(result)
 
 
-def _run_env(where: Where) -> Dict[str, str]:
-    """Build the environment for a program started by an agent."""
+def _run_env(where: Where, temp: Optional[Path] = None) -> Dict[str, str]:
+    """Build the environment for a program started by an agent. With temp, scratch files go there."""
     p = places(where)
     env = dict(os.environ)
+    if temp is not None:
+        env.update({"TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp)})
     if p.shared is not None:
         p.shared.mkdir(parents=True, exist_ok=True)
         env[SHARED_ENV] = str(p.shared.resolve())
@@ -610,6 +648,102 @@ def _run_env(where: Where) -> Dict[str, str]:
     except (ImportError, OSError):
         pass
     return env
+
+
+# ------------------------------------------------- keeping programs in their folder
+# A shell or a compiled Rust program cannot be watched while it runs the way Python can, so before an
+# agent's terminal or Rust code runs, Axis reads it and refuses code that names a place outside the
+# folder: a full path, a ".." that climbs out, the home folder, or a bare "cd". This catches ordinary
+# mistakes and ordinary attempts; like the Python guard it is not a sandbox against hostile code.
+
+_DEVICES = {"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/urandom",
+            "/dev/random", "nul", "con"}
+_URL = re.compile(r"\b[a-zA-Z][\w+.-]*://\S+")
+_STOP = r"""\s'"`;|&<>(){}\[\],"""            # characters that end a path in code
+_LEAD = r"""(?:^|(?<=[\s='"`(:;,>|<\[{]))"""    # what may come just before a path
+_POSIX_ABS = re.compile(_LEAD + "(/[^" + _STOP + "]*)")
+_WIN_ABS = re.compile(r"""(?:^|(?<=[\s='"`(;,>|<\[{]))([A-Za-z]:(?:[\\/][^""" + _STOP + r"""]*)?|\\\\[^""" + _STOP
+                      + "]+)(?=$|[" + _STOP + "])")
+_DOTDOT = re.compile(_LEAD + r"((?:[^" + _STOP + r"]*[\\/])?\.\.(?:[\\/][^" + _STOP + "]*)?)(?=$|[" + _STOP + "])")
+_HOME = re.compile(_LEAD + r"~(?=$|[\w/\\" + _STOP + r"])|\$\{?(?:HOME|OLDPWD|USERPROFILE)\b|"
+                   r"%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|SystemDrive|APPDATA|LOCALAPPDATA)%|"
+                   r"\$env:(?:USERPROFILE|HOME|HOMEPATH|HOMEDRIVE|SystemDrive|APPDATA|LOCALAPPDATA)\b", re.IGNORECASE)
+_BARE_CD = re.compile(r"(?:^|[;&|(\n{])\s*(?:cd|chdir|pushd|set-location|sl)(?:\s+(?:-|/d|~))?\s*(?=$|[;&|)\n}])",
+                      re.IGNORECASE | re.MULTILINE)
+_RUST_STRING = re.compile(r'r(#*)"(.*?)"\1|"((?:[^"\\]|\\.)*)"', re.DOTALL)
+_RUST_HOME = re.compile(r"\bhome_dir\b|\bset_current_dir\b")
+
+
+def _within(path: Path, roots: List[Path]) -> bool:
+    try:
+        full = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(full == r or r in full.parents for r in roots)
+
+
+def _outside_in(text: str, roots: List[Path], cwd: Path) -> Optional[str]:
+    """The first place outside roots that text names, or None."""
+    text = _URL.sub(" ", text)
+    found = _HOME.search(text)
+    if found:
+        return found.group(0)
+    candidates: List[str] = []
+    if os.name == "nt":
+        candidates += _WIN_ABS.findall(text)
+        candidates += [m for m in _POSIX_ABS.findall(text) if m in ("/", "\\")]   # /x is usually an option there
+    else:
+        candidates += _POSIX_ABS.findall(text)
+    for ref in candidates:
+        if ref in ("/", "\\") and re.search(r"\s[/\\]\s+[\d$(]", text):
+            continue   # division in arithmetic, like $((4 / 2))
+        if ref.rstrip(":").lower() in _DEVICES or ref.lower() in _DEVICES:
+            continue
+        if not _within(Path(ref), roots):
+            return ref
+    for ref in _DOTDOT.findall(text):
+        target = Path(ref.replace("\\", "/"))
+        if not _within(target if target.is_absolute() else cwd / target, roots):
+            return ref
+    return None
+
+
+def _strip_comments(code: str) -> str:
+    kept = []
+    for line in code.splitlines():
+        bare = line.strip().lower()
+        if bare.startswith("#") or bare.startswith("::") or bare.startswith("rem ") or bare == "rem":
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def check_terminal_code(where: Where, code: str, cwd: Optional[Path] = None) -> None:
+    """Refuse terminal code from an agent that names a place outside its folder."""
+    p = places(where)
+    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
+    body = _strip_comments(code)
+    if _BARE_CD.search(body):
+        raise ToolError("A cd without a folder leaves your folder. Give a folder inside it, like cd notes.")
+    bad = _outside_in(body, roots, Path(cwd or p.personal).resolve())
+    if bad:
+        raise ToolError(f"The code names '{bad}', which is outside your folder. Only {roots[0]} and the folders "
+                        "inside it can be used. Use paths inside your folder.")
+
+
+def check_rust_code(where: Where, code: str, cwd: Optional[Path] = None) -> None:
+    """Refuse Rust code from an agent that names a place outside its folder in its text."""
+    p = places(where)
+    roots = [p.personal.resolve()] + ([p.shared.resolve()] if p.shared is not None else [])
+    if _RUST_HOME.search(code):
+        raise ToolError("The program asks for the home folder or changes its folder, which would leave your folder. "
+                        "Use paths inside your folder.")
+    for m in _RUST_STRING.finditer(code):
+        literal = m.group(2) if m.group(2) is not None else m.group(3)
+        bad = _outside_in(literal.replace("\\\\", "\\") if m.group(3) is not None else literal, roots, Path(cwd or p.personal).resolve())
+        if bad:
+            raise ToolError(f"The program names '{bad}', which is outside your folder. Only {roots[0]} and the "
+                            "folders inside it can be used. Use paths inside your folder.")
 
 
 def _run_kwargs() -> Dict[str, Any]:
@@ -648,7 +782,7 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str 
         raise ToolError("code must be a non-empty Rust program.")
     folder = Path(cwd or places(where).personal).resolve()
     base, temp = _temp_dir(folder)
-    env = _run_env(where)
+    env = _run_env(where, temp)
     source = temp / script
     binary = temp / ("program.exe" if os.name == "nt" else "program")
     try:
@@ -659,7 +793,7 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str 
                 artcraft.ensure_cpp_tools()
             except artcraft.ArtCraftError as exc:
                 raise ToolError(str(exc)) from exc
-            env = _run_env(where)
+            env = _run_env(where, temp)
         compiler = _rustc(env)
         compile_result = _run_capped([compiler, "--edition", "2021", str(source), "-o", str(binary)], "",
                                      str(folder), env, RUST_TIMEOUT, _run_kwargs())
@@ -671,10 +805,14 @@ def _rust_code(where: Where, code: str, cwd: Optional[Path] = None, script: str 
 
 
 def run_rust(where: Where, args: Dict[str, Any]) -> str:
-    return _report(_rust_code(where, _require(args, "code")))
+    code = _require(args, "code")
+    if isinstance(code, str):
+        check_rust_code(where, code)
+    return _report(_rust_code(where, code))
 
 
-def run_rust_file_result(where: Where, rel: Any) -> Dict[str, Any]:
+def run_rust_file_result(where: Where, rel: Any, checked: bool = False) -> Dict[str, Any]:
+    """Compile and run a .rs file. checked=True (an agent ran it) first refuses code that leaves the folder."""
     root, path, prefix = locate(where, rel)
     if not path.is_file():
         raise ToolError(f"{rel} is not a file in your folder.")
@@ -688,12 +826,14 @@ def run_rust_file_result(where: Where, rel: Any) -> Dict[str, Any]:
     code = data.decode("utf-8", errors="replace")
     if code.startswith("\ufeff"):
         code = code[1:]
+    if checked:
+        check_rust_code(where, code, cwd=path.parent)
     result = _rust_code(where, code, cwd=path.parent, script=path.name)
     return {**result, "path": _show(root, path, prefix)}
 
 
 def run_rust_file(where: Where, args: Dict[str, Any]) -> str:
-    result = run_rust_file_result(where, _require(args, "path"))
+    result = run_rust_file_result(where, _require(args, "path"), checked=True)
     return f"Ran {result['path']}.\n" + _report(result)
 
 
@@ -748,6 +888,7 @@ def _terminal_code(where: Where, code: str, shell: Any = "auto", cwd: Optional[P
     elif selected in ("powershell", "pwsh"):
         suffix = ".ps1"
     base, temp = _temp_dir(folder)
+    env.update({"TMPDIR": str(temp), "TEMP": str(temp), "TMP": str(temp)})   # scratch files stay in the folder
     script = temp / ("program" + suffix)
     try:
         with script.open("w", encoding="utf-8", newline="\r\n" if selected == "cmd" else "\n") as stream:
@@ -759,10 +900,14 @@ def _terminal_code(where: Where, code: str, shell: Any = "auto", cwd: Optional[P
 
 
 def run_terminal(where: Where, args: Dict[str, Any]) -> str:
-    return _report(_terminal_code(where, _require(args, "code"), args.get("shell", "auto")))
+    code = _require(args, "code")
+    if isinstance(code, str):
+        check_terminal_code(where, code)
+    return _report(_terminal_code(where, code, args.get("shell", "auto")))
 
 
-def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto") -> Dict[str, Any]:
+def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto", checked: bool = False) -> Dict[str, Any]:
+    """Run a shell program file. checked=True (an agent ran it) first refuses code that leaves the folder."""
     root, path, prefix = locate(where, rel)
     if not path.is_file():
         raise ToolError(f"{rel} is not a file in your folder.")
@@ -777,12 +922,14 @@ def run_terminal_file_result(where: Where, rel: Any, shell: Any = "auto") -> Dic
         ext = path.suffix.lower()
         selected = {".ps1": "powershell", ".bat": "cmd", ".cmd": "cmd", ".sh": "bash", ".bash": "bash",
                     ".zsh": "sh", ".fish": "sh"}.get(ext, "auto")
+    if checked:
+        check_terminal_code(where, code, cwd=path.parent)
     result = _terminal_code(where, code, selected, cwd=path.parent, suffix=path.suffix or ".sh")
     return {**result, "path": _show(root, path, prefix)}
 
 
 def run_terminal_file(where: Where, args: Dict[str, Any]) -> str:
-    result = run_terminal_file_result(where, _require(args, "path"), args.get("shell", "auto"))
+    result = run_terminal_file_result(where, _require(args, "path"), args.get("shell", "auto"), checked=True)
     return f"Ran {result['path']}.\n" + _report(result)
 
 
@@ -908,13 +1055,15 @@ def _web(name: str) -> Callable[[Where, Dict[str, Any]], str]:
 
 def generate_image(ws: Where, args: Dict[str, Any],
                    on_event: Optional[Callable[[Dict[str, Any]], None]] = None, preview: bool = False) -> str:
-    p = places(ws)
+    """Make a picture. It goes to Axis's images folder, never into the agent's folder."""
     try:
-        rec = images.generate(args, p.personal, source="agent", on_event=on_event, preview=preview)
+        rec = images.generate(args, images_folder(), source="agent", on_event=on_event, preview=preview)
     except images.ImageError as exc:
         raise ToolError(str(exc)) from exc
-    return (f"Saved {rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
-            f"model {rec['model']}, {rec['seconds']} s). The user can see the picture.")
+    # The page finds the picture from "Saved images/<file>" and "images folder" in this text (see imagePath).
+    return (f"Saved images/{rec['path']} ({rec['width']}x{rec['height']}, {rec['steps']} steps, seed {rec['seed']}, "
+            f"model {rec['model']}, {rec['seconds']} s) in Axis's images folder, which is not your folder. "
+            "The user can see the picture.")
 
 
 # File management is intentionally not exposed as an agent skill. Agents can use

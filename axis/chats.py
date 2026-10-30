@@ -2,9 +2,10 @@
 
 Each chat is ~/Axis/chats/<id>.json:
 
-    {"id", "agent", "title", "created", "updated", "messages": [...]}
+    {"id", "agent", "title", "folder", "created", "updated", "messages": [...]}
 
-agent is "" for Direct chat. title is "" unless the user renamed the chat; the
+agent is "" for Direct chat. folder is the full path of the folder the chat keeps its agent
+in, or "" for the workspace folder (it is checked when the chat sends a message). title is "" unless the user renamed the chat; the
 list shows the first message instead. Chats are only deleted by the user, or
 together with their agent.
 """
@@ -24,6 +25,7 @@ from .paths import axis_home
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,63}$")
 MAX_MESSAGES = 2000
 MAX_TITLE = 200
+MAX_FOLDER = 4096
 
 _LOCK = threading.Lock()
 _META: Dict[str, Tuple[float, Dict[str, Any]]] = {}  # path -> (mtime, summary) so listing stays fast
@@ -60,6 +62,7 @@ def summary(chat: Dict[str, Any]) -> Dict[str, Any]:
         "agent": chat.get("agent") or "",
         "title": chat.get("title") or _first_line(first) or "Untitled chat",
         "custom_title": bool(chat.get("title")),
+        "folder": chat.get("folder") or "",
         "created": chat.get("created") or "",
         "updated": chat.get("updated") or "",
         "messages": len(msgs),
@@ -134,13 +137,16 @@ def save(chat_id: str, data: Dict[str, Any], agent: str) -> Dict[str, Any]:
     title = data.get("title") or ""
     if not isinstance(title, str):
         raise ChatError("title must be text.")
+    folder = data.get("folder") or ""
+    if not isinstance(folder, str) or len(folder) > MAX_FOLDER:
+        raise ChatError("folder must be a folder's full path.")
     with _LOCK:
         try:
             old = _read(path) if path.is_file() else {}
         except ChatError:
             old = {}
         chat = {
-            "id": chat_id, "agent": agent, "title": title.strip()[:MAX_TITLE],
+            "id": chat_id, "agent": agent, "title": title.strip()[:MAX_TITLE], "folder": folder.strip(),
             "created": old.get("created") or _now(), "updated": _now(), "messages": messages,
         }
         _write(chat)

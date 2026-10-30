@@ -84,6 +84,11 @@ button.upd:hover { filter: brightness(1.12); }
 .nav-item[aria-current="true"] { background: var(--panel-active); box-shadow: inset 3px 0 0 var(--panel-ink); }
 .nav-item small { display: block; color: var(--panel-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-empty { color: var(--panel-muted); font-size: 13px; padding: 4px 10px; }
+.nav-group { display: flex; align-items: center; gap: 8px; }
+.nav-group > span:first-child { flex: 1; min-width: 0; }
+.nav-chevron { flex: none; width: 8px; height: 8px; border-right: 2px solid var(--panel-muted); border-bottom: 2px solid var(--panel-muted); transform: rotate(-45deg); transition: transform .15s; margin-right: 4px; }
+.nav-group[aria-expanded="true"] .nav-chevron { transform: rotate(45deg); }
+.nav-sub { margin: 2px 0 4px 14px; padding-left: 6px; border-left: 1px solid var(--panel-line); }
 
 /* ---------- buttons ---------- */
 .btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 7px 14px; cursor: pointer; white-space: nowrap; }
@@ -207,6 +212,11 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .picker .crumbs { padding: 8px 16px 0; margin: 0; }
 .picker-body { overflow-y: auto; padding: 12px 16px 16px; }
 .picker-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.picker-dirs .btn { display: inline-flex; align-items: center; gap: 6px; }
+.picker-dirs .fb-ico { display: inline-flex; width: 16px; height: 16px; flex: none; }
+.picker-dirs .fb-ico svg { width: 16px; height: 16px; }
+.folder-bar { display: flex; gap: 6px; padding: 10px 16px 0; }
+.folder-path { flex: 1; min-width: 0; font: 13px/1.4 var(--mono); }
 .picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .picker-grid button { border: 1px solid var(--line); border-radius: 6px; padding: 0; background: var(--code); cursor: pointer; overflow: hidden; text-align: left; }
 .picker-grid button:hover, .picker-grid button:focus-visible { border-color: var(--accent); }
@@ -264,8 +274,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .skill-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 10px; background: var(--surface); }
 .skill-card h4 { margin: 0; font-size: 15px; display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
 .skill-card p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
-.skill-card .instr { white-space: pre-wrap; color: var(--ink); font-size: 13px; margin-top: 8px; border-left: 3px solid var(--line); padding-left: 10px; }
-.tag { font: 600 12px/1 var(--sans); color: var(--link); }
 .pick { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; background: var(--surface); cursor: pointer; }
 .pick input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
 .pick span { display: block; color: var(--muted); font-size: 13px; }
@@ -275,15 +283,6 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .files small { color: var(--muted); font-family: var(--sans); }
 .path { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
 
-.skill-card h4 .skill-name { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.skill-tools { display: flex; gap: 14px; flex: none; }
-.tag.edited { color: var(--warn); }
-.sends { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
-.sends > summary, .sends-sub > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--link); }
-.sends-sub { margin-top: 8px; }
-.sends pre { margin: 6px 0 10px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
-.sends .step-label { margin-top: 10px; }
-.sends .hint { margin: 4px 0 0; }
 
 /* ---------- files ---------- */
 .fb { display: grid; grid-template-columns: minmax(240px, 360px) 1fr; flex: 1; min-height: 0; }
@@ -347,8 +346,9 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .term-empty { flex: 1; overflow-y: auto; padding: 24px; background: var(--bg); }
 .term-side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .term-side-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.term-side-head label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.term-side-head select { flex: 1; min-width: 0; }
+.term-side-head label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex: 1 1 160px; min-width: 0; white-space: nowrap; }
+.term-side-head label.check { flex: 0 1 auto; }
+.term-side-head select { flex: 1; min-width: 64px; }
 .term-side .thread { padding: 12px 14px; background: var(--bg); }
 .term-side .msg.user { max-width: 95%; }
 .term-side .msg-u { max-width: 95%; } .term-side .msg-u .msg.user { max-width: 100%; }
@@ -587,7 +587,9 @@ const S = {
   nameEdit: null,               // { mode: "new" | "rename", ... } while a file or folder name is being typed in the Workspace list
   view: { kind: "chat", agent: DIRECT },
   modelChoice: {},              // target -> model picked in the dropdown
-  chatLocation: {},             // target -> selected terminal/workspace location
+  chatFolders: {},              // target -> folder chosen for a new chat before its first message ("" is the workspace)
+  wsFolder: null,               // last /api/workspace result: the workspace folder and whether it is the default
+  termCommands: 5,              // how many of the newest terminal commands, with their output, an agent sees
   streams: {},                  // target -> the reply being written (kept here so it survives switching pages)
   drafts: {},                   // target -> unsent text in the message box
   errors: {},                   // target -> the last error, shown until the next message
@@ -606,7 +608,7 @@ const S = {
   imagePreview: true,           // show each step while a picture is made (Images tab and agents)
   imageSelected: null,          // the picture shown large in the Images tab
   imageError: null,
-  galleryPlace: "_shared",      // whose images/ folder the gallery shows
+  toolsOpen: false,             // the Tools group in the sidebar is open (Images, Art Craft, OCR)
   manage: null,                 // last /api/manage result: engines, installed models, running servers, jobs
   manageError: "",              // the last error from a Models page action
   install: null,                // the install form of the Models sub-tab that is open (one of installs)
@@ -680,12 +682,16 @@ const getHistory = (target) => chatMessages(S.current[target]);
 const savingChats = {};    // id -> promise chain, so saves of one chat reach Axis in order
 function saveChat(id, agent, msgs) {
   if (S.deletedChats.has(id)) return;
-  const c = S.chats[id] || (S.chats[id] = { id, agent, title: "", messages: [] });
+  let c = S.chats[id];
+  if (!c) {   // a new chat takes the folder chosen for it before its first message
+    c = S.chats[id] = { id, agent, title: "", folder: S.chatFolders[agent] || "", messages: [] };
+    delete S.chatFolders[agent];
+  }
   c.messages = msgs.slice(); c.agent = agent;
   savingChats[id] = (savingChats[id] || Promise.resolve()).then(async () => {
     if (S.deletedChats.has(id)) return;
     if (c.messages.length) {
-      await api("/api/chats/" + encodeURIComponent(id), { method: "PUT", body: { agent: c.agent, title: c.title || "", messages: c.messages } });
+      await api("/api/chats/" + encodeURIComponent(id), { method: "PUT", body: { agent: c.agent, title: c.title || "", folder: c.folder || "", messages: c.messages } });
       c.saved = true;
     } else if (c.saved) {   // the only message was taken back: nothing left to keep
       await api("/api/chats/" + encodeURIComponent(id), { method: "DELETE" }).catch(() => {});
@@ -713,6 +719,7 @@ function loadChat(id) {   // resolves "ok", "missing" or an error message
 }
 function openChat(agent, id) {
   if (S.current[agent] !== id) delete S.errors[agent];
+  if (!id) delete S.chatFolders[agent];   // a new chat starts in the workspace folder
   if (id) S.current[agent] = id; else delete S.current[agent];
   saveCurrent();
   go({ kind: "chat", agent });
@@ -878,12 +885,24 @@ function renderNav() {
       Object.keys(S.streams).some((k) => k !== DIRECT)),
     item("Workspace", "Browse, edit and run files", v.kind === "workspace", () => go({ kind: "workspace" })),
     item("Terminal", S.term.sessions.length ? `${S.term.sessions.length} open` : "A shell in any folder", v.kind === "terminal", () => go({ kind: "terminal" })),
-    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), !!S.imageJob),
     item("Models", "Install, start and stop models", v.kind === "models", () => go({ kind: "models" }), runningJobs(S.manage).length > 0),
-    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), runningJobs(S.art).length > 0),
-    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), !!S.ocrJob),
-    item("Skills", "Make and manage skills for agents", v.kind === "skills", () => go({ kind: "skills" })),
+    toolsGroup(item),
   );
+}
+const TOOL_VIEWS = ["images", "art", "ocr"];
+// Images, Art Craft and OCR sit inside Tools, which opens and closes. It shows a Working dot while it is closed and one of them is busy.
+function toolsGroup(item) {
+  const v = S.view, busy = { images: !!S.imageJob, art: runningJobs(S.art).length > 0, ocr: !!S.ocrJob };
+  const open = S.toolsOpen || TOOL_VIEWS.includes(v.kind);
+  const anyBusy = Object.values(busy).some(Boolean);
+  const head = h("button", { class: "nav-item nav-group" + (anyBusy && !open ? " busy" : ""), "aria-expanded": open ? "true" : "false",
+    "aria-controls": "nav-tools", onclick: () => { S.toolsOpen = !open; store("axis.toolsOpen", S.toolsOpen); renderNav(); } },
+    h("span", {}, "Tools", h("small", {}, anyBusy && !open ? [h("span", { class: "busy-dot", "aria-hidden": "true" }), "Working\u2026"] : "Images, Art Craft and OCR")),
+    h("span", { class: "nav-chevron", "aria-hidden": "true" }));
+  return [head, open ? h("div", { class: "nav-sub", id: "nav-tools" },
+    item("Images", "Make pictures with Stable Diffusion", v.kind === "images", () => go({ kind: "images" }), busy.images),
+    item("Art Craft", "Install and open the Craft apps", v.kind === "art", () => go({ kind: "art" }), busy.art),
+    item("OCR", "Read the text in pictures", v.kind === "ocr", () => go({ kind: "ocr" }), busy.ocr)) : null];
 }
 
 async function quitAxis() {
@@ -955,10 +974,23 @@ function currentModel(target) {
   const agent = target ? agentByName(target) : null;
   return matchModel(S.modelChoice[target], models) || matchModel(agent && agent.model, models) || models[0] || "";
 }
-function chatLocation(target) {
-  const agent = target && agentByName(target);
-  return agent && S.chatLocation[target] === SHARED ? SHARED : (agent ? agent.name : "");
+// The folder a chat keeps its agent in: "" means the workspace folder. Saved with the chat.
+function chatFolder(target) {
+  if (!target || !agentByName(target)) return "";
+  const id = S.current[target], chat = id && S.chats[id];
+  return chat ? (chat.folder || "") : (S.chatFolders[target] || "");
 }
+function setChatFolder(target, folder) {
+  const id = S.current[target], chat = id && S.chats[id];
+  if (chat) { chat.folder = folder; if (chat.messages.length) saveChat(id, chat.agent, chat.messages); }
+  else S.chatFolders[target] = folder;
+}
+async function chooseChatFolder(target) {
+  const folder = await pickFolder("Choose the folder for this chat", chatFolder(target) || (S.wsFolder && S.wsFolder.folder) || "");
+  if (folder) { setChatFolder(target, folder); toast(`${target} will work only in ${folder}`); }
+  if (viewing(target)) renderChat();
+}
+const folderName = (path) => String(path).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 function terminalToolFor(target) {
   if (S.view.kind === "terminal" && S.term.side && S.term.agent === target) return !!S.term.terminalTool;
   if (S.view.kind === "workspace" && S.ide.side && S.ide.agent === target) return !!S.ide.terminalTool;
@@ -973,7 +1005,6 @@ function renderMain() {
   if (S.view.kind === "edit") return renderEditor();
   if (S.view.kind === "agents") return renderAgents();
   if (S.view.kind === "terminal") return renderTerminal();
-  if (S.view.kind === "skills") return renderSkills();
   if (S.view.kind === "workspace") return renderWorkspace();
   if (S.view.kind === "models") return renderModels();
   if (S.view.kind === "history") return renderHistory();
@@ -1024,10 +1055,15 @@ function renderChat() {
   const select = h("select", { "aria-label": "Model", disabled: !ready() || !!stream,
     onchange: (e) => { S.modelChoice[target] = e.target.value; renderChat(); } },
     models.map((m) => { const o = h("option", { value: m }, m); o.selected = m === model; return o; }));
-  const location = h("select", { "aria-label": "Agent location", disabled: !!stream,
-    onchange: (e) => { S.chatLocation[target] = e.target.value; renderChat(); } },
-    [[SHARED, "Shared folder"]].map(([v, label]) => {
-      const o = h("option", { value: v }, label); o.selected = chatLocation(target) === v; return o;
+  const own = chatFolder(target);
+  const location = h("select", { "aria-label": "The folder this agent works in", disabled: !!stream,
+    title: own ? `${target} works only in ${own}` : `${target} works only in the workspace folder` + (S.wsFolder ? ` (${S.wsFolder.folder})` : ""),
+    onchange: (e) => {
+      if (e.target.value === "\u0000choose") chooseChatFolder(target);
+      else { setChatFolder(target, e.target.value); renderChat(); }
+    } },
+    [["", "Workspace folder"], ...(own ? [[own, folderName(own)]] : []), ["\u0000choose", "Choose a folder\u2026"]].map(([v, label]) => {
+      const o = h("option", { value: v }, label); o.selected = v === own; return o;
     }));
   const hasHistory = getHistory(target).length > 0;
 
@@ -1036,7 +1072,7 @@ function renderChat() {
     h("h2", {}, agent ? agent.name : "Direct chat",
       chat && hasHistory ? h("small", { class: "chat-sub" }, chatTitle(chat)) : null),
     ready() ? h("label", {}, "Model", select) : null,
-    agent ? h("label", {}, "Location", location) : null,
+    agent ? h("label", {}, "Folder", location) : null,
     agent ? h("button", { class: "btn small", onclick: () => go({ kind: "edit", agent: agent.name }) }, "Edit agent") : null,
     hasHistory ? h("button", { class: "btn small", title: "Download this conversation as a Markdown file", onclick: () => exportChat(target) }, "Export") : null,
     h("button", { class: "btn small", title: "Earlier conversations" + (agent ? " with " + agent.name : ""),
@@ -1235,6 +1271,10 @@ const STEP_TEXT = {
   generate_image: ["Making a picture of", "Made a picture of"],
 };
 const SHARED = "_shared";   // the Workspace tab's name for the folder agents share
+const IMAGES = "_images";   // Axis's images folder, where every picture Axis makes is saved
+function revealFile(place, path) {
+  api(filesUrl(place, "reveal", path), { method: "POST" }).catch((e) => toast(e.message));
+}
 function hasShared(agent) {
   return agent === SHARED || S.agents.some((x) => x.name === agent);
 }
@@ -1270,16 +1310,21 @@ function stepView(p, agent, wasOpen) {
     else if (p.name === "make_folder" && path) body.append(link("Open folder in Workspace", path, false));
     else if (["run_python_file", "run_rust_file", "run_terminal_file"].includes(p.name) && path) body.append(link("Open in Workspace", path, true));
     else if (["run_python", "run_rust", "run_terminal", "list_files"].includes(p.name)) body.append(link("Browse this agent\u2019s files", "", false));
-    else if (p.name === "generate_image" && imagePath(p)) body.append(link("Open in Workspace", imagePath(p), true));
+    else if (p.name === "generate_image" && imagePath(p)) {
+      const pic = imagePath(p);
+      body.append(h("button", { class: "link", style: "margin-top:8px", onclick: () => revealFile(pic.place, pic.path) }, "Show in folder"));
+    }
   }
   const d = h("details", { class: "step " + state, "data-step": p.id || "" }, h("summary", {}, stepLabel(p)), body);
   if (wasOpen) d.open = true;
   return d;
 }
-// The picture a generate_image step saved, from its result ("Saved images/x.png (...)").
+// The picture a generate_image step saved, from its result ("Saved images/x.png (...)"), as { place, path }.
+// Since Axis 4.3.4 it is in Axis's images folder (the result says so); older chats saved it in the shared folder.
 function imagePath(p) {
-  const m = p.ok && typeof p.output === "string" ? p.output.match(/^Saved (images\/\S+?\.(?:png|jpe?g|webp)) /) : null;
-  return m ? m[1] : "";
+  const m = p.ok && typeof p.output === "string" ? p.output.match(/^Saved images\/(\S+?\.(?:png|jpe?g|webp)) /) : null;
+  if (!m) return null;
+  return /images folder/.test(p.output) ? { place: IMAGES, path: m[1] } : { place: SHARED, path: "images/" + m[1] };
 }
 function chatImage(p, agent) {
   if (p.output === undefined && p.preview && S.imagePreview) {
@@ -1287,12 +1332,12 @@ function chatImage(p, agent) {
     return h("figure", { class: "chat-image", role: "status" }, previewImg(p, p.preview.image, a.width, a.height, a.prompt),
       h("small", {}, `Step ${p.preview.step} of ${p.preview.steps}`));
   }
-  const path = imagePath(p);
-  if (!agent || !path) return null;
-  const src = filesUrl(agent, "raw", path);
+  const pic = imagePath(p);
+  if (!agent || !pic) return null;
+  const src = filesUrl(pic.place, "raw", pic.path);
   return h("figure", { class: "chat-image" },
-    h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || path, loading: "lazy" })),
-    h("small", {}, path));
+    h("a", { href: src, target: "_blank", rel: "noopener", title: "Open full size" }, h("img", { src, alt: (p.args && p.args.prompt) || pic.path, loading: "lazy" })),
+    h("small", {}, pic.place === IMAGES ? "images/" + pic.path : pic.path));
 }
 function partsView(parts, agent, openSteps) {
   return parts.flatMap((p) => {
@@ -1608,7 +1653,7 @@ async function send(target, { resend = false, terminal, workspace } = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent: target || null, model, messages: history, image_preview: S.imagePreview,
         terminal: terminal || null, workspace: workspace || null, terminal_tool: terminalToolFor(target),
-        location: chatLocation(target) || null }) });
+        folder: chatFolder(target) || null, terminal_commands: S.termCommands }) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Request failed (${res.status}).`); }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -1762,8 +1807,7 @@ function renderEditor() {
       h("p", { class: "hint" }, "Instructions added to the end of every message you send this agent."),
       configList),
     h("div", { class: "section" },
-      h("div", { class: "section-head" }, h("h3", {}, "Skills"),
-        h("button", { class: "btn small", type: "button", onclick: () => go({ kind: "skills" }) }, "Manage skills")),
+      h("div", { class: "section-head" }, h("h3", {}, "Skills")),
       h("p", { class: "hint" }, "Choose what this agent can do. Skills are added to its instructions."),
       skillPicker),
     existing ? workspaceSection(existing) : null,
@@ -1885,13 +1929,13 @@ async function readablePicture(ref, placeName, dir) {
   return { place: placeName, path: await uploadPicture(placeName, dir, pic.name, pic.blob) };
 }
 
-const placeLabel = (n) => n === SHARED ? "Shared folder" : n;
+const placeLabel = (n) => n === SHARED ? "Workspace folder" : n === IMAGES ? "Images folder" : n;
 
-// A dialog for choosing a picture from the shared folder or any agent's folder.
+// A dialog for choosing a picture from the workspace folder or Axis's images folder.
 // Resolves to { place, path }, or null when closed without choosing.
 function pickPicture(title, startPlace) {
   return new Promise((resolve) => {
-    const places = [SHARED, ...S.agents.map((a) => a.name)];
+    const places = [SHARED, IMAGES];
     const state = { place: places.includes(startPlace) ? startPlace : SHARED, dir: "" };
     let chosen = null;
     const body = h("div", { class: "picker-body" });
@@ -1907,7 +1951,7 @@ function pickPicture(title, startPlace) {
     const open = (dir) => { state.dir = dir; load(); };
     async function load() {
       const { place: where, dir } = state;
-      fill(crumbs, h("button", { onclick: () => open("") }, where === SHARED ? "shared" : where),
+      fill(crumbs, h("button", { onclick: () => open("") }, placeLabel(where)),
         (dir ? dir.split("/") : []).map((seg, i, all) => [h("span", {}, "/"), h("button", { onclick: () => open(all.slice(0, i + 1).join("/")) }, seg)]));
       fill(body, h("p", { class: "hint" }, "Loading\u2026"));
       let data;
@@ -1924,11 +1968,50 @@ function pickPicture(title, startPlace) {
         pics.length ? h("div", { class: "picker-grid" }, pics.map((e) => h("button", { title: e.path,
           onclick: () => { chosen = { place: where, path: e.path }; dlg.close(); } },
           h("img", { src: filesUrl(where, "raw", e.path), alt: e.name, loading: "lazy" }), h("small", {}, e.name))))
-          : h("p", { class: "hint" }, "No pictures in this folder." + (dirs.some((e) => e.name === "images") ? " Pictures made in Axis are in images." : "")));
+          : h("p", { class: "hint" }, "No pictures in this folder." + (where === SHARED ? " Pictures made in Axis are in the Images folder." : "")));
     }
     document.body.append(dlg);
     dlg.showModal();
     load();
+  });
+}
+
+// A dialog for choosing any folder on this computer. Only folder names are shown, never files.
+// Resolves to the folder's full path, or null when closed without choosing.
+function pickFolder(title, start) {
+  return new Promise((resolve) => {
+    let chosen = null, current = null;
+    const body = h("div", { class: "picker-body" });
+    const where = h("input", { type: "text", class: "folder-path", "aria-label": "Folder path", spellcheck: "false",
+      onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); load(where.value.trim()); } } });
+    const use = h("button", { class: "btn small primary", disabled: true,
+      onclick: () => { if (current && current.usable) { chosen = current.path; dlg.close(); } } }, "Use this folder");
+    const dlg = h("dialog", { class: "picker", "aria-label": title },
+      h("div", { class: "picker-inner" },
+        h("div", { class: "picker-head" }, h("h3", {}, title), use, h("button", { class: "btn small", onclick: () => dlg.close() }, "Cancel")),
+        h("div", { class: "folder-bar" }, where, h("button", { class: "btn small", onclick: () => load(where.value.trim()) }, "Go")),
+        body));
+    dlg.addEventListener("close", () => { dlg.remove(); resolve(chosen); });
+    async function load(path) {
+      fill(body, h("p", { class: "hint" }, "Loading\u2026"));
+      let d;
+      try { d = await api("/api/folders?path=" + encodeURIComponent(path || "")); }
+      catch (e) { return fill(body, h("p", { class: "form-error" }, e.message), current ? h("button", { class: "btn small", onclick: () => load(current.path) }, "Back") : null); }
+      current = d; where.value = d.path; use.disabled = !d.usable;
+      use.title = d.usable ? "Agents will work in " + d.path : "This folder cannot be used. Choose a folder inside it.";
+      fill(body,
+        h("div", { class: "picker-dirs" },
+          d.parent ? h("button", { class: "btn small", onclick: () => load(d.parent) }, "Up one folder") : null,
+          h("button", { class: "btn small", onclick: () => load(d.home) }, "Home"),
+          d.roots.length > 1 ? d.roots.map((r) => h("button", { class: "btn small", onclick: () => load(r) }, r)) : null),
+        d.usable ? null : h("p", { class: "hint" }, "The top of a drive and Axis\u2019s own data folder cannot be used. Open a folder inside."),
+        d.folders.length ? h("div", { class: "picker-dirs" }, d.folders.map((f) => h("button", { class: "btn small", onclick: () => load(f.path) }, icon("dir"), f.name)))
+          : h("p", { class: "hint" }, "There are no folders inside this one."),
+        d.more ? h("p", { class: "hint" }, `${d.more} more folders are not shown. Type a path above to go to one.`) : null);
+    }
+    document.body.append(dlg);
+    dlg.showModal();
+    load(start || "");
   });
 }
 
@@ -1946,12 +2029,33 @@ function parseCsv(text, limit) {
   return rows;
 }
 
+// The workspace folder: ~/Axis/shared unless the user chose another one. Agents work in it.
+async function loadWsFolder() {
+  try { S.wsFolder = await api("/api/workspace"); } catch (e) { toast(e.message); }
+  return S.wsFolder;
+}
+async function setWsFolder(folder) {
+  if (!leaveEdit()) return;
+  try { S.wsFolder = await api("/api/workspace", { method: "PUT", body: { folder } }); }
+  catch (e) { return toast(e.message); }
+  S.workspace = { agent: SHARED, dir: "", file: "" };
+  toast(S.wsFolder.is_default ? "Using the default workspace folder" : "Workspace folder: " + S.wsFolder.folder);
+  if (S.view.kind === "workspace") renderWorkspace();
+}
+async function chooseWsFolder() {
+  const folder = await pickFolder("Choose the workspace folder", S.wsFolder ? S.wsFolder.folder : "");
+  if (folder) setWsFolder(folder);
+}
+
 let workspaceTimer = null;
 function renderWorkspace() {
   if (S.workspace.agent !== SHARED) S.workspace = { agent: SHARED, dir: "", file: "" };
   const f = S.workspace;
   S.nameEdit = null;
-  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
+  if (!S.wsFolder) { loadWsFolder().then(() => { if (S.view.kind === "workspace" && S.wsFolder) renderWorkspace(); }); }
+  const wf = S.wsFolder;
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace",
+    wf ? h("small", { class: "chat-sub", title: wf.folder }, wf.is_default ? "Default folder" : wf.folder) : null));
   if (!f.agent) {
     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
       h("h3", {}, "No agents yet"),
@@ -1960,6 +2064,10 @@ function renderWorkspace() {
     return;
   }
   bar.append(
+    popMenu("Folder", [
+      { label: "Choose another folder\u2026", onclick: chooseWsFolder },
+      wf && !wf.is_default ? { label: "Use the default folder", onclick: () => setWsFolder("") } : null,
+    ], "Choose the folder agents work in" + (wf ? ` (now ${wf.folder})` : "")),
     h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
       h("button", { class: "btn small", id: "ide-dock-btn", title: "Show or hide a terminal under the files", onclick: () => setDock(!S.ide.dock) }, "Terminal"),
       h("button", { class: "btn small", id: "ide-side-btn", title: "Show or hide a chat with an agent that can see this folder", onclick: toggleSide }, "Agent")));
@@ -1967,7 +2075,7 @@ function renderWorkspace() {
   const crumbs = h("nav", { class: "crumbs", "aria-label": "Folder path" });
   const segs = f.dir ? f.dir.split("/") : [];
   const crumb = (label, dir) => dropTarget(h("button", { onclick: () => openDir(dir), title: dir ? dir : "Top of this folder" }, label), dir);
-  crumbs.append(crumb("shared", ""));
+  crumbs.append(crumb(wf ? folderName(wf.folder) : "workspace", ""));
   segs.forEach((seg, i) => crumbs.append(h("span", {}, "/"), crumb(seg, segs.slice(0, i + 1).join("/"))));
   const picker = h("input", { type: "file", multiple: true, hidden: true, onchange: (e) => { uploadFiles(e.target.files); e.target.value = ""; } });
   const tools = h("div", { class: "crumb-tools" },
@@ -1990,7 +2098,9 @@ function renderWorkspace() {
   const main = h("div", { class: "ide-main", id: "ide-main" },
     h("div", { class: "fb", id: "fb" }, list, view),
     h("section", { class: "dock", id: "dock", "aria-label": "Terminal and run output" }));
-  fill($("main"), bar, h("div", { class: "crumbbar" }, crumbs, tools),
+  const missing = wf && wf.missing ? h("div", { class: "note" }, `The folder you chose, ${wf.missing}, is gone, so the default folder is used. `,
+    h("button", { class: "link", onclick: chooseWsFolder }, "Choose another folder")) : null;
+  fill($("main"), bar, missing, h("div", { class: "crumbbar" }, crumbs, tools),
     h("div", { class: "ide" + (S.ide.side ? " with-side" : ""), id: "ide" }, main, S.ide.side ? sidePanel() : null));
   syncIdeButtons();
   drawDock();
@@ -2152,7 +2262,7 @@ async function uploadFiles(fileList, dir = S.workspace.dir) {
       done++;
     } catch (e) { toast(e.name === "TypeError" ? `Could not upload ${file.name} (folders cannot be uploaded).` : e.message); }
   }
-  if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${dir ? dir : agent === SHARED ? "the shared folder" : agent}`);
+  if (done) toast(`Uploaded ${done} file${done === 1 ? "" : "s"} to ${dir ? dir : agent === SHARED ? "the workspace folder" : placeLabel(agent)}`);
   if (S.view.kind === "workspace" && S.workspace.agent === agent) loadListing(true);
 }
 /* ---- naming: a new file or folder, or a new name for one, is typed in the list itself.
@@ -2304,7 +2414,7 @@ async function movePath(path, to) {
   if (affectsOpen && !leaveEdit()) return;
   try {
     const { moved } = await api(filesUrl(agent, "move", path, "&to=" + encodeURIComponent(to)), { method: "POST" });
-    toast(`Moved ${path.split("/").pop()} to ${to || (agent === SHARED ? "shared" : agent)}`);
+    toast(`Moved ${path.split("/").pop()} to ${to || (agent === SHARED ? "the top of the workspace folder" : placeLabel(agent))}`);
     if (S.workspace.agent !== agent) return;
     if (affectsOpen) { S.workspace.file = moved + open.slice(path.length); showFile(); }
     loadListing(true);
@@ -2356,7 +2466,7 @@ async function loadListing(force) {
     rows.push(line);
   }
   if (!data.entries.length && !(S.nameEdit && S.nameEdit.mode === "new")) rows.push(h("div", { class: "fb-empty" }, f.dir ? "This folder is empty." :
-    f.agent === SHARED ? "The shared folder is empty. Agents with the Shared folder skill can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat, or use New file."));
+    f.agent === SHARED ? "This folder is empty. Agents can put files here, and so can you with Upload." : "This agent has not made any files yet. Ask it to make something in a chat, or use New file."));
   fill(list, rows);
   if (S.nameEdit) focusNameEdit();
 }
@@ -2607,7 +2717,7 @@ function renderTerminal() {
   }
   const t = activeTerm();
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Terminal"),
-    h("button", { class: "btn small", title: "Open a terminal in the shared folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
+    h("button", { class: "btn small", title: "Open a terminal in the workspace folder", onclick: () => openTerminal(SHARED, "") }, "New terminal"),
     t ? h("button", { class: "btn small", title: "Stop the command that is running (Ctrl+C)", disabled: !t.alive, onclick: termInterrupt }, "Stop command") : null,
     t ? h("button", { class: "btn small", title: "Clear the output shown here (Ctrl+L)", onclick: termClear }, "Clear") : null,
     h("button", { class: "btn small", "aria-expanded": T.side ? "true" : "false", "aria-controls": "term-side",
@@ -2625,8 +2735,8 @@ function renderTerminal() {
   } else {
     main = h("div", { class: "term-empty" }, h("div", { class: "empty" },
       h("h3", {}, "No terminal is open"),
-      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in an agent\u2019s folder or the shared folder. Use the terminal button on any folder in Workspace, or open one here."),
-      h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the shared folder")));
+      h("p", {}, "A terminal runs commands on this computer with your own permissions, starting in the workspace folder or a folder inside it. Use the terminal button on any folder in Workspace, or open one here."),
+      h("button", { class: "btn primary", onclick: () => openTerminal(SHARED, "") }, "Open a terminal in the workspace folder")));
   }
   fill($("main"), bar, tabs, h("div", { class: "term" + (T.side ? " with-side" : "") }, main,
     T.side ? h("aside", { class: "term-side", id: "term-side", "aria-label": "Agent that can see the terminal" }) : null));
@@ -2852,7 +2962,11 @@ function renderSideChat(cfg) {
   const terminalAccess = cfg.terminalAccess ? h("label", { class: "check", title: "Temporarily let this agent run terminal commands" },
     h("input", { type: "checkbox", checked: !!cfg.terminalAccess(), onchange: (e) => { cfg.setTerminalAccess(e.target.checked); renderSideChat(cfg); } }),
     "Allow terminal commands") : null;
-  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), terminalAccess,
+  const history = cfg.terminalCommands ? h("label", { title: "How many of your newest terminal commands, with what they printed, the agent sees with each message" },
+    "Terminal commands", h("select", { "aria-label": "Terminal commands the agent sees",
+      onchange: (e) => { S.termCommands = Number(e.target.value); store("axis.termCommands", S.termCommands); renderSideChat(cfg); } },
+      TERM_COMMAND_CHOICES.map(([n, label]) => { const o = h("option", { value: n }, label); o.selected = n === S.termCommands; return o; }))) : null;
+  const head = h("div", { class: "term-side-head" }, h("label", {}, "Agent", pick), history, terminalAccess,
     getHistory(target).length && !S.streams[target] ? h("button", { class: "link", title: "Start a fresh conversation. This one stays in Past chats.",
       onclick: () => { delete S.current[target]; delete S.errors[target]; saveCurrent(); renderSideChat(cfg); } }, "New chat") : null,
     h("button", { class: "link", title: `Open this conversation on ${target}\u2019s own page`, onclick: () => go({ kind: "chat", agent: target }) }, "Full chat"),
@@ -2892,6 +3006,14 @@ function askFrom(agentName, askId) {
   send(agentName);
 }
 
+// Choices for how many of the newest terminal commands (each with its output) an agent is shown. Axis caps the total
+// at about 16,000 characters, keeping the newest part.
+const TERM_COMMAND_CHOICES = [[0, "Off"], [1, "1"], [3, "3"], [5, "5"], [10, "10"], [25, "25"], [100, "100"]];
+function termShareText(target) {
+  const n = S.termCommands;
+  if (!n) return `${target} does not see the terminal.`;
+  return `Each message shows ${target} the last ${n === 1 ? "command" : n + " commands"} typed into the terminal and their output. It can read them but not type into it.`;
+}
 const TERM_CHAT = {
   host: "term-side", askId: "term-ask", hintId: "term-hint",
   get state() { return S.term; },
@@ -2900,8 +3022,9 @@ const TERM_CHAT = {
   noAgents: "Make an agent first. It can then see this terminal and help you with it.",
   placeholder: (t) => `Ask ${t} about this terminal`,
   hint: (t, model) => S.term.active
-    ? `Each message shows ${t} the newest output of the open terminal (about 6,000 characters). It can read it but not type into it. Using ${model}.`
-    : `Open a terminal and ${t} will see its output with each message.`,
+    ? `${termShareText(t)} Using ${model}.`
+    : `Open a terminal and ${t} will see its commands and output with each message.`,
+  terminalCommands: true,
   ask: () => askFrom(S.term.agent, "term-ask"),
   terminalAccess: () => S.term.terminalTool,
   setTerminalAccess: (on) => { S.term.terminalTool = on; },
@@ -2917,12 +3040,14 @@ const IDE_CHAT = {
   ask: () => askFrom(S.ide.agent, "ide-ask"),
   terminalAccess: () => S.ide.terminalTool,
   setTerminalAccess: (on) => { S.ide.terminalTool = on; },
+  terminalCommands: true,
   headExtra: () => h("button", { class: "link", title: "Hide this panel", onclick: toggleSide }, "Hide"),
 };
 const renderTermChat = () => renderSideChat(TERM_CHAT);
 const renderIdeChat = () => renderSideChat(IDE_CHAT);
 function ideHint(target, model) {
-  const terminal = $("term-out") ? ", and the newest output of the terminal while it is open" : "";
+  const n = S.termCommands;
+  const terminal = $("term-out") && n ? `, and the last ${n === 1 ? "command" : n + " commands"} in the terminal with their output while it is open` : "";
   return `Each message shows ${target} the folder you are in (${folderLabel()}) and which file is open${terminal}. It can read them but cannot change anything or type into the terminal. Using ${model}.`;
 }
 function updateIdeHint() {
@@ -3686,8 +3811,8 @@ function ocrSettingsCard(m) {
 }
 
 /* ---------------------------------------------------------------- images */
-// Pictures made with stable-diffusion.cpp. The Images tab saves to the shared folder (shared/images);
-// agents with the Image generation skill save to images/ in their own folder.
+// Pictures made with stable-diffusion.cpp. Every picture, from this tab or from an agent, is saved in
+// Axis's images folder (~/Axis/images, the place IMAGES), never in the workspace.
 const RESOLUTIONS = [
   [384, 384, "Square, small"], [512, 512, "Square"], [768, 768, "Square, large"], [1024, 1024, "Square, XL"],
   [512, 768, "Portrait 2:3"], [768, 512, "Landscape 3:2"], [832, 1216, "Portrait, XL"], [1216, 832, "Landscape, XL"],
@@ -3853,7 +3978,7 @@ function renderImages() {
     }
     const buttons = () => [
       h("button", { class: "btn small", disabled: !!job, onclick: () => filePick.click() }, "Upload"),
-      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose from Workspace"),
+      h("button", { class: "btn small", disabled: !!job, onclick: async () => { const r = await pickPicture("Choose a picture to edit", src ? src.place : SHARED); if (r) setSource(r); } }, "Choose a saved picture"),
       src ? h("button", { class: "btn small", disabled: !!job, onclick: () => { f.source = null; saveImageForm(); renderImages(); } }, "Clear") : null];
     const box = h("div", { class: "ig-source",
       ondragover: (e) => { if (!job && [...e.dataTransfer.types].includes("Files")) { e.preventDefault(); box.classList.add("drop"); } },
@@ -3909,7 +4034,7 @@ function renderImages() {
           : h("button", { class: "btn primary", id: "ig-go", disabled: !model || model.missing.length > 0 || (editing && !f.source), onclick: generateImage },
               editing ? "Edit picture" : "Generate")),
     h("div", { style: "margin-top:8px" }, imagePreviewToggle(!!job)),
-    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in shared/images"
+    h("p", { class: "hint", style: "margin-top:6px" }, job ? "Cancel stops sd-cli." : "Ctrl+Enter in the prompt also generates. Pictures are saved in Axis\u2019s images folder"
       + (editing ? "; the original is left as it is." : ".")),
     model && model.missing.length ? h("p", { class: "form-error" }, `Missing files: ${model.missing.join(", ")}. Fix the paths on the Models page.`) : null);
 
@@ -3959,34 +4084,36 @@ function drawStage() {
     sel.negative_prompt ? h("p", { class: "ig-meta" }, "Negative: " + sel.negative_prompt) : null,
     h("p", { class: "ig-meta" }, meta || sel.file),
     sel.edited_from ? h("p", { class: "ig-meta" }, "Edited from ",
-      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (r) openInWorkspace(r.place, r.path, true); } }, sel.edited_from.replace(/^_shared:/, "shared/").replace(":", "/"))) : null,
+      h("button", { class: "link", onclick: () => { const r = parseSource(sel.edited_from); if (!r) return;
+        if (r.place === IMAGES) { S.imageSelected = (S.gallery || []).find((g) => g.path === r.path) || S.imageSelected; renderImages(); }
+        else openInWorkspace(r.place, r.path, true); } },
+        sel.edited_from.replace(/^_shared:/, "workspace/").replace(/^_images:/, "images/").replace(":", "/"))) : null,
     h("div", { class: "fb-actions", style: "margin:10px 0 0" },
       h("button", { class: "btn small", title: "Use this picture as the start of a new one", onclick: () => setSource({ place: sel.place, path: sel.path }) }, "Edit this picture"),
       sel.prompt ? h("button", { class: "btn small", onclick: () => reuse(false) }, "Reuse settings") : null,
       sel.seed !== undefined ? h("button", { class: "btn small", title: "Same settings and seed, so you can adjust the prompt", onclick: () => reuse(true) }, "Reuse with seed") : null,
       h("a", { class: "btn small", href: imageUrl(sel.place, sel.path, true), download: sel.file }, "Download"),
-      h("button", { class: "btn small", onclick: () => openInWorkspace(sel.place, sel.path, true) }, "Open in Workspace"),
+      h("button", { class: "btn small", title: "Select the picture in Explorer or Finder", onclick: () => revealFile(sel.place, sel.path) }, "Show in folder"),
       h("button", { class: "btn small danger", onclick: () => deleteImage(sel) }, "Delete"))));
 }
 
 async function loadGallery() {
   const box = $("ig-gallery"); if (!box) return;
-  const place = S.galleryPlace = (S.galleryPlace === SHARED || agentByName(S.galleryPlace)) ? S.galleryPlace : SHARED;
+  const place = IMAGES;
   let list;
-  try { list = (await api("/api/images/gallery?place=" + encodeURIComponent(place))).images.map((i) => ({ ...i, place })); }
+  try { list = (await api("/api/images/gallery")).images.map((i) => ({ ...i, place })); }
   catch (e) { return fill(box, h("p", { class: "form-error" }, e.message)); }
-  if (S.view.kind !== "images" || place !== S.galleryPlace) return;
+  if (S.view.kind !== "images") return;
   S.gallery = list;
   if (!S.imageSelected && !S.imageJob && !S.imageError && list.length) { S.imageSelected = list[0]; drawStage(); }
-  const pick = h("select", { "aria-label": "Show pictures from", onchange: (e) => { S.galleryPlace = e.target.value; loadGallery(); } },
-    [[SHARED, "Shared folder"], ...S.agents.map((a) => [a.name, a.name])].map(([v, label]) => { const o = h("option", { value: v }, label); o.selected = v === place; return o; }));
-  fill(box, h("div", { class: "ig-head" }, h("h3", {}, "Gallery"), h("label", { class: "hint", style: "margin:0;display:flex;gap:6px;align-items:center" }, "From", pick),
+  fill(box, h("div", { class: "ig-head" }, h("h3", {}, "Gallery"),
+      h("button", { class: "link", title: "Open Axis's images folder in Explorer or Finder", onclick: () => revealFile(IMAGES, "") }, "Open folder"),
       h("span", { class: "hint", style: "margin:0" }, `${list.length} picture${list.length === 1 ? "" : "s"}`)),
     list.length ? h("div", { class: "ig-grid" }, list.map((img) => h("button", { class: "ig-thumb", title: img.prompt || img.file,
       "aria-current": S.imageSelected && S.imageSelected.path === img.path && S.imageSelected.place === img.place ? "true" : "false",
       onclick: () => { S.imageSelected = img; S.imageError = null; drawStage(); loadGallery(); } },
       h("img", { src: imageUrl(img.place, img.path), alt: img.prompt || img.file, loading: "lazy" }))))
-    : h("p", { class: "hint" }, place === SHARED ? "Pictures you make here are saved in shared/images and listed here." : `${place} has not made any pictures yet. Give it the Image generation skill.`));
+    : h("p", { class: "hint" }, "Pictures you and your agents make are saved in Axis\u2019s images folder and listed here."));
 }
 
 async function deleteImage(img) {
@@ -4051,7 +4178,7 @@ async function generateImage() {
   }
   clearTimeout(frame);
   S.imageJob = null;
-  if (result) { S.imageSelected = { ...result, place: SHARED }; S.galleryPlace = SHARED; }
+  if (result) S.imageSelected = { ...result, place: IMAGES };
   else if (error) S.imageError = error;
   if (document.hidden && result) S.unseen = true;
   streamsChanged();
@@ -4416,7 +4543,7 @@ function renderOcr() {
     h("button", { class: "btn small", disabled: !!job, onclick: async () => {
       const r = await pickPicture("Choose a picture to read", src ? src.place : SHARED);
       if (!r) return;
-      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose from Workspace"),
+      try { setOcrSource(await ocrReadable(r)); } catch (e) { toast(e.message); } } }, "Choose a saved picture"),
     src ? h("button", { class: "btn small", disabled: !!job, onclick: () => setOcrSource(null) }, "Clear") : null];
   let shown = null;
   if (src) {
@@ -4444,7 +4571,7 @@ function renderOcr() {
     h("div", { class: "ig-go" },
       job ? h("button", { class: "btn", onclick: () => job.controller.abort() }, "Cancel")
         : h("button", { class: "btn primary", disabled: !model || !src, onclick: runOcr }, "Read text")),
-    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in shared/uploads."));
+    h("p", { class: "hint", style: "margin-top:6px" }, "Pictures you upload or paste are saved in uploads in the workspace folder."));
   const main = h("div", { class: "ig-main" }, h("div", { id: "ocr-stage" }));
   fill($("main"), bar, h("div", { class: "ig" }, form, main));
   drawOcr();
@@ -4477,7 +4604,7 @@ function drawOcr() {
       h("button", { class: "btn small", onclick: async () => {
         try {
           const path = await uploadPicture(SHARED, "ocr", stem + ".txt", new Blob([r.text], { type: "text/plain" }));
-          toast("Saved as shared/" + path); openInWorkspace(SHARED, path, true);
+          toast("Saved as " + path + " in the workspace folder"); openInWorkspace(SHARED, path, true);
         } catch (e) { toast(e.message); } } }, "Save to Workspace"),
       h("button", { class: "btn small", onclick: () => download(stem + ".txt", r.text, "text/plain") }, "Download .txt")) : null));
 }
@@ -4520,104 +4647,6 @@ async function runOcr() {
   renderNav();
   if (S.view.kind === "ocr") renderOcr();
   else if (result || error) toast(error ? "Reading the text failed" : "Text ready on the OCR page");
-}
-
-/* ---------------------------------------------------------------- skills */
-function renderSkills() {
-  const builtin = S.skills.filter((sk) => sk.builtin && !sk.group);
-  const craft = S.skills.filter((sk) => sk.builtin && sk.group === ART_CRAFT_GROUP);
-  const custom = S.skills.filter((sk) => !sk.builtin);
-  const usedBy = (id) => S.agents.filter((a) => a.skills.includes(id)).map((a) => a.name);
-  const users = (id) => { const u = usedBy(id); return u.length ? "Used by " + u.join(", ") : "Not used by any agent"; };
-
-  const editor = (sk, onDone) => {
-    const err = h("p", { class: "form-error", role: "alert", hidden: true });
-    const name = h("input", { type: "text", value: sk ? sk.name : "", maxlength: 80, placeholder: "for example: Plain English", "aria-label": "Skill name" });
-    const desc = h("input", { type: "text", value: sk ? sk.description : "", maxlength: 300, placeholder: "One line shown when choosing skills", "aria-label": "Description" });
-    const instr = h("textarea", { rows: 5, placeholder: "What the agent should do when using this skill", "aria-label": "Instructions" });
-    instr.value = sk ? sk.instructions : "";
-    const save = async () => {
-      err.hidden = true;
-      const data = { name: name.value, description: desc.value, instructions: instr.value };
-      try {
-        if (sk) await api("/api/skills/" + encodeURIComponent(sk.id), { method: "PUT", body: data });
-        else await api("/api/skills", { method: "POST", body: data });
-        await loadSkills(); toast(sk ? "Skill saved" : "Skill created"); onDone();
-      } catch (e) { err.textContent = e.message; err.hidden = false; }
-    };
-    const form = h("form", { class: "form skill-card", onsubmit: (e) => { e.preventDefault(); save(); } }, err,
-      sk && sk.builtin ? h("p", { class: "hint" }, "This skill is built in. You can change what it tells the model; its actions stay as they are. Reset to default on its card undoes your changes.") : null,
-      h("div", { class: "field" }, h("label", {}, "Name"), name),
-      h("div", { class: "field" }, h("label", {}, "Description"), desc),
-      h("div", { class: "field" }, h("label", {}, "Instructions"), instr),
-      h("div", { class: "form-actions" },
-        h("button", { class: "btn primary", type: "submit" }, sk ? "Save skill" : "Create skill"),
-        h("button", { class: "btn", type: "button", onclick: onDone }, "Cancel")));
-    setTimeout(() => name.focus(), 0);
-    return form;
-  };
-
-  // Everything the skill sends to the model, fetched from Axis each time it is opened so it always matches the saved text.
-  const sendsView = (sk) => {
-    const body = h("div", {}, h("p", { class: "hint" }, "Loading\u2026"));
-    const d = h("details", { class: "sends", ontoggle: () => { if (d.open) load(); } },
-      h("summary", {}, "What this sends to the model"), body);
-    async function load() {
-      try {
-        const x = await api(`/api/skills/${encodeURIComponent(sk.id)}/sends`);
-        fill(body,
-          h("div", { class: "step-label" }, "Added to the system message"), h("pre", {}, x.system),
-          x.tools.length ? [
-            h("div", { class: "step-label" }, "Actions given to the model"), h("pre", {}, JSON.stringify(x.tools, null, 2)),
-            h("details", { class: "sends-sub" }, h("summary", {}, "The same actions as text, for a model without tool support"), h("pre", {}, x.tools_text)),
-          ] : h("p", { class: "hint" }, "This skill gives the model no actions. It only adds the text above."),
-          x.notes.map((n) => h("p", { class: "hint" }, n)));
-      } catch (e) { fill(body, h("p", { class: "form-error" }, e.message)); }
-    }
-    return d;
-  };
-
-  const resetSkill = async (sk) => {
-    if (!confirm(`Put ${sk.name} back to its default text? Your changes to it are lost.`)) return;
-    try { await api("/api/skills/" + encodeURIComponent(sk.id) + "/reset", { method: "POST" }); await loadSkills(); toast("Back to the default"); renderSkills(); }
-    catch (e) { toast(e.message); }
-  };
-  const deleteSkill = async (sk) => {
-    if (!confirm(`Delete the skill ${sk.name}? Agents using it will stop using it.`)) return;
-    try { await api("/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
-          await Promise.all([loadSkills(), loadAgents()]); toast("Skill deleted"); renderSkills(); }
-    catch (e) { toast(e.message); }
-  };
-  const skillCard = (sk) => {
-    const card = h("div", { class: "skill-card" },
-      h("h4", {}, h("span", { class: "skill-name" }, sk.name,
-          sk.builtin ? h("span", { class: "tag" }, "Built in") : null, sk.modified ? h("span", { class: "tag edited" }, "Edited") : null),
-        h("span", { class: "skill-tools" },
-          h("button", { class: "link", onclick: () => card.replaceWith(editor(sk, renderSkills)) }, "Edit"),
-          sk.builtin ? h("button", { class: "link", disabled: !sk.modified, title: sk.modified ? "Put the text back the way Axis ships it" : "Already the default",
-            onclick: () => resetSkill(sk) }, "Reset to default") : null,
-          sk.builtin ? null : h("button", { class: "link", style: "color:var(--bad)", onclick: () => deleteSkill(sk) }, "Delete"))),
-      sk.description ? h("p", {}, sk.description) : null,
-      h("p", {}, users(sk.id)),
-      sendsView(sk));
-    return card;
-  };
-
-  const newSlot = h("div", {});
-  $("main").replaceChildren(
-    h("div", { class: "bar" }, menuButton(), h("h2", {}, "Skills"),
-      h("button", { class: "btn small primary", onclick: () => fill(newSlot, editor(null, renderSkills)) }, "New skill")),
-    h("div", { class: "editor" }, h("div", { class: "form" },
-      newSlot,
-      h("div", { class: "skill-group" }, h("h3", {}, "Your skills"),
-        h("p", { class: "hint" }, "Instructions you write once and give to any agent. Choose them in each agent\u2019s settings."),
-        custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
-      h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
-        h("p", { class: "hint" }, "These let an agent act: Python, Rust, terminal code, web search and Wikipedia. Edit changes what a skill tells the model; Reset to default undoes it."),
-        builtin.map(skillCard)),
-      h("div", { class: "skill-group" }, h("h3", {}, ART_CRAFT_GROUP),
-        h("p", { class: "hint" }, "One skill for each app on the Art Craft page. It teaches an agent that app\u2019s command line, and works once the app is installed. On macOS the app download has no command-line program, so these skills need one added by hand."),
-        craft.map(skillCard)))));
 }
 
 /* ---------------------------------------------------------------- update */
@@ -4737,6 +4766,10 @@ window.addEventListener("beforeunload", (e) => {
   }
   S.term.side = recall("axis.termSide", true) !== false;
   S.term.agent = String(recall("axis.termAgent", "") || "");
+  S.toolsOpen = recall("axis.toolsOpen", false) === true;
+  const tc = recall("axis.termCommands", 5);
+  if (TERM_COMMAND_CHOICES.some(([n]) => n === tc)) S.termCommands = tc;
+  loadWsFolder();
   const tab = recall("axis.modelsTab", "chat");
   if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
   const attached = recall("axis.attachments", {});

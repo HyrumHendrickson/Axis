@@ -30,7 +30,10 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's recent output; "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only) |
+| `POST` | `/api/chat` | stream a reply as newline-delimited JSON (a user message may carry "images": [{place, path}] for models that read pictures; "terminal": id shows the agent that terminal's newest commands and their output, and "terminal_commands": n how many (0 to 100, 0 for none, default 5); "workspace": {place, path, file} shows the agent the Workspace folder the user is looking at, as names, sizes, and item counts only; "folder": a full path keeps the agent in that folder for this chat instead of the workspace folder) |
+| `GET` | `/api/workspace` | the workspace folder {folder, default, is_default, missing} (missing names a chosen folder that is gone) |
+| `PUT` | `/api/workspace` | use another folder as the workspace {folder}; `""` goes back to `Axis/shared`. The top of a drive and folders inside `Axis` (except `Axis/shared`) are refused |
+| `GET` | `/api/folders?path=p` | the folders inside p, for choosing a folder {path, parent, folders: [{name, path}], more, roots, home, usable}; without path, the home folder. Folder names only, never files |
 
 ## Agents
 
@@ -48,7 +51,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `GET` | `/api/files/<name>?path=dir` | one folder of an agent's folder (the Workspace tab) (<name> "_shared" means the folder shared by agents) |
+| `GET` | `/api/files/<name>?path=dir` | one folder of an agent's folder (the Workspace tab) (<name> "_shared" means the workspace folder, "_images" the folder of pictures Axis made) |
 | `GET` | `/api/files/<name>/view?path=file` | a file prepared for preview |
 | `GET` | `/api/files/<name>/raw?path=file` | the file itself (images, downloads) |
 | `POST` | `/api/files/<name>/reveal?path=x` | select the file in Explorer/Finder |
@@ -79,7 +82,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 |--------|------|--------------|
 | `GET` | `/api/chats` | saved chats (newest first, without messages) |
 | `GET` | `/api/chats/<id>` | one saved chat with its messages |
-| `PUT` | `/api/chats/<id>` | create or replace a saved chat |
+| `PUT` | `/api/chats/<id>` | create or replace a saved chat {agent, title?, folder?, messages}; folder is the chat's own folder ("" for the workspace folder) |
 | `PATCH` | `/api/chats/<id>` | rename a saved chat |
 | `DELETE` | `/api/chats/<id>` | delete a saved chat |
 
@@ -88,7 +91,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | Method | Path | What it does |
 |--------|------|--------------|
 | `GET` | `/api/terminal` | open terminals |
-| `POST` | `/api/terminal` | open a terminal {place?, path?, shell?} in that folder (default: shared); Windows accepts `cmd`, `powershell`, or `pwsh` |
+| `POST` | `/api/terminal` | open a terminal {place?, path?, shell?} in that folder (default: the workspace folder); Windows accepts `cmd`, `powershell`, or `pwsh` |
 | `GET` | `/api/terminal/<id>?since=n` | output from offset n {text, next, reset, alive, exit} |
 | `POST` | `/api/terminal/<id>/input` | type into the terminal {text} |
 | `POST` | `/api/terminal/<id>/interrupt` | stop the running command (Ctrl+C) |
@@ -103,7 +106,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `POST` | `/api/images/models` | add an image model |
 | `PUT` | `/api/images/models/<id>` | change an image model |
 | `DELETE` | `/api/images/models/<id>` | remove an image model (its files are not touched) |
-| `GET` | `/api/images/gallery?place=x` | pictures in a folder's images/ ("_shared" or an agent) |
+| `GET` | `/api/images/gallery` | pictures Axis made, in `Axis/images` (newest first); read them through the file routes as `_images` |
 | `POST` | `/api/images/generate` | make a picture, streaming progress as newline-delimited JSON ("preview": true also streams each step as a small picture; "init_image": {place, path} and "strength" edit that picture) |
 
 ## OCR

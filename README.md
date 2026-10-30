@@ -30,11 +30,12 @@
 Axis runs a small web app on your computer and opens it in a window of its own. It talks to a model served locally by **Ollama** or **llama.cpp**.
 
 - **Chat** directly with a model, or with agents you design.
-- **Agents** have their own system prompt, standing instructions, skills, and private folder.
+- **Agents** have their own system prompt, standing instructions, and skills. They work in the workspace folder (`Axis/shared`, or any folder you choose), or in a folder you choose for one chat, and cannot leave it.
 - **Agents** tab lists your agents; click one to chat with it, or edit it, open its folder, or see its past chats.
-- **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Every skill, built in or your own, can be edited, shows exactly what it sends to the model, and built-in ones can be reset to default.
+- **Skills** let agents run Python, compile and run Rust, run terminal code (including PowerShell or cmd on Windows), read and write files, search the web, read Wikipedia, and generate images. Choose them in each agent's settings.
 - **Past chats** are saved automatically and can be resumed at any time. Any message you sent can be edited and sent again.
-- **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp).
+- **Tools** in the sidebar holds Images, Art Craft and OCR.
+- **Images** are generated locally with Stable Diffusion (stable-diffusion.cpp) and saved in `Axis/images`.
 - **Edit a picture** on the Images tab: upload one or choose one from Workspace, describe the result, and set how much may change. It uses the image models you already have (image to image).
 - **Pictures in chats**: attach, paste, or drop pictures into a chat when the model can read them (Vision on the Models page), such as `gemma3:4b`. For llama.cpp models Axis also downloads the model's vision file (mmproj).
 - **OCR** tab reads the text in a picture (uploaded, pasted, or chosen from Workspace) with Tesseract or with PyTorch OCR models (EasyOCR, docTR). The text can be corrected, copied, saved to Workspace, or downloaded.

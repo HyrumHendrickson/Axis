@@ -25,6 +25,8 @@ Open **Agents** in the sidebar and click **New agent**. The Agents page lists ev
 | Skills | Which skills the agent may use. |
 | Folder | Where the agent's files are kept. **Open folder** shows it in Explorer or Finder. |
 
+**The agent's folder.** Agents work in the workspace folder (see [Workspace](#workspace)). In an agent's chat, the **Folder** menu can keep that chat's agent in another folder instead: choose **Choose a folder…**, open any folder on the computer, and click **Use this folder**. The choice is saved with the chat; a new chat starts in the workspace folder again. Either way the agent cannot leave its folder: its Python code cannot read, write, list, or change to anything outside it (it may still read Python's own files and the system's program folders, which code needs to run), and terminal or Rust code that names a place outside the folder (a full path, a `..` that climbs out, the home folder, or a bare `cd`) is refused before it runs. These guards catch mistakes; they are not a sandbox against code written to get around them. Pictures an agent makes always go to `Axis/images`.
+
 Use **Duplicate** to copy an agent's settings. **Delete agent** removes the agent, its folder, every file in it, and all of its chats.
 
 <details>
@@ -53,7 +55,7 @@ The config block is attached to your newest message each time and is not shown i
 
 ## Skills
 
-Open **Skills** in the sidebar. Every agent chooses from the same library.
+Choose an agent's skills in its settings (**Edit agent**). Every agent chooses from the same library.
 
 | Built-in skill | Capability |
 |----------------|------------|
@@ -82,7 +84,7 @@ Notes:
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
 
-**Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** on the Skills page and in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in the shared workspace, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. Edit a skill's text if a newer app release changes a command.
+**Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in its folder, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. If a newer app release changes a command, edit the skill's file in `Axis/skills/built-in`.
 
 **Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). **Edit** and **Delete** are on each card. Deleting a skill removes it from every agent that used it.
 
@@ -116,7 +118,7 @@ Every conversation is saved automatically. Open **Past chats** in the sidebar to
 
 ## Images
 
-Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](installation.md#model-engines)).
+Open **Tools** in the sidebar, then **Images**. Axis generates pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which it installs itself (see [Model engines](installation.md#model-engines)).
 
 **Install by name.** On the **Models** page, choose **Image model**, type a name, and click **Install**. Axis downloads every file the model needs from Hugging Face and sets it up with settings that suit it.
 
@@ -169,15 +171,15 @@ Then click **Add files I already have** and enter the same files and settings:
 
    Relative paths start at the **working folder**: the folder above `bin` when `sd-cli` is in a `bin` folder, otherwise `sd-cli`'s own folder. You can set it explicitly in the sd-cli settings. A single-file SD 1.5 or SDXL model goes in **Checkpoint**; Flux and SD3 use **CLIP-L** and **T5-XXL**. Anything else `sd-cli` accepts goes in **Extra arguments**.
 
-**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/shared/images`. The gallery supports **Reuse settings**, **Reuse with seed**, **Download**, **Open in Workspace**, and **Delete**. One picture is made at a time.
+**Images tab.** Choose a model (its defaults fill in), write a prompt and optional negative prompt, set resolution, steps, CFG scale, sampler, and seed (-1 picks a random seed; the used seed is always shown), then **Generate** (or Ctrl+Enter). Pictures are saved in `Axis/images`, never in the workspace. The gallery shows that folder (**Open folder** opens it) and supports **Reuse settings**, **Reuse with seed**, **Download**, **Show in folder**, and **Delete**. One picture is made at a time.
 
-**Edit a picture.** On the Images tab, switch from **Create** to **Edit a picture**. Drop a picture on the box, click **Upload**, or choose one with **Choose from Workspace**, describe how it should look, and set **Strength**: low keeps most of the original, high changes more (image to image, using the image models you have). **Keep the picture’s shape** makes the result the same shape as the original. The result goes to the gallery like any other picture.
+**Edit a picture.** On the Images tab, switch from **Create** to **Edit a picture**. Drop a picture on the box, click **Upload**, or choose one with **Choose a saved picture** (from the workspace folder or the images folder), describe how it should look, and set **Strength**: low keeps most of the original, high changes more (image to image, using the image models you have). **Keep the picture’s shape** makes the result the same shape as the original. The result goes to the gallery like any other picture.
 
-**Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `images/` in the agent's folder and shown in the chat.
+**Agents.** Give an agent the **Image generation** skill. It calls `generate_image` with a prompt (and optionally size, steps, seed, or model). The picture is saved in `Axis/images`, not in the agent's folder, and shown in the chat.
 
 ## OCR
 
-Axis reads the text in pictures with one of two kinds of engine:
+Open **Tools** in the sidebar, then **OCR**. Axis reads the text in pictures with one of two kinds of engine:
 
 - **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
 - **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
@@ -208,21 +210,23 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
 
 ## Art Craft
 
-Open **Art Craft** in the sidebar to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
+Open **Tools** in the sidebar, then **Art Craft**, to install and open the Craft App Suite: free, open-source creative apps from the ArtCraft team (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft).
 
 - **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
 - **Open** starts the app. It keeps running if you quit Axis.
 - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, Axis downloads Microsoft's C++ Build Tools when a Rust build needs the MSVC linker.
 - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
 - When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
-- Agents can drive an installed app through its command line with the matching skill under **Art Craft apps** on the Skills page (see [Skills](#skills)).
+- Agents can drive an installed app through its command line with the matching skill under **Art Craft apps** in its settings (see [Skills](#skills)).
 - **Delete** removes the app (every version, and any settings kept in its folder) or Rust, after asking. Installing over an installed app is never done, so settings are safe.
 
 ## Workspace
 
 Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
 
-**Layout.** The top bar has two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. There is only one folder, the shared workspace, so there is no folder menu. Under the bar, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
+**Layout.** The top bar has a **Folder** menu and two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. Under the bar, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
+
+**The workspace folder.** Agents and the Workspace work in one folder, `Axis/shared` by default; its path is shown under **Workspace**. **Folder** > **Choose another folder…** opens a chooser where you can open any folder on the computer (or type its path) and click **Use this folder**. **Use the default folder** goes back to `Axis/shared`. The top of a drive and Axis's own data folder cannot be chosen. If the folder you chose is later moved or deleted, Axis uses the default and shows a note.
 
 **Files**
 - Navigate folders on the left and open files on the right.
@@ -236,7 +240,7 @@ Open **Workspace** in the sidebar to browse, change, and run what agents have ma
 
 **The bottom panel (terminal and output).** Click **Terminal** (or the arrow at the right end of the panel) to show or hide it. Drag its top edge, or focus it and press the up and down arrow keys, to change its height. Showing it for the first time opens a terminal in the folder you are looking at. Each terminal is a tab (**×** closes it), **New terminal** opens another in the current folder, and the terminal button on a folder row opens one in that folder. See [Terminal](#terminal) for typing. **Run** on a `.py`, `.rs`, `.sh`, `.bash`, `.ps1`, `.bat`, or `.cmd` file runs it and shows its output (printed text, errors, and exit code) in an **Output** tab of the same panel; **Run again** repeats it. Rust files are compiled first. These runs stop after one minute and use your permissions; they are not a security sandbox. While editing, **Save and run** does both. Closing the panel does not stop terminals.
 
-**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, the newest output of the open terminal (about 6,000 characters). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the folder belongs to another agent, or is the shared folder and the agent lacks the Shared folder skill, the agent is told it cannot reach those files itself.
+**Agent chat.** **Agent** opens a chat on the right. Choose the agent at the top; it is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**). With each message the agent is shown the folder you are in (its name, and the names, sizes, and item counts of what it contains), which file is open, and, only while the terminal is showing in the bottom panel, your newest commands in the open terminal with their output (see **Terminal commands** under [Terminal](#terminal)). It never sees what is inside your files unless it reads them with its own skills, and it can never type into the terminal. If the chat keeps the agent in a folder of its own, the agent is told it cannot reach the Workspace folder itself.
 
 ## Terminal
 
@@ -246,8 +250,8 @@ Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal
 - **Type directly in the terminal**, as in any terminal: your text appears after the prompt with a cursor, and **Enter** runs the line. Left and Right move the cursor (with Ctrl, a word at a time), Home and End (or Ctrl+A and Ctrl+E) go to the ends, Backspace and Delete edit, Ctrl+U and Ctrl+K cut to the start or end, Ctrl+W deletes the word before the cursor, Up and Down recall earlier commands, and Page Up and Page Down scroll the output. What you type to a running program, such as an answer to a question, stays visible. Tab completion is not available.
 - **Ctrl+C** copies when text is selected; otherwise it discards the line you are typing and stops the running command (macOS and Linux). **Stop command** does the same. **Clear** (or Ctrl+L) clears the output shown.
 - **Paste** puts text on the line. A pasted line is not run until you press Enter. Pasting several lines asks first, since each would run at once.
-- A terminal runs with your own permissions and is not confined to the agent's folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
-- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal: with each message it is shown the newest output of the open terminal (about 6,000 characters). It can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
+- A terminal you type into runs with your own permissions and is not confined to any folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
+- In the Terminal tab, **Show agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**).
 
 ## Models tab
 
@@ -284,21 +288,21 @@ Axis/                       in your home folder (override with AXIS_HOME)
 ├── agents/
 │   └── <name>/
 │       ├── agent.json      the agent's settings
-│       └── workspace/      the agent's folder: every file it makes goes here
 ├── chats/                  saved conversations, one .json file each
 ├── engine-settings.json    llama-server path, context size, extra arguments
 ├── engines/                llama.cpp and stable-diffusion.cpp, as Axis installed them, ocr-python/ (PyTorch for OCR),
 │                           artcraft/ (the Craft apps) and rust/ (portable Rust)
 ├── image-models/           image model definitions, one .json file each
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
+├── images/                 every picture Axis makes (Images page and agents)
 ├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index
 ├── models/
 │   ├── llm/                GGUF chat models for llama.cpp, one folder per Hugging Face repository
 │   ├── image/              Stable Diffusion files Axis downloaded
 │   └── ocr/                OCR models: tessdata/ (Tesseract languages), easyocr/ and doctr/ (PyTorch weights)
 ├── run/                    programs Axis started (to recover them after a crash)
-├── shared/                 folder shared by agents with the Shared folder skill
-│   └── images/             pictures made in the Images tab
-└── skills/                 your custom skills, one .json file each
-    └── built-in/           your edits to built-in skills, one .json file each (deleted by Reset to default)
+├── shared/                 the default workspace folder, where agents work
+├── skills/                 your custom skills, one .json file each
+│   └── built-in/           your edits to built-in skills, one .json file each
+└── workspace-settings.json the workspace folder you chose, if not the default
 ```

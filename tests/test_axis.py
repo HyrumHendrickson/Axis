@@ -26,7 +26,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_manage import QuickServer
-from axis import agents, appwindow, backend, cli, images, runner, server, shortcut, skills, terminal, tools
+from axis import agents, appwindow, backend, cli, images, paths, runner, server, shortcut, skills, terminal, tools
 
 LAST_REQUEST: dict = {}
 REQUESTS: list = []
@@ -1043,7 +1043,7 @@ class TestFileManagement(Base):
         self.assertEqual((shared / "note.txt").read_bytes(), b"for everyone")
         status, body = request(self.base + "/view?path=missing.txt")
         self.assertEqual(status, 404)
-        self.assertIn("the shared folder", body)
+        self.assertIn("the workspace folder", body)
         self.assertEqual(request(self.base + "?path=../agents")[0], 400)
 
     def test_upload_never_overwrites(self):
@@ -1551,12 +1551,12 @@ class TestImages(Base):
         self.assertTrue(any(str(m) in written for m in (model, model.resolve())), written)
         gallery = images.gallery(shared)
         self.assertEqual([g["prompt"] for g in gallery], ["a lighthouse on a cliff"])
-        listing = tools.list_files(shared, {"path": "images"})
+        listing = tools.list_files(shared, {})
         self.assertNotIn(images.INDEX_NAME, listing)
         with self.assertRaises(images.ImageError) as ctx:
             images.generate({"prompt": "FAIL please"}, shared)
         self.assertIn("out of memory", str(ctx.exception))
-        self.assertEqual(len(list((shared / "images").glob("*.png"))), 1)
+        self.assertEqual(len(list(shared.glob("*.png"))), 1)
 
     def test_step_previews(self):
         self.add_model()
@@ -1570,7 +1570,7 @@ class TestImages(Base):
         self.assertTrue(shots)
         self.assertTrue(all(s["image"].startswith("data:image/png;base64,") and s["steps"] == 4 for s in shots))
         self.assertEqual(base64.b64decode(shots[-1]["image"].split(",", 1)[1])[8:13], b"step4")
-        self.assertEqual(len(list((shared / "images").glob("*.png"))), 2)   # the preview file is not kept
+        self.assertEqual(len(list(shared.glob("*.png"))), 2)   # the preview file is not kept
         self.assertTrue((shared / rec["path"]).is_file())
         cmd = images.build_command(self.cli, images.find_model(None), images.resolve_params(images.find_model(None), {"prompt": "x"}),
                                    Path("o.png"), self.root, Path("p.png"))
@@ -1683,7 +1683,7 @@ class TestImages(Base):
         with self.assertRaises(RuntimeError):
             images.generate({"prompt": "x"}, Path(self.home) / "shared", on_event=stop)
         self.assertFalse(images._LOCK.locked())
-        self.assertEqual(list((Path(self.home) / "shared" / "images").glob("*.png")), [])
+        self.assertEqual(list((Path(self.home) / "shared").glob("*.png")), [])
 
     def test_agent_tool(self):
         self.add_model()
@@ -1694,8 +1694,10 @@ class TestImages(Base):
         ok, out = tools.execute(agent.workspace, "create_image", {"description": "a red fox"}, ["generate_image"])
         self.assertTrue(ok, out)
         self.assertTrue(out.startswith("Saved images/"), out)
-        self.assertEqual(len(list((agent.workspace / "images").glob("*.png"))), 1)
-        self.assertEqual([f["path"].startswith("images/") for f in agents.list_workspace(agent)], [True])
+        self.assertIn("images folder", out)   # the page finds the picture by these words
+        # The picture goes to ~/Axis/images, never into the agent's folder.
+        self.assertEqual(len(list(paths.images_folder().glob("*.png"))), 1)
+        self.assertEqual(agents.list_workspace(agent), [])
         ok, out = tools.execute(agent.workspace, "generate_image", {"prompt": "x", "model": "nope"}, ["generate_image"])
         self.assertFalse(ok)
         self.assertIn("Unknown image model", out)
@@ -1714,12 +1716,13 @@ class TestImages(Base):
         events = chat_events(text)
         self.assertEqual(events[-1], {"done": True}, events)
         image = next(e["image"] for e in events if "image" in e)
-        self.assertEqual((image["place"], image["steps"], image["width"]), ("_shared", 2, 256))
-        gallery = json.loads(request(url + "/api/images/gallery?place=_shared")[1])["images"]
+        self.assertEqual((image["place"], image["steps"], image["width"]), ("_images", 2, 256))
+        gallery = json.loads(request(url + "/api/images/gallery")[1])["images"]
         self.assertEqual(gallery[0]["path"], image["path"])
-        listing = json.loads(request(url + "/api/files/_shared?path=images")[1])
+        listing = json.loads(request(url + "/api/files/_images")[1])
         self.assertEqual([e["name"] for e in listing["entries"]], [image["file"]])
-        view = json.loads(request(url + "/api/files/_shared/view?path=" + urllib.parse.quote(image["path"]))[1])
+        self.assertFalse((Path(self.home) / "shared" / "images").exists())   # nothing goes to the workspace
+        view = json.loads(request(url + "/api/files/_images/view?path=" + urllib.parse.quote(image["path"]))[1])
         self.assertEqual(view["kind"], "image")
         events = chat_events(request(url + "/api/images/generate", "POST", {"prompt": " "})[1])
         self.assertIn("error", events[-1])
@@ -2220,9 +2223,15 @@ class TestWorkspaceRoutes(Base):
 
     def test_terminal_output_reaches_the_agent(self):
         session = mock.Mock(shell="bash", cwd=self.ws)
-        session.snapshot.return_value = "$ make\nerror: missing file\n"
+        session.recent.return_value = ("$ make\nerror: missing file\n", 1)
         with mock.patch.object(terminal, "get", return_value=session):
             msgs = server.with_terminal([{"role": "user", "content": "why?"}], "t1")
+            session.recent.assert_called_with(server.DEFAULT_TERMINAL_COMMANDS)
+            self.assertIn("The last 1 command", msgs[0]["content"])
+            server.with_terminal([{"role": "user", "content": "why?"}], "t1", 12)
+            session.recent.assert_called_with(12)
+            # 0 shows the agent nothing from the terminal.
+            self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "t1", 0)[0]["content"], "x")
         self.assertTrue(msgs[0]["content"].startswith("why?"))
         self.assertIn("error: missing file", msgs[0]["content"])
         self.assertEqual(server.with_terminal([{"role": "user", "content": "x"}], "missing")[0]["content"], "x")
@@ -2339,6 +2348,158 @@ class TestWorkspaceRoutes(Base):
 
     def test_clean_terminal_text(self):
         self.assertEqual(terminal.clean("\x1b[1;32mok\x1b[0m\r\nprogress 10%\rprogress 100%\n"), "ok\nprogress 100%\n")
+
+
+class TestWorkFolders(Base):
+    """The workspace folder setting, a chat's own folder, and keeping agents inside them."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.other, True)
+        self.url = self.axis_server(self.model_server(OllamaHandler, ["m"]))
+
+    def test_workspace_folder_setting(self):
+        shared = Path(self.home) / "shared"
+        self.assertEqual(paths.workspace_root(), shared)
+        st = json.loads(request(self.url + "/api/workspace")[1])
+        self.assertTrue(st["is_default"])
+        code, body = request(self.url + "/api/workspace", "PUT", {"folder": str(self.other)})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(body)["folder"], str(self.other.resolve()))
+        self.assertEqual(paths.workspace_root(), self.other.resolve())
+        agent = agents.create({"name": "a"})
+        self.assertEqual(agent.workspace, self.other.resolve())
+        (self.other / "here.txt").write_text("x")
+        names = [e["name"] for e in json.loads(request(self.url + "/api/files/_shared")[1])["entries"]]
+        self.assertIn("here.txt", names)
+        # A folder that is gone falls back to the default, and the page is told which one was missing.
+        gone = self.other / "gone"
+        gone.mkdir()
+        paths.set_workspace_root(str(gone))
+        gone.rmdir()
+        st = paths.workspace_setting()
+        self.assertEqual((st["folder"], st["missing"]), (str(shared), str(gone.resolve())))
+        self.assertEqual(request(self.url + "/api/workspace", "PUT", {"folder": ""})[0], 200)
+        self.assertTrue(paths.workspace_setting()["is_default"])
+
+    def test_folders_that_cannot_be_used(self):
+        for bad in ("relative/path", str(self.other / "missing"), Path(self.other).anchor, self.home,
+                    str(Path(self.home) / "models")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(paths.FolderError):
+                    paths.check_work_folder(bad)
+                self.assertEqual(request(self.url + "/api/workspace", "PUT", {"folder": bad})[0] // 100, 4)
+        (Path(self.home) / "shared" / "project").mkdir(parents=True)
+        self.assertEqual(paths.check_work_folder(str(Path(self.home) / "shared" / "project")),
+                         (Path(self.home) / "shared" / "project").resolve())
+
+    def test_folder_browser(self):
+        (self.other / "b").mkdir()
+        (self.other / "a").mkdir()
+        (self.other / ".hidden").mkdir()
+        (self.other / "file.txt").write_text("x")
+        data = json.loads(request(self.url + "/api/folders?path=" + urllib.parse.quote(str(self.other)))[1])
+        self.assertEqual([f["name"] for f in data["folders"]], ["a", "b"])   # folders only, sorted, no hidden ones
+        self.assertEqual(data["parent"], str(self.other.resolve().parent))
+        self.assertTrue(data["usable"])
+        self.assertTrue(data["roots"])
+        self.assertEqual(request(self.url + "/api/folders?path=" + urllib.parse.quote(str(self.other / "no")))[0], 404)
+        home = json.loads(request(self.url + "/api/folders")[1])
+        self.assertEqual(home["path"], str(Path.home().resolve()))
+
+    def test_chat_keeps_the_agent_in_its_folder(self):
+        agents.create({"name": "a", "skills": ["run-python"]})
+        seen = {}
+
+        def fake_reply(conn, model, messages, emit, tool_names, workspace, shared, image_preview):
+            seen.update(workspace=workspace, shared=shared, text=messages[-1]["content"])
+
+        with mock.patch.object(runner, "reply", side_effect=fake_reply):
+            body = {"agent": "a", "messages": [{"role": "user", "content": "hi"}], "folder": str(self.other)}
+            events = chat_events(request(self.url + "/api/chat", "POST", body)[1])
+            self.assertEqual(events[-1], {"done": True}, events)
+            self.assertEqual((seen["workspace"], seen["shared"]), (self.other.resolve(), None))
+            self.assertIn("cannot leave it", seen["text"])
+            body["folder"] = ""
+            chat_events(request(self.url + "/api/chat", "POST", body)[1])
+            self.assertEqual(seen["workspace"], Path(self.home) / "shared")
+            body["folder"] = str(self.other / "missing")
+            code, text = request(self.url + "/api/chat", "POST", body)
+            self.assertEqual(code, 404, text)
+        # The folder is kept with the chat.
+        chat_id = "abcdefgh-1234"
+        request(self.url + "/api/chats/" + chat_id, "PUT", {"agent": "a", "folder": str(self.other),
+                                                             "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(json.loads(request(self.url + "/api/chats/" + chat_id)[1])["folder"], str(self.other))
+
+    def test_python_cannot_leave_its_folder(self):
+        ws = self.other / "ws"
+        ws.mkdir()
+        (self.other / "secret.txt").write_text("private")
+        cases = {
+            "print(open('../secret.txt').read())": "reading files outside",
+            "import os; print(os.listdir('..'))": "looking inside folders outside",
+            "import os; os.chdir('..')": "changing to a folder outside",
+            "open('../x.txt', 'w')": "writing outside",
+        }
+        for code, why in cases.items():
+            with self.subTest(code=code):
+                result = tools.run_code(ws, code)
+                self.assertNotEqual(result["exit"], 0)
+                self.assertIn(why, result["stderr"])
+        ok = tools.run_code(ws, "import json, os\nopen('a.txt', 'w').write('1')\nprint(os.listdir('.'), json.dumps(1))")
+        self.assertEqual(ok["exit"], 0, ok)
+
+    def test_terminal_and_rust_code_that_leaves_the_folder_is_refused(self):
+        ws = self.other / "ws"
+        (ws / "sub").mkdir(parents=True)
+        for code in ("ls -la", "echo hi > out.txt && cat out.txt", "cd sub && ls", "python3 x.py 2>/dev/null",
+                     "curl https://example.com/a/b -o page.html", "echo $((4 / 2))", f"cat {ws / 'sub'}"):
+            with self.subTest(code=code):
+                tools.check_terminal_code(ws, code)
+        for code in ("cat ../secret.txt", "cd", "cd ~", "cat ~/.bashrc", "echo $HOME", "ls ..", "cd -",
+                     "type %USERPROFILE%\\x", str(Path(self.other).anchor) + "x"):
+            with self.subTest(code=code):
+                with self.assertRaises(tools.ToolError):
+                    tools.check_terminal_code(ws, code)
+        tools.check_rust_code(ws, 'fn main() { std::fs::write("out.txt", "hi").unwrap(); println!("{}", 4/2); }')
+        for code in ('fn main() { std::fs::read("../x").unwrap(); }', 'fn main() { std::env::home_dir(); }',
+                     'fn main() { std::fs::read("' + str(Path(self.other).anchor).replace("\\", "\\\\") + 'x"); }'):
+            with self.subTest(code=code):
+                with self.assertRaises(tools.ToolError):
+                    tools.check_rust_code(ws, code)
+        # The agent's action is refused before anything runs; the Workspace Run button (the user) is not checked.
+        ok, out = tools.execute(ws, "run_terminal", {"code": "cat ../secret.txt"}, ["run_terminal"])
+        self.assertFalse(ok)
+        self.assertIn("outside your folder", out)
+
+    def test_terminal_counts_commands(self):
+        if os.name == "nt":
+            self.skipTest("the terminal test uses a POSIX shell")
+        t = terminal.start(self.other, "count")
+        self.addCleanup(terminal.close_all)
+        for word in ("one", "two", "three"):   # type each command once the one before has answered
+            t.write(f"echo {word}-out\n")
+            for _ in range(60):
+                if f"{word}-out\n" in terminal.clean(t.read(0)["text"]).replace(f"echo {word}-out", ""):
+                    break
+                time.sleep(0.05)
+        text, shown = t.recent(1)
+        self.assertEqual(shown, 1)
+        self.assertIn("three-out", text)
+        self.assertNotIn("two-out", text)
+        text, shown = t.recent(2)
+        self.assertEqual(shown, 2)
+        self.assertIn("two-out", text)
+        self.assertNotIn("one-out", text)
+        text, shown = t.recent(50)          # more than were typed: everything kept
+        self.assertEqual(shown, 3)
+        self.assertIn("one-out", text)
+        self.assertEqual(t.recent(0), ("", 0))
+        self.assertEqual(server.terminal_commands(None), server.DEFAULT_TERMINAL_COMMANDS)
+        self.assertEqual(server.terminal_commands(10_000), terminal.MAX_COMMANDS)
+        self.assertEqual(server.terminal_commands(-3), 0)
 
 
 if __name__ == "__main__":

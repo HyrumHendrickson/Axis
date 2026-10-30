@@ -108,3 +108,7 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 Example: `AXIS_NUM_CTX=16384 axis` (macOS and Linux) or `$env:AXIS_NUM_CTX = "16384"; axis` (PowerShell).
 
 The page only answers requests from this computer and only from its own page, so other websites open in your browser cannot use it.
+
+## The workspace folder
+
+Agents and the Workspace work in `Axis/shared` unless you choose another folder with **Folder** on the Workspace page. The choice is saved in `Axis/workspace-settings.json` as `{"folder": "<full path>"}`; an empty value, or a folder that no longer exists, means `Axis/shared`. Pictures Axis makes are always saved in `Axis/images`.
