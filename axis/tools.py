@@ -603,6 +603,10 @@ def _run_env(where: Where) -> Dict[str, str]:
     try:
         from . import artcraft
         env.update(artcraft.rust_build_env())
+        # The headless <app>-cli programs of installed Art Craft apps, so an agent can run them by name.
+        dirs = artcraft.cli_dirs()
+        if dirs:
+            env["PATH"] = os.pathsep.join(dirs + ([env["PATH"]] if env.get("PATH") else []))
     except (ImportError, OSError):
         pass
     return env

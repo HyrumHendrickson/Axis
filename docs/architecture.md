@@ -18,6 +18,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     |                   |                                                            |
   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
+  |     +-- craft_skills.py                          (one skill for each Craft app)      |
   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |

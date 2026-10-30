@@ -843,6 +843,7 @@ async function loadSkills() {
   try { S.skills = await api("/api/skills"); } catch (e) { toast(e.message); }
 }
 const skillById = (id) => S.skills.find((s) => s.id === id);
+const ART_CRAFT_GROUP = "Art Craft apps";
 
 function go(view) {
   if (S.view.kind === "workspace" && view.kind !== "workspace" && !leaveEdit()) return;
@@ -1681,7 +1682,7 @@ function renderEditor() {
   draft.config.forEach(addConfig);
 
   const chosen = new Set(draft.skills);
-  const pickList = (builtin) => S.skills.filter((sk) => sk.builtin === builtin).map((sk) =>
+  const pickList = (builtin, group = "") => S.skills.filter((sk) => sk.builtin === builtin && (sk.group || "") === group).map((sk) =>
     h("label", { class: "pick" },
       h("input", { type: "checkbox", class: "skill-pick", value: sk.id, checked: chosen.has(sk.id) }),
       h("div", {}, sk.name, h("span", {}, sk.description || sk.instructions.slice(0, 140)))));
@@ -1690,6 +1691,9 @@ function renderEditor() {
     h("div", { class: "subhead" }, "Actions"),
     h("p", { class: "hint" }, "Choose what this agent can do. File access is available through terminal commands, and the chat Location menu selects where those commands run."),
     pickList(true),
+    h("div", { class: "subhead" }, "Art Craft apps"),
+    h("p", { class: "hint" }, "Let this agent use an app installed on the Art Craft page, through its command line. Each choice also gives the agent terminal commands."),
+    pickList(true, ART_CRAFT_GROUP),
     h("div", { class: "subhead" }, "Your skills"),
     custom.length ? custom : h("p", { class: "hint" }, "You have not made any skills yet. Use the Skills page to make one."));
 
@@ -1939,9 +1943,7 @@ function parseCsv(text, limit) {
 
 let workspaceTimer = null;
 function renderWorkspace() {
-  const names = [SHARED];
   if (S.workspace.agent !== SHARED) S.workspace = { agent: SHARED, dir: "", file: "" };
-  const label = (n) => n === SHARED ? "Shared folder" : n;
   const f = S.workspace;
   S.nameEdit = null;
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Workspace"));
@@ -1952,11 +1954,6 @@ function renderWorkspace() {
       h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
     return;
   }
-  const pick = h("select", { "aria-label": "Folder", onchange: (e) => {
-      if (!leaveEdit()) { e.target.value = f.agent; return; }
-      S.workspace = { agent: e.target.value, dir: "", file: "" }; renderWorkspace(); } },
-    names.map((n) => { const o = h("option", { value: n }, label(n)); o.selected = n === f.agent; return o; }));
-  bar.querySelector("h2").append(" ", pick);
   bar.append(
     h("div", { class: "ide-toggles", role: "group", "aria-label": "Panels" },
       h("button", { class: "btn small", id: "ide-dock-btn", title: "Show or hide a terminal under the files", onclick: () => setDock(!S.ide.dock) }, "Terminal"),
@@ -4513,7 +4510,8 @@ async function runOcr() {
 
 /* ---------------------------------------------------------------- skills */
 function renderSkills() {
-  const builtin = S.skills.filter((sk) => sk.builtin);
+  const builtin = S.skills.filter((sk) => sk.builtin && !sk.group);
+  const craft = S.skills.filter((sk) => sk.builtin && sk.group === ART_CRAFT_GROUP);
   const custom = S.skills.filter((sk) => !sk.builtin);
   const usedBy = (id) => S.agents.filter((a) => a.skills.includes(id)).map((a) => a.name);
   const users = (id) => { const u = usedBy(id); return u.length ? "Used by " + u.join(", ") : "Not used by any agent"; };
@@ -4602,7 +4600,10 @@ function renderSkills() {
         custom.length ? custom.map(skillCard) : h("p", { class: "hint" }, "None yet. Click New skill to make one.")),
       h("div", { class: "skill-group" }, h("h3", {}, "Built-in actions"),
         h("p", { class: "hint" }, "These let an agent act: Python, Rust, terminal code, web search and Wikipedia. Edit changes what a skill tells the model; Reset to default undoes it."),
-        builtin.map(skillCard)))));
+        builtin.map(skillCard)),
+      h("div", { class: "skill-group" }, h("h3", {}, ART_CRAFT_GROUP),
+        h("p", { class: "hint" }, "One skill for each app on the Art Craft page. It teaches an agent that app\u2019s command line, and works once the app is installed. On macOS the app download has no command-line program, so these skills need one added by hand."),
+        craft.map(skillCard)))));
 }
 
 /* ---------------------------------------------------------------- update */

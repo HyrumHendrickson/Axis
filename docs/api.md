@@ -65,7 +65,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `GET` | `/api/skills` | list skills (built-in and custom) |
+| `GET` | `/api/skills` | list skills (built-in and custom). Each has `group`: `"Art Craft apps"` for the skill of a Craft app, otherwise empty |
 | `POST` | `/api/skills` | create a custom skill |
 | `GET` | `/api/skills/<id>` | one skill |
 | `PUT` | `/api/skills/<id>` | update a skill; for a built-in skill only `name`, `description`, and `instructions` change, and the edit is kept apart from the default |

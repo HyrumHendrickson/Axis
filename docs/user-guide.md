@@ -69,6 +69,8 @@ Open **Skills** in the sidebar. Every agent chooses from the same library.
 | Image generation | `generate_image` with a local Stable Diffusion model |
 | Shared folder | Lets file actions reach `shared/`, a folder common to all agents with this skill |
 
+| Art Craft apps | One skill for each Craft app (PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft, FigCraft). See below. |
+
 Notes:
 
 - Actions require a model that can call tools. See [Recommended models](#recommended-models).
@@ -79,6 +81,8 @@ Notes:
 - Web search uses DuckDuckGo by default. If it rate-limits you, set `AXIS_SEARCH_URL` to a [SearXNG](https://docs.searxng.org/) server. `fetch_page` refuses links to your own machine and local network (including private, link-local, and shared addresses such as Tailscale's `100.x.x.x`), checks the address it actually connects to, and gives up on a site that sends its answer too slowly.
 - Agents choose how much text to retrieve (`max_results`, `max_chars`). Long pages end with a `start=` marker so the agent can continue reading. Wikipedia actions accept `lang` (for example `la` for Latin).
 - Agents can leave each other files in `shared/` (for example `shared/inbox/to-writer.md`). In Run Python the path is in `os.environ["AXIS_SHARED_DIR"]`.
+
+**Art Craft skills.** Each Craft app has its own skill, listed under **Art Craft apps** on the Skills page and in an agent's settings. A skill teaches an agent that app's command-line program (for example `photocraft-cli`): how to look up commands, how to write their parameters, and how to check the result. Each skill also gives the agent the Run terminal code actions, so choosing it is enough. The app must be installed on the **Art Craft** page. Axis adds the folders of installed apps' command-line programs to the PATH of programs an agent starts, so the agent runs them by name; your own PATH is not changed. Files an agent makes stay in the shared workspace, and the skills tell the agent not to overwrite originals. Like Run terminal code, they use your permissions and are not a sandbox. The macOS download of an app holds only the app, not its command-line program, so on a Mac these skills work only if the program (the separate `<app>-cli-<version>-macos-universal.zip` from the app's releases page) is unpacked into the app's folder under `Axis/engines/artcraft`. The Craft apps also have an MCP server; Axis does not use it. Edit a skill's text if a newer app release changes a command.
 
 **Custom skills:** click **New skill**, then enter a name, a one-line description, and instructions (a house style, a checklist, a way of answering). **Edit** and **Delete** are on each card. Deleting a skill removes it from every agent that used it.
 
@@ -211,13 +215,14 @@ Open **Art Craft** in the sidebar to install and open the Craft App Suite: free,
 - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, Axis downloads Microsoft's C++ Build Tools when a Rust build needs the MSVC linker.
 - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
 - When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
+- Agents can drive an installed app through its command line with the matching skill under **Art Craft apps** on the Skills page (see [Skills](#skills)).
 - **Delete** removes the app (every version, and any settings kept in its folder) or Rust, after asking. Installing over an installed app is never done, so settings are safe.
 
 ## Workspace
 
 Open **Workspace** in the sidebar to browse, change, and run what agents have made. It is a light editor: a file list, an editor, a terminal underneath, and a chat with an agent beside it. It has no debugger, language support, or extensions.
 
-**Layout.** The top bar has **Folder** (choose an agent, or **Shared folder**) and two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. Under it, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
+**Layout.** The top bar has two switches, **Terminal** and **Agent**, that show or hide the bottom panel and the agent chat. There is only one folder, the shared workspace, so there is no folder menu. Under the bar, the folder path sits on the left and **New file**, **New folder**, **Upload**, and **More** on the right. Which panels are open, their size, and the chosen agent are remembered in this browser.
 
 **Files**
 - Navigate folders on the left and open files on the right.

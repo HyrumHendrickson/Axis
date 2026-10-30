@@ -167,6 +167,36 @@ def rust_env() -> Dict[str, str]:
             "PATH": bin_dir + (os.pathsep + old if old else "")}
 
 
+def cli_program(app_id: str) -> Optional[Path]:
+    """The headless <app>-cli that came with an installed app, or None.
+
+    The Windows portable zip and the Linux tarball hold it beside the app. The macOS disk image holds
+    only the app, so there it is found only if the CLI zip was unpacked into the app's folder.
+    """
+    if app_id not in APP_IDS:
+        return None
+    info = _app_info(app_id)
+    if info is None:
+        return None
+    name = app_id + "-cli" + (".exe" if engines.this_platform()[0] == "windows" else "")
+    folder = root() / app_id
+    try:
+        hits = sorted((p for p in folder.rglob(name) if p.is_file() and inside(p, folder)), key=lambda p: len(p.parts))
+    except OSError:
+        return None
+    return hits[0] if hits else None
+
+
+def cli_dirs() -> List[str]:
+    """The folders that hold an installed app's CLI, so a program started by an agent finds it by name."""
+    found: List[str] = []
+    for app_id in APP_IDS:
+        program = cli_program(app_id)
+        if program is not None and str(program.parent) not in found:
+            found.append(str(program.parent))
+    return found
+
+
 def _vcvars_env() -> Dict[str, str]:
     """Return the MSVC build environment, or {} when C++ Build Tools are absent."""
     if os.name != "nt":

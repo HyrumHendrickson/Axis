@@ -4,6 +4,18 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.2] - 2026-10-29
+
+### Added
+- **One skill for each Art Craft app.** PhotoCraft, LightCraft, FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft, SoundCraft and FigCraft each have a built-in skill that teaches an agent the app's command line: how to look commands up, write their parameters, run them, and check the result. They were written from each app's documentation and checked against the released Linux programs. Each gives the agent the Run terminal code actions. They are grouped under **Art Craft apps** on the Skills page and in an agent's settings, and can be edited and reset like other built-in skills.
+- Programs an agent starts now find the `<app>-cli` program of every installed Art Craft app on their PATH. Axis does not change your own PATH. API: skills have a `group` field.
+
+### Changed
+- **Workspace:** the folder menu is gone. There is only one shared folder, so it had nothing to choose.
+
+### Notes
+- The macOS download of a Craft app holds only the app, so the new skills need the separate command-line zip there; Axis does not install it yet.
+
 - Fixed Windows Rust setup so Axis loads `vcvarsall.bat` with `call` and detects the C++ Build Tools installed under `Axis/engines/msvc` without requiring a restart.
 - Fixed the Windows MSVC architecture argument: native x64 now uses Microsoft’s `amd64`/`vcvars64.bat` configuration instead of the invalid `x64` argument.
 

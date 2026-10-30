@@ -3,7 +3,8 @@
 Built-in skills give an agent actions (tools): working with files in its own
 folder, running programs, searching the web and reading Wikipedia. The Shared
 folder skill adds no tools of its own; it lets the file actions an agent already
-has also reach ~/Axis/shared, which every agent with that skill can use.
+has also reach ~/Axis/shared, which every agent with that skill can use. There is also
+one skill for each Art Craft app (see craft_skills.py).
 Custom skills are named instructions written by the user; they are stored as
 ~/Axis/skills/<id>.json. Agents choose skills by id.
 
@@ -22,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import craft_skills
 from .paths import axis_home
 
 MAX_TEXT = 20000
@@ -99,6 +101,7 @@ BUILTIN: List[Dict[str, Any]] = [
         "tools": ["wikipedia_search", "wikipedia_article"],
     },
 ]
+BUILTIN += craft_skills.build()   # one skill for each Art Craft app
 BUILTIN_IDS = {s["id"] for s in BUILTIN}
 EDITABLE = ("name", "description", "instructions")   # what a user may change on a built-in skill
 
@@ -130,6 +133,7 @@ def _public(skill: Dict[str, Any], builtin: bool) -> Dict[str, Any]:
         "instructions": skill.get("instructions", ""),
         "tools": list(skill.get("tools", [])),
         "builtin": builtin,
+        "group": skill.get("group", "") if builtin else "",
         "modified": False,
         "created": skill.get("created", ""),
     }
