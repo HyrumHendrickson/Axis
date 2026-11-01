@@ -190,14 +190,18 @@ def workdir(cli: Optional[Path] = None) -> Path:
 def status() -> Dict[str, Any]:
     from . import manager  # imported here: manager imports this module
 
+    from . import netshare
+
     settings = load_settings()
     cli = find_cli()
     server = manager.sd_server_binary()
     models = list_models()
     default = default_model_id(models)
     running = manager.image_running()
+    remote = netshare.remote_image_models()   # image models that are on at the computer this one is connected to
     return {
-        "ready": bool((cli or server) and models),
+        "ready": bool(((cli or server) and models) or remote),
+        "remote_models": remote,
         "sd_cli": str(cli) if cli else None,
         "sd_cli_setting": settings["sd_cli"],
         "sd_server": str(server) if server else None,
@@ -625,6 +629,10 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
     from . import manager  # imported here: manager imports this module
 
     emit = on_event or (lambda e: None)
+    from . import netshare
+    remote = netshare.find_remote_image(raw.get("model"))
+    if remote is not None:   # a model that is on at another computer (Models, Connect): it makes the picture, we keep it
+        return netshare.generate_remote(remote, raw, folder, source, emit, preview, init_image, init_name)
     model = find_model(raw.get("model"))
     if model["missing"]:
         raise ImageError(f"Files for {model['name']} are missing: {', '.join(model['missing'])}. "
@@ -710,6 +718,45 @@ def generate(raw: Dict[str, Any], folder: Path, source: str = "",
                                                       "axis_version": __version__})
     except OSError:
         pass   # the picture is still good; the gallery then shows what it can
+    return record
+
+
+_STORE_LOCK = threading.Lock()
+
+
+def store_picture(folder: Path, params: Dict[str, Any], png: bytes, model_name: str, model_id: str, seconds: float,
+                  source: str = "", init_name: str = "", host: str = "") -> Dict[str, Any]:
+    """Save a picture that another computer made (netshare.py) the way generate saves its own, and return its record."""
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ImageError("The other computer sent something that is not a PNG picture.")
+    prompt = str(params.get("prompt") or "picture")
+    with _STORE_LOCK:   # several pictures can arrive at once: each gets a folder of its own
+        folder.mkdir(parents=True, exist_ok=True)
+        name = _file_name(prompt)
+        out_dir, n = folder / name, 2
+        while out_dir.exists() or (folder / f"{name}.png").exists():
+            out_dir, n = folder / f"{name}-{n}", n + 1
+        name = out_dir.name
+        out_dir.mkdir()
+    out_file = out_dir / f"{name}.png"
+    try:
+        out_file.write_bytes(png)
+    except OSError as exc:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise ImageError(f"Could not save the picture: {exc.strerror or exc}") from exc
+    shown = {k: params.get(k) for k in ("prompt", "negative_prompt", "width", "height", "steps", "cfg_scale", "sampler", "seed")}
+    if init_name:
+        shown["edited_from"] = init_name
+    record = {"file": out_file.name, "path": f"{out_dir.name}/{out_file.name}", "folder": out_dir.name,
+              "model": model_name, "model_id": model_id, **shown, "seconds": seconds, "source": source,
+              "created": datetime.now().isoformat(timespec="seconds")}
+    if host:
+        record["host"] = host
+    try:
+        _write_json(out_dir / f"{out_dir.name}.json", {**{k: v for k, v in record.items() if k != "path"},
+                                                      "axis_version": __version__})
+    except OSError:
+        pass
     return record
 
 

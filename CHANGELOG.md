@@ -4,6 +4,19 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.12] - 2026-11-01
+
+### Added
+- **Host models.** A new **Host models** tab on the Models page has a **Start sharing** button. It opens a port (8800 unless you choose another) that other computers running Axis can connect to, and shows the addresses to type, which computers are using it, what they are doing, and the models being offered. Every chat model that is on and every image model that is on is offered by itself. Sharing is off after every restart, **Stop sharing** closes it at once, and quitting Axis closes it.
+- **Connect to a host.** A new **Connect to a host** tab takes the host's address and port. While connected, the host's running models appear in the model menus of Chat and Images, and in an agent's preferred model, as `name · address:port`, so a model with the same name on both computers is never mixed up. The message that no model is on goes away, and chat unlocks, when the host has a model on and this computer has none. Axis looks at the host every few seconds in the background; a host that goes away shows as unreachable and its models disappear until it answers again, and the connection is remembered (`Axis/net-settings.json`) and resumed when Axis starts.
+- **Only the model is borrowed.** The computer that connects keeps its own system prompts, agents, skills, actions, files, chats and settings, including its context size. The host only runs the model, and it keeps nothing of what a visitor asks: pictures are made in a temporary folder and deleted after they are sent, so the visitor's own `Axis/images` folder holds them. Agents can use a host's image models with `generate_image` too.
+- **Many computers at once.** The host runs chats for several computers side by side (how many really run together depends on its engine: Ollama's `OLLAMA_NUM_PARALLEL`, or `--parallel` in the llama.cpp extra arguments), up to 64 at a time (`AXIS_SHARE_CHATS`). Pictures are made one at a time, first come first served, with up to 32 waiting (`AXIS_SHARE_QUEUE`); each waiting computer is told how many pictures are ahead of it.
+- API: `GET /api/net`, `POST /api/net/host/start`, `/host/stop`, `/connect` and `/disconnect`; `GET /api/images` has `remote_models`; `GET /api/status` has `remote_images`. Environment variables `AXIS_SHARE_CHATS` and `AXIS_SHARE_QUEUE`.
+
+### Changed
+- **OCR models are managed on the OCR page.** The OCR page has two tabs, **Read text** and **Models**. Installing, starting, stopping and deleting OCR models, and installing Tesseract and the PyTorch environment, moved there from the Models page, which no longer has an **OCR models** tab. The **Engine settings** tab still lists every engine.
+- The page that shows Axis (`127.0.0.1`) is unchanged and is still the only way to use Axis itself. The sharing port is a second, separate listener that answers four requests (ping, list models, chat, picture) and nothing else, and refuses any request that does not carry Axis's own header, so web pages open in a browser cannot use it. It is not password-protected: share only on a network you trust.
+
 ## [4.3.11] - 2026-10-30
 
 ### Changed

@@ -199,7 +199,7 @@ Open **Tools** in the sidebar, then **OCR**. **OCR settings**, at the bottom of 
 - **Tesseract**, a fast, light program that reads more than 100 languages, including Latin (`lat`) and ancient Greek (`grc`). Each language is a model.
 - **PyTorch OCR models**: [EasyOCR](https://github.com/JaidedAI/EasyOCR) (pick the languages, for example `en,fr`) and [docTR](https://github.com/mindee/doctr) (a text detector and recognizer, for example `fast_base+crnn_vgg16_bn`). They are slower without a graphics card, but often better on photos and screenshots.
 
-**Installing.** Open **Models**, then **OCR models**, choose **Tesseract language**, **EasyOCR**, or **docTR**, type a name, and click **Install**.
+**Installing.** Open **Tools**, **OCR**, then the **Models** tab (next to **Read text**), choose **Tesseract language**, **EasyOCR**, or **docTR**, type a name, and click **Install**.
 
 | Choice | Type | Examples |
 |--------|------|----------|
@@ -209,7 +209,7 @@ Open **Tools** in the sidebar, then **OCR**. **OCR settings**, at the bottom of 
 
 Tesseract languages are downloaded from GitHub (checked against GitHub's file hashes when its API answers) into `Axis/models/ocr/tessdata`. Languages that came with Tesseract are listed too; Axis does not delete those.
 
-**Tesseract itself.** Axis uses a Tesseract it finds (the path under **OCR settings** on the OCR page, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the OCR models page installs it:
+**Tesseract itself.** Axis uses a Tesseract it finds (the path under **OCR settings** on the OCR page, `AXIS_TESSERACT`, your PATH, or where its installer puts it). **Install Tesseract** on the **Models** tab of the OCR page installs it:
 
 | System | How |
 |--------|-----|
@@ -217,7 +217,7 @@ Tesseract languages are downloaded from GitHub (checked against GitHub's file ha
 | macOS | `brew install tesseract` (needs [Homebrew](https://brew.sh)) |
 | Linux | Your package manager (`apt-get`, `dnf`, `pacman`, `zypper`, or `apk`); your desktop asks for your password. Without a desktop, Axis shows the command to run. |
 
-**The PyTorch environment.** EasyOCR and docTR need PyTorch, so Axis makes a separate Python environment for them in `Axis/engines/ocr-python` (Axis itself still uses only the standard library). It is installed with your first EasyOCR or docTR model, or with **Install PyTorch** on the OCR models page. By default it installs the CPU-only build of PyTorch (about 1 GB); choose **CUDA (NVIDIA GPU)** in the menu next to **Install** for the GPU build (several GB). EasyOCR and docTR are then installed into it as models need them. Under **Engine settings** you can choose the Python the environment is made from, the device (graphics card when there is one, or CPU only), and the PyTorch package index pip uses.
+**The PyTorch environment.** EasyOCR and docTR need PyTorch, so Axis makes a separate Python environment for them in `Axis/engines/ocr-python` (Axis itself still uses only the standard library). It is installed with your first EasyOCR or docTR model, or with **Install PyTorch** on the **Models** tab of the OCR page. By default it installs the CPU-only build of PyTorch (about 1 GB); choose **CUDA (NVIDIA GPU)** in the menu next to **Install** for the GPU build (several GB). EasyOCR and docTR are then installed into it as models need them. Under **Engine settings** you can choose the Python the environment is made from, the device (graphics card when there is one, or CPU only), and the PyTorch package index pip uses.
 
 **Start and Stop.** A PyTorch OCR model that is on stays in memory, so each picture is read at once; only one is on at a time. A model that is off is loaded for each picture, which takes longer but uses no memory in between. Tesseract runs for each picture and needs no starting.
 
@@ -268,9 +268,23 @@ Open **Terminal** in the sidebar for a full-page terminal, or use the **Terminal
 - A terminal you type into runs with your own permissions and is not confined to any folder. It is connected through pipes rather than a full terminal, so commands, scripts, and line-based programs work, but full-screen programs (editors such as `vim`, pagers, `top`) do not.
 - In the Terminal tab, **Agent** opens a panel on the right. Choose an agent and ask it about the terminal. **Terminal commands** sets how many of your newest commands it is shown with each message, each with what it printed: Off, 1, 3, 5 (the default), 10, 25 or 100. A command is any line you type and run, including answers you type to a running program. At most about 16,000 characters are shown; when there are more, the oldest part is left out. The choice is remembered in this browser and also applies to the Workspace's agent panel. The agent can read the terminal but never type into it. The conversation is the agent's ordinary chat, so it also appears in **Past chats** and on the agent's own page (**Full chat**, which keeps the agent in the folder you are in; in the Terminal tab, the folder of the open terminal).
 
+## Sharing models between computers
+
+A powerful computer can lend its models to others on the same network. Both computers run Axis.
+
+**On the powerful computer (the host).** Start the models you want to offer on **Chat models** and **Image models**. Open **Models**, **Host models**, and click **Start sharing**. The tab shows the addresses to type on the other computers, for example `192.168.1.5:8800`, which computers are using the host, how many chats and pictures are running, and the models being offered. Every chat model and image model that is on is offered by itself, and a model you start or stop later is added or removed within a few seconds. **Stop sharing** closes the port and stops whatever is running for the others. Sharing is off every time Axis starts. The first time, your firewall may ask to allow Axis; allow it for private networks.
+
+**On the other computers.** Open **Models**, **Connect to a host**, type the address and port, and click **Connect**. The host's running models then appear in the model menu of Chat, in an agent's preferred model, and in the model menu of Images, written as `llama3.1:8b · 192.168.1.5:8800`. If this computer has no model of its own, the message that no model is on goes away and chat unlocks. **Disconnect** stops using the host. Axis remembers the host and connects again when it starts; if the host is not there, the tab says so and keeps trying.
+
+**What the host does and does not do.** It only runs the model. Your system prompts, agents, skills, actions, files, chats and settings (including the context size) stay on your computer, and actions such as Run Python run on your computer. Pictures are made on the host from your prompt and settings and come back to your own **Axis/images** folder; the host keeps nothing. Pictures with a host's image model include editing a picture and the **generate_image** action of agents.
+
+**Several computers at once.** Chats from different computers run side by side, as far as the host's engine allows. For Ollama set `OLLAMA_NUM_PARALLEL` before it starts; for llama.cpp add `--parallel 4` (or more) to the extra arguments under **Engine settings**. Pictures are made one at a time, first come first served; a waiting computer is told how many pictures are ahead of it.
+
+**Safety.** Anyone who can reach the port can use the models that are on, and sharing has no password, so share only on a network you trust, such as your home or office. Only the four requests of the sharing port are answered, and nothing else of Axis can be reached through it. See [Configuration](configuration.md) for `AXIS_SHARE_CHATS` and `AXIS_SHARE_QUEUE`.
+
 ## Models tab
 
-Open **Models** to install, start, stop, and delete models. While the page is open, its four sections are listed under **Models** in the sidebar: **Chat models** (Ollama and llama.cpp), **Image models**, **OCR models** (see [OCR](#ocr)), and **Engine settings** (every engine with **Install** or **Update**, plus the settings for llama.cpp, stable-diffusion.cpp, and OCR). Each section shows its own installs under **Activity**.
+Open **Models** to install, start, stop, and delete models. While the page is open, its sections are listed under **Models** in the sidebar: **Chat models** (Ollama and llama.cpp), **Image models**, **Engine settings** (every engine with **Install** or **Update**, plus the settings for llama.cpp and stable-diffusion.cpp), **Connect to a host** and **Host models** (see [Sharing models](#sharing-models-between-computers)). OCR models are installed, started and deleted on the **Models** tab of the OCR page (see [OCR](#ocr)). Each section shows its own installs under **Activity**.
 
 **Install a model.** Choose what to install, type a name, and click **Install** (or press Enter). Progress, speed, and time left appear under **Activity**; you can switch pages, and a download can be cancelled.
 
@@ -328,6 +342,7 @@ Axis/                       in your home folder (override with AXIS_HOME)
 ├── image-settings.json     sd-cli and sd-server paths, working folder, default image model
 ├── images/                 every picture Axis makes (Images page and agents)
 ├── ocr-settings.json       Tesseract path, Python and device for PyTorch OCR models, PyTorch package index
+├── net-settings.json       the host whose models are in use, and the port last used for sharing
 ├── models/
 │   ├── llm/                GGUF chat models for llama.cpp, one folder per Hugging Face repository
 │   ├── image/              Stable Diffusion files Axis downloaded

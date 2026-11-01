@@ -9,6 +9,7 @@ Axis runs on the user's computer and serves its page only to that computer. Mode
 - Nothing about the user, their chats, their files, or their usage is ever sent anywhere.
 - Axis goes online only for things the user asked for or can turn off: downloading engines and models, the update check against this repository (`AXIS_NO_UPDATE_CHECK=1`), and web actions an agent was given.
 - The page refuses requests from other sites (see `_trusted` in `axis/server.py`). Do not weaken that check.
+- One thing may leave the computer, and only when the user turns it on: **Host models** (`axis/netshare.py`) opens a second port that other computers running Axis can use to borrow the models that are on. It is off by default and after every restart, it is a separate listener from the page, it answers four requests (ping, list models, chat, picture) and nothing else, it never reaches agents, chats, files, skills or settings, and it keeps nothing of what a visitor asks. There is still no Axis server and no cloud: the two computers talk to each other directly.
 
 ## 2. No accounts
 

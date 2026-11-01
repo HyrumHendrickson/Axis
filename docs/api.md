@@ -109,6 +109,18 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 | `GET` | `/api/images/gallery` | pictures Axis made, in `Axis/images` (newest first); read them through the file routes as `_images` |
 | `POST` | `/api/images/generate` | make a picture, streaming progress as newline-delimited JSON ("preview": true also streams each step as a small picture; "init_image": {place, path} and "strength" edit that picture) |
 
+## Sharing models between computers
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| `GET` | `/api/net` | `host` (is the port open, its `port`, the `addresses` to type, the `clients` using it and what each is doing, `active_chats`, `active_images`, `waiting_images`, `served`, and the `offering` chat and image models) and `client` (the host this computer is connected to: `state` is `off`, `connecting`, `connected` or `unreachable`, and its `chat` and `image` models) |
+| `POST` | `/api/net/host/start` | open the sharing port `{port?}` (8800 by default; 1024 to 65535, or 0 for any free port); answers like `GET /api/net` |
+| `POST` | `/api/net/host/stop` | close the port and every connection on it; chats and pictures in progress are stopped |
+| `POST` | `/api/net/connect` | connect to a host `{address}`, for example `192.168.1.5:8800`; `400` says what to check when it cannot be reached |
+| `POST` | `/api/net/disconnect` | stop using the host's models |
+
+The sharing port is separate from the server above and is not part of this API. It answers only `GET /share/v1/ping`, `GET /share/v1/models`, `POST /share/v1/chat` and `POST /share/v1/image`, every request must carry the header `X-Axis-Share: 1`, and anything else is `404`. Chats and pictures stream newline-delimited JSON. While connected, `GET /api/images` lists the host's running image models under `remote_models` (ids look like `net:192.168.1.5:8800/z-image-turbo`), and `GET /api/status` lists their ids under `remote_images`.
+
 ## OCR
 
 | Method | Path | What it does |

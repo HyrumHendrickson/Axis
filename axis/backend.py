@@ -10,6 +10,10 @@ Axis looks at every server it knows about at once: the default addresses (or the
 one given with --url / AXIS_URL), plus each llama-server that Axis started itself
 on the Models page. A chat goes to whichever server has the chosen model loaded.
 
+A third kind of server is another computer running Axis with sharing turned on (see netshare.py). Its running
+models are listed with the others as "name \u00b7 address:port"; a chat that picks one is sent to that computer, which
+runs only the model. Everything else (the system prompt, the skills, the actions) stays on this computer.
+
 Pictures: a message may carry "images", a list of image files (pathlib.Path). They
 are sent as base64 in each server's own format: an "images" list on the message for
 Ollama, and image_url parts of the content for llama.cpp (which needs the model's
@@ -64,6 +68,10 @@ def take_pinned_ollama() -> List[tuple]:
     return out
 
 
+# How a model on another computer is told apart from a local one of the same name: "llama3.1:8b \u00b7 192.168.1.5:8800".
+REMOTE_SEP = " \u00b7 "
+SHARE_HEADERS = {"X-Axis-Share": "1"}   # the sharing port refuses requests without it (see netshare.py)
+
 START_HELP = (
     "Start a model on the Models page, or from a terminal:\n"
     "  Ollama:     ollama run llama3.2:3b --keepalive -1m\n"
@@ -73,11 +81,18 @@ START_HELP = (
 
 # Functions that return extra server addresses to look at (the llama-servers Axis started).
 _URL_SOURCES: List[Callable[[], List[str]]] = []
+# Functions that return the Backends of other computers whose models this one may use (see netshare.py).
+_REMOTE_SOURCES: List[Callable[[], List["Backend"]]] = []
 
 
 def add_url_source(source: Callable[[], List[str]]) -> None:
     if source not in _URL_SOURCES:
         _URL_SOURCES.append(source)
+
+
+def add_remote_source(source: Callable[[], List["Backend"]]) -> None:
+    if source not in _REMOTE_SOURCES:
+        _REMOTE_SOURCES.append(source)
 
 
 class BackendError(Exception):
@@ -92,21 +107,25 @@ class ServerUnavailable(BackendError):
 
 @dataclass
 class Backend:
-    kind: str  # "ollama" or "openai"
+    kind: str  # "ollama" or "openai"; for a model on another computer, the kind of server it runs there
     url: str
     models: List[str] = field(default_factory=list)
+    remote: bool = False   # the models are on another computer running Axis with sharing on
+    tag: str = ""          # that computer's "address:port"
 
     @property
     def label(self) -> str:
+        if self.remote:
+            return f"Axis on {self.tag}"
         return "Ollama" if self.kind == "ollama" else "llama.cpp / OpenAI-compatible"
 
 
 # --------------------------------------------------------------------------- HTTP
 
 
-def _open(url: str, body: Optional[dict] = None, timeout: float = PROBE_TIMEOUT):
+def _open(url: str, body: Optional[dict] = None, timeout: float = PROBE_TIMEOUT, extra: Optional[Dict[str, str]] = None):
     data = None
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", **(extra or {})}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -214,11 +233,21 @@ def _probe_all(urls: List[str]) -> List[Any]:
         return list(pool.map(one, urls))
 
 
-def connect_all(url: Optional[str] = None) -> List[Backend]:
-    """Every reachable server that has at least one model loaded. Raises BackendError when there is none."""
+def connect_all(url: Optional[str] = None, remote: bool = True) -> List[Backend]:
+    """Every reachable server that has at least one model loaded. Raises BackendError when there is none.
+
+    Models on other computers (netshare.py) come after the local ones; remote=False leaves them out, which is
+    what a computer that shares its models uses, so it never passes someone else's models on.
+    """
     urls = candidates(url)
     results = _probe_all(urls)
     found = [r for r in results if isinstance(r, Backend) and r.models]
+    if remote:
+        for source in _REMOTE_SOURCES:
+            try:
+                found.extend(b for b in source() if b.models)
+            except Exception:
+                continue
     if found:
         return found
     errors = [r for r in results if isinstance(r, BackendError)]
@@ -253,20 +282,30 @@ def loaded_models(backends: List[Backend]) -> List[str]:
     out: List[str] = []
     for b in backends:
         for m in b.models:
-            if m not in out:
-                out.append(m)
+            shown = f"{m}{REMOTE_SEP}{b.tag}" if b.remote else m
+            if shown not in out:
+                out.append(shown)
     return out
 
 
-def pick(url: Optional[str], requested: Optional[str]) -> "tuple[Backend, str]":
-    """The server and model a chat should use."""
-    backends = connect_all(url)
+def _split_remote(requested: str) -> "tuple[str, str]":
+    """("name", "address:port") for a name shown as "name \u00b7 address:port"; (requested, "") for any other."""
+    name, sep, tag = requested.rpartition(REMOTE_SEP)
+    return (name, tag) if sep and name and tag else (requested, "")
+
+
+def pick(url: Optional[str], requested: Optional[str], remote: bool = True) -> "tuple[Backend, str]":
+    """The server and model a chat should use (the model's own name, without any address)."""
+    backends = connect_all(url, remote)
     if not requested:
         return backends[0], backends[0].models[0]
+    name, tag = _split_remote(requested)
     for b in backends:
-        name = _match(b.models, requested)
-        if name:
-            return b, name
+        if tag and not (b.remote and b.tag == tag):
+            continue
+        found = _match(b.models, name)
+        if found:
+            return b, found
     raise BackendError(f"Model '{requested}' is not loaded. Loaded: {', '.join(loaded_models(backends))}\n"
                        "To use it, start it on the Models page.")
 
@@ -275,7 +314,7 @@ def resolve_model(backend: Backend, requested: Optional[str]) -> str:
     """Pick a loaded model. A requested model must be one that is currently loaded."""
     if not requested:
         return backend.models[0]
-    name = _match(backend.models, requested)
+    name = _match(backend.models, _split_remote(requested)[0])
     if name:
         return name
     running = ", ".join(backend.models)
@@ -371,12 +410,15 @@ def _images_message(model: str, kind: str) -> str:
 
 
 def _stream_ollama(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
-                   temperature: Optional[float]) -> Iterator[str]:
+                   temperature: Optional[float], wired: bool = False, num_ctx: Optional[int] = None) -> Iterator[str]:
     # keep_alive -1 keeps the model loaded until the user stops it (ollama stop <model>).
-    body: Dict[str, Any] = {"model": model, "messages": wire_messages("ollama", messages), "stream": True, "keep_alive": -1}
+    # wired: the messages already carry their pictures as base64 (they came from another computer).
+    body: Dict[str, Any] = {"model": model, "messages": messages if wired else wire_messages("ollama", messages),
+                            "stream": True, "keep_alive": -1}
     options: Dict[str, Any] = {}
-    if NUM_CTX > 0:
-        options["num_ctx"] = NUM_CTX
+    ctx = NUM_CTX if num_ctx is None else num_ctx
+    if ctx > 0:
+        options["num_ctx"] = ctx
     if temperature is not None:
         options["temperature"] = temperature
     if options:
@@ -436,8 +478,9 @@ def _openai_stats(chunk: dict, turn: Turn) -> None:
 
 
 def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
-                   temperature: Optional[float]) -> Iterator[str]:
-    body: Dict[str, Any] = {"model": model, "messages": wire_messages("openai", messages), "stream": True}
+                   temperature: Optional[float], wired: bool = False, num_ctx: Optional[int] = None) -> Iterator[str]:
+    body: Dict[str, Any] = {"model": model, "messages": messages if wired else wire_messages("openai", messages),
+                            "stream": True}
     if temperature is not None:
         body["temperature"] = temperature
     if tools:
@@ -474,6 +517,49 @@ def _stream_openai(backend: Backend, model: str, messages: list, tools: Optional
             turn.tool_calls.append(ToolCall(slot["id"] or f"call_{i}", slot["name"], _parse_args(slot["args"]), slot["args"]))
 
 
+def _remote_error(event: dict) -> BackendError:
+    """The error another computer reported while running a chat, as the kind of error it was."""
+    message = str(event.get("error") or "The other computer could not answer.")
+    kinds = {"tools_unsupported": ToolsUnsupported, "images_unsupported": ImagesUnsupported,
+             "unavailable": ServerUnavailable}
+    return kinds.get(str(event.get("type")), BackendError)(message)
+
+
+def _stream_remote(backend: Backend, model: str, messages: list, tools: Optional[list], turn: Turn,
+                   temperature: Optional[float], wired: bool = False, num_ctx: Optional[int] = None) -> Iterator[str]:
+    """Run a chat on another computer that shares its models (netshare.py); that computer runs only the model."""
+    body: Dict[str, Any] = {"model": model, "messages": messages if wired else wire_messages(backend.kind, messages)}
+    if temperature is not None:
+        body["temperature"] = temperature
+    if tools:
+        body["tools"] = tools
+    ctx = NUM_CTX if num_ctx is None else num_ctx
+    if backend.kind == "ollama" and ctx > 0:
+        body["num_ctx"] = ctx   # this computer's setting, not the host's
+    with _open(backend.url + "/share/v1/chat", body, timeout=GENERATE_TIMEOUT, extra=SHARE_HEADERS) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                continue
+            if event.get("error"):
+                raise _remote_error(event)
+            if isinstance(event.get("t"), str) and event["t"]:
+                yield event["t"]
+            done = event.get("turn")
+            if isinstance(done, dict):
+                for c in done.get("tool_calls") or []:
+                    n = len(turn.tool_calls)
+                    turn.tool_calls.append(ToolCall(str(c.get("id") or f"call_{n}"), str(c.get("name") or ""),
+                                                    c.get("arguments"), str(c.get("raw") or "")))
+                if isinstance(done.get("stats"), dict):
+                    turn.stats.update(done["stats"])
+                return
+    raise ServerUnavailable(f"The computer at {backend.tag} stopped answering before the reply was finished.")
+
+
 def complete(
     backend: Backend,
     model: str,
@@ -481,13 +567,19 @@ def complete(
     on_token: Optional[Callable[[str], None]] = None,
     tools: Optional[list] = None,
     temperature: Optional[float] = None,
+    wired: bool = False,
+    num_ctx: Optional[int] = None,
 ) -> Turn:
-    """Send a conversation; stream text to on_token; return the text and any tool calls."""
-    stream = _stream_ollama if backend.kind == "ollama" else _stream_openai
+    """Send a conversation; stream text to on_token; return the text and any tool calls.
+
+    wired means the messages already hold their pictures as base64 and num_ctx replaces the context size
+    Ollama is asked for; both are used by a computer that runs a chat for another one (netshare.py).
+    """
+    stream = _stream_remote if backend.remote else (_stream_ollama if backend.kind == "ollama" else _stream_openai)
     turn = Turn("")
     parts: List[str] = []
     try:
-        for text in stream(backend, model, messages, tools, turn, temperature):
+        for text in stream(backend, model, messages, tools, turn, temperature, wired, num_ctx):
             parts.append(text)
             if on_token:
                 on_token(text)

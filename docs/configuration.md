@@ -91,6 +91,8 @@ Any server with an OpenAI-compatible `/v1/models` and `/v1/chat/completions` API
 | `AXIS_SEARCH_URL` | A SearXNG server for web search (JSON format must be enabled) | DuckDuckGo |
 | `AXIS_SD_CLI` | Path to stable-diffusion.cpp's `sd-cli` | `sd-cli` on PATH |
 | `AXIS_IMAGE_TIMEOUT` | Longest time one image may take, in seconds | 1800 |
+| `AXIS_SHARE_CHATS` | Most chats this computer runs at the same moment for other computers when it hosts its models (more are told to try again) | 64 |
+| `AXIS_SHARE_QUEUE` | Most pictures that may wait in line at a host (more are told to try again) | 32 |
 | `AXIS_NO_UPDATE_CHECK` | Set to `1` to stop Axis checking GitHub for a newer version | Checks |
 | `AXIS_LLAMA_SERVER` | Path to llama.cpp's `llama-server` | `llama-server` on PATH |
 | `AXIS_SD_SERVER` | Path to stable-diffusion.cpp's `sd-server` | Next to `sd-cli`, then PATH |

@@ -75,6 +75,13 @@ Routes:
   POST   /api/images/generate               make a picture, streaming progress as newline-delimited JSON
                                             ("preview": true also streams each step as a small picture;
                                             "init_image": {place, path} and "strength" edit that picture)
+  GET    /api/net                           sharing models between computers: this computer as a host (is the port
+                                            open, which computers are using it, what it offers) and as a client
+                                            (the host it is connected to, its state and the models it has)
+  POST   /api/net/host/start                open the sharing port {port?} (the default is 8800; 0 picks a free one)
+  POST   /api/net/host/stop                 close the sharing port and every connection on it
+  POST   /api/net/connect                   connect to a host {address: "192.168.1.5:8800"}; answers like GET /api/net
+  POST   /api/net/disconnect                stop using the host's models
   GET    /api/ocr                           Tesseract, the PyTorch environment, settings and OCR models
   PUT    /api/ocr/settings                  Tesseract path, Python for PyTorch, device, PyTorch package index
   POST   /api/ocr/run                       read the text in a picture {model, image: {place, path}, languages?, psm?},
@@ -129,7 +136,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, instances, jobs, latex, manager, ocr, procs, runner, skills, subagents, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, instances, jobs, latex, manager, netshare, ocr, procs, runner, skills, subagents, terminal, tools, updates
 from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -911,7 +918,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._dispatch(method, parts, param)
         except (agents.AgentError, skills.SkillError, chats.ChatError, images.ImageError, manager.ManageError,
                 hub.HubError, jobs.JobError, procs.ProcessError, engines.EngineError, catalog.CatalogError,
-                ocr.OcrError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError, latex.LatexError) as exc:
+                ocr.OcrError, netshare.ShareError, terminal.TerminalError, artcraft.ArtCraftError, cas.CasError, latex.LatexError) as exc:
             missing = "does not exist" in str(exc)
             return self._error(404 if missing else 400, str(exc))
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -1104,6 +1111,26 @@ class Handler(BaseHTTPRequestHandler):
                         manager.image_stop(parts[3])
                     return self._json(200, images.delete_model(parts[3], files=files))
 
+        elif n >= 2 and parts[1] == "net":
+            if n == 2 and method == "GET":
+                return self._json(200, netshare.status())
+            if parts[2:] == ["host", "start"] and method == "POST":
+                body = self._body()
+                port = body.get("port") if isinstance(body, dict) else None
+                netshare.start_hosting(netshare.DEFAULT_PORT if port in (None, "") else port, self.server.model_url,
+                                       avoid=self.server.server_address[1])
+                return self._json(200, netshare.status())
+            if parts[2:] == ["host", "stop"] and method == "POST":
+                netshare.stop_hosting()
+                return self._json(200, netshare.status())
+            if parts[2:] == ["connect"] and method == "POST":
+                body = self._body()
+                netshare.connect(body.get("address") if isinstance(body, dict) else None)
+                return self._json(200, netshare.status())
+            if parts[2:] == ["disconnect"] and method == "POST":
+                netshare.disconnect()
+                return self._json(200, netshare.status())
+
         elif n >= 2 and parts[1] == "ocr":
             if n == 2 and method == "GET":
                 return self._json(200, ocr.status())
@@ -1287,19 +1314,21 @@ class Handler(BaseHTTPRequestHandler):
         return {"path": target.relative_to(ws.resolve()).as_posix(), "size": length}
 
     def _status(self) -> None:
+        remote_images = [m["id"] for m in netshare.remote_image_models()]   # the page reloads its image models when these change
         try:
             conns = backend.connect_all(self.server.model_url)
         except backend.BackendError as exc:
             message = str(exc).split("\n")[0]
             running = not isinstance(exc, backend.ServerUnavailable)
-            return self._json(200, {"ready": False, "server_running": running, "message": message, "models": []})
+            return self._json(200, {"ready": False, "server_running": running, "message": message, "models": [],
+                                    "remote_images": remote_images})
         labels = []
         for c in conns:
             if c.label not in labels:
                 labels.append(c.label)
         return self._json(200, {"ready": True, "server_running": True, "server": " and ".join(labels),
                                 "url": conns[0].url if len(conns) == 1 else ", ".join(c.url for c in conns),
-                                "models": backend.loaded_models(conns)})
+                                "models": backend.loaded_models(conns), "remote_images": remote_images})
 
     def _generate(self) -> None:
         body = self._body()
@@ -1410,7 +1439,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             requested = body.get("model") or (agent.model if agent else "") or None
             conn, model = backend.pick(self.server.model_url, requested)
-            emit({"model": model})
+            emit({"model": f"{model}{backend.REMOTE_SEP}{conn.tag}" if conn.remote else model})
             allowed = agents.tool_names(agent)
             if body.get("terminal_tool") and agent and "run_terminal" not in allowed:
                 allowed = allowed + ["run_terminal"]

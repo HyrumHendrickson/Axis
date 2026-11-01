@@ -86,10 +86,12 @@ def _adapt_cas(text: str) -> str:
 
 
 def _adapt_images(text: str) -> str:
-    from . import images, manager
+    from . import images, manager, netshare
     try:
         usable = [m for m in images.list_models() if not m.get("missing")]
         engine = bool(images.find_cli() or manager.sd_server_binary())
+        if netshare.remote_image_models():   # another computer's model is on, so pictures can be made there
+            return text
     except Exception:
         return text
     if not usable:

@@ -37,8 +37,12 @@ Find the symptom in the left column. If nothing here helps, please [open an issu
 | Images: **Set up Stable Diffusion** | Install an image model by name on the Models page; Axis installs stable-diffusion.cpp with it. |
 | Image model shows **Files missing** | A path is wrong or relative paths start in an unexpected folder. Use full paths, or set the **Working folder**. |
 | Picture fails with `sd-cli failed` | Run the same command in a terminal. Out-of-memory errors usually need a smaller size, a smaller quantization, or `--offload-to-cpu` in Extra arguments. |
-| OCR: "Tesseract is not installed" | Click **Install Tesseract** under **Models**, **OCR models**, or set its path under **OCR settings** on the **OCR** page. |
-| OCR: "The Tesseract language ... is not installed" | Install it under **OCR models** (for example `lat`), then read the picture again. |
+| OCR: "Tesseract is not installed" | Click **Install Tesseract** on the **Models** tab of the **OCR** page, or set its path under **OCR settings** on the **Read text** tab. |
+| OCR: "The Tesseract language ... is not installed" | Install it on the **Models** tab of the **OCR** page (for example `lat`), then read the picture again. |
+| Connect to a host: "Could not reach ..." | Check the address and port against the **Host models** tab on the other computer, and that **Start sharing** is on there. Both computers must be on the same network (or reachable some other way, such as a VPN), and the host's firewall must allow Axis on private networks. |
+| Connected, but the host shows no models | The host lists only models that are on. Start one on its **Chat models** or **Image models** tab. |
+| A host's chats are slow when several computers use it | Chats from different computers run side by side only as far as the host's engine allows: raise `OLLAMA_NUM_PARALLEL` for Ollama, or add `--parallel 4` to the llama.cpp extra arguments under **Engine settings**. Pictures are always made one at a time. |
+| Host: "Port ... cannot be used" | Another program has that port. Choose another number on the **Host models** tab. |
 | Installing PyTorch: "This Python cannot make environments" | On Debian or Ubuntu run `sudo apt install python3-venv`, or set another Python under **OCR settings** on the **OCR** page. |
 | Installing PyTorch: "pip found no PyTorch for this Python" | PyTorch supports recent 64-bit Python versions only. Set another Python under **OCR settings** on the **OCR** page and install the PyTorch environment again. |
 | A PyTorch OCR model runs out of memory | Set **Device** to **CPU only** under **OCR settings** on the **OCR** page, or stop other models. |

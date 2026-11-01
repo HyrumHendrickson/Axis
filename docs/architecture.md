@@ -23,6 +23,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
   |     +-- ocr.py ------------------------------------> tesseract / ocr_worker.py       |
+  |     +-- netshare.py                                  (host a port / connect to one)  |
   |     +-- manager.py, jobs.py, hub.py, catalog.py      (install, start, stop, delete)  |
   |     +-- engines.py                                   (download llama.cpp, sd.cpp)    |
   |     +-- artcraft.py                                  (Craft apps and Rust: install, open) |
@@ -73,6 +74,7 @@ Editing an earlier message happens entirely in the page: it keeps the messages b
 | Engines | `~/Axis/engines/` | `engines.py`, `ocr.py` |
 | Computer algebra (SymPy environment, settings) | `~/Axis/engines/cas-python/`, `~/Axis/engines/cas.json`, `~/Axis/cas-settings.json` | `cas.py` |
 | Craft apps and portable Rust | `~/Axis/engines/artcraft/`, `~/Axis/engines/rust/`, `~/Axis/engines/artcraft.json` | `artcraft.py` |
+| Sharing models (the host's address, whether to stay connected, the port last used) | `~/Axis/net-settings.json` | `netshare.py` |
 | Interface preferences (theme, drafts, open chat) | the browser's local storage | `web/index.html` |
 
 `paths.py` is the single source for the data folder; it honours `AXIS_HOME`.

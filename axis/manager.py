@@ -1165,6 +1165,11 @@ def shutdown(server_url: Optional[str] = None) -> List[str]:
         terminal.close_all()
     except Exception:
         pass
+    try:
+        from . import netshare   # imported here: netshare imports this module's neighbours
+        netshare.shutdown()      # close the sharing port before the models it serves go away
+    except Exception:
+        pass
     urls = [url for url, _ in backend.take_pinned_ollama()]
     try:
         urls.append(ollama_url(server_url))

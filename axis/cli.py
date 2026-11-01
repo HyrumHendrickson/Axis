@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, appwindow, engines, instances, jobs, manager, server, shortcut, tools, updates
+from . import __version__, appwindow, engines, instances, jobs, manager, netshare, server, shortcut, tools, updates
 from .paths import axis_home
 
 DEFAULT_PORT = instances.FIRST_PORT
@@ -86,6 +86,7 @@ def cmd_serve(args) -> int:
             print("First start: installing " + " and ".join(j.label.split(" ", 1)[1] for j in started)
                   + " in the background. Progress is on the Models page.")
     _stop_on_terminate()
+    netshare.resume()   # connect again to the computer whose models were in use (looks in the background)
     record = instances.register(httpd.server_address[1])
     if not args.no_browser:
         threading.Timer(0.5, _open_window, args=(httpd, args.tab)).start()

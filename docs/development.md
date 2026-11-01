@@ -38,6 +38,7 @@ On Windows use `py`. The suite starts fake Ollama, llama.cpp, stable-diffusion.c
 | `tests/test_engines.py` | Installing engines from (fake) GitHub releases, and image models by name |
 | `tests/test_artcraft.py` | The Art Craft tab: installing and opening the Craft apps, portable Rust |
 | `tests/test_ocr.py` | Tesseract, the PyTorch environment, and OCR models |
+| `tests/test_v4312.py` | OCR models on the OCR page, and sharing models between computers (the host port, connecting, chats and pictures from several computers) |
 | `tests/test_updates.py` | The update check |
 | `tests/test_hardening.py` | Safety and robustness fixes: deleting read-only folders, uploads, `fetch_page`, Run Python limits, downloads |
 

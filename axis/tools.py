@@ -285,13 +285,17 @@ def tool_spec(name: str, callable_agents: Optional[List[Dict[str, str]]] = None)
     props = spec["parameters"]["properties"]
     try:
         if name == "generate_image":
+            from . import netshare
             models = images.list_models()
             usable = [m for m in models if not m.get("missing")]
-            if usable:
-                default = images.default_model_id(models)
-                names = ", ".join(m["name"] + (" (default)" if m["id"] == default else "") for m in usable)
+            remote = netshare.remote_image_models()   # models that are on at the computer this one is connected to
+            if usable or remote:
+                default = images.default_model_id(models) if models else None
+                names = ", ".join([m["name"] + (" (default)" if m["id"] == default else "") for m in usable]
+                                  + [m["name"] for m in remote])
                 spec["description"] += f" Models: {names}."
-                props["model"]["description"] = "Image model name, one of: " + ", ".join(m["name"] for m in usable) + " (optional)"
+                props["model"]["description"] = ("Image model name, one of: "
+                                                 + ", ".join([m["name"] for m in usable] + [m["name"] for m in remote]) + " (optional)")
         elif name == "read_text":
             from . import ocr
             usable = [m for m in ocr.list_models() if m.get("usable")]
