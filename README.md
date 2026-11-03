@@ -44,7 +44,7 @@ Axis runs a small web app on your computer and opens it in a window of its own. 
 - **Terminal** is a shell on your computer, started in any agent's folder, in its own tab or in the Workspace. You type directly in it, like an ordinary terminal. An agent of your choice can see its output and help.
 - **Art Craft** tab installs the portable Craft apps (PhotoCraft, WordCraft and eleven more) and a portable Rust in one click each, then opens them.
 - **Models** tab installs, starts, stops, and deletes chat and image models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **Engine settings**, **Connect to a host**, **Host models**) appear under **Models** in the sidebar while the page is open. **Host models** lends the models that are on to other computers running Axis; **Connect to a host** uses another computer's models while your agents, skills and files stay on yours.
-- **Settings** (top right) switches between light, dark, and your system's appearance.
+- **Settings** (top right) opens a page with an **Appearance** tab (light, dark, or your system's look) and an **Agents** tab that can generate a set of example agents.
 
 Axis manages models itself. Type a model name such as `llama3.1:8b` or `z-image-turbo` on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis installs llama.cpp and stable-diffusion.cpp for you the first time it starts, so nothing else is needed. Ollama is optional; Axis uses it when it is installed.
 

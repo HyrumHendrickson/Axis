@@ -109,12 +109,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
 .bar.has-quit { position: relative; padding-right: 210px; }
 .bar-corner { position: absolute; top: 13px; right: 24px; display: flex; gap: 8px; }
 .bar .quit-btn:hover { color: var(--bad); border-color: var(--bad); }
-.settings-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: 240px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 14px; }
-.settings-pop h3 { margin: 0 0 8px; font: 600 13px/1.2 var(--sans); color: var(--muted); }
-.settings-pop fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.theme-choice { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.theme-choice label { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink); font-size: 14px; }
+.theme-choice input { accent-color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.settings-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.settings-pop input { accent-color: var(--accent); }
 .note { padding: 8px 24px; font-size: 13px; color: var(--warn); background: var(--surface); border-bottom: 1px solid var(--line); }
 
 .thread { flex: 1; overflow-y: auto; padding: 24px; }
@@ -652,6 +650,9 @@ const S = {
   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
   ocrResult: null,
   ocrError: null,
+  settingsTab: "appearance",     // the tab open on the Settings page
+  defaultsBusy: false,          // Generate default agents is running
+  defaultsMsg: "",              // what the last Generate default agents did, or why it failed
   art: null,                    // last /api/artcraft result: the Craft apps, Rust, and their install jobs
   artError: "",                 // the last error from an Art Craft button
   artChecked: false,            // update check done since this page opened
@@ -983,29 +984,60 @@ function applyTheme(t) {
 }
 function setTheme(t) { store("axis.theme", t); applyTheme(t); }
 function settingsButton() {
-  const pop = h("div", { class: "settings-pop", role: "dialog", "aria-label": "Settings", hidden: true });
-  const btn = h("button", { class: "btn small", "aria-haspopup": "dialog", "aria-expanded": "false", title: "Appearance and other settings",
-    onclick: () => (pop.hidden ? open() : close()) }, "Settings");
-  const onOutside = (e) => { if (!wrap.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); btn.focus(); } };
-  function open() {
+  return h("button", { class: "btn small", title: "Appearance and other settings", "aria-current": S.view.kind === "settings" ? "page" : "false",
+    onclick: () => go({ kind: "settings" }) }, "Settings");
+}
+const SETTINGS_TABS = [["appearance", "Appearance"], ["agents", "Agents"]];
+function openSettingsTab(key) {
+  S.settingsTab = key; store("axis.settingsTab", key);
+  $("app").classList.remove("menu-open");
+  renderSettings();
+}
+// Makes the example agents and starts installing Rust and WordCraft (POST /api/agents/defaults).
+async function generateDefaultAgents() {
+  if (S.defaultsBusy) return;
+  S.defaultsBusy = true; S.defaultsMsg = "";
+  const redraw = () => { if (S.view.kind === "settings") renderSettings(); else if (S.view.kind === "agents") renderAgents(); };
+  redraw();
+  try {
+    const r = await api("/api/agents/defaults", { method: "POST", body: {} });
+    const parts = [];
+    if (r.created.length) parts.push(`Made ${r.created.join(", ")}.`);
+    if (r.skipped.length) parts.push(`Kept the agents you already have: ${r.skipped.join(", ")}.`);
+    const started = r.installs.filter((x) => x.state === "started").map((x) => x.name);
+    if (started.length) parts.push(`Installing ${started.join(" and ")}. Progress is on the Art Craft page.`);
+    for (const x of r.installs) if (x.state === "unavailable") parts.push(`${x.name} was not installed: ${x.message}`);
+    S.defaultsMsg = parts.join(" ");
+    toast(r.created.length ? "Example agents made" : "The example agents already exist");
+    await loadAgents();
+    loadArt().then(() => { renderNav(); });
+  } catch (e) { S.defaultsMsg = e.message; }
+  S.defaultsBusy = false;
+  redraw();
+}
+function renderSettings() {
+  const tab = SETTINGS_TABS.some(([k]) => k === S.settingsTab) ? S.settingsTab : "appearance";
+  const title = SETTINGS_TABS.find(([k]) => k === tab)[1];
+  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Settings \u00b7 " + title));
+  const tabs = h("nav", { class: "models-tabs", "aria-label": "Settings sections" }, SETTINGS_TABS.map(([key, label]) =>
+    h("button", { class: "models-tab", "aria-current": tab === key ? "true" : "false", onclick: () => openSettingsTab(key) }, label)));
+  const body = [];
+  if (tab === "appearance") {
     const now = currentTheme();
-    fill(pop, h("h3", {}, "Appearance"),
-      h("fieldset", {}, h("legend", { class: "sr-only" }, "Theme"),
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Theme"),
+      h("p", { class: "hint" }, "Light or dark colours. This is kept in this browser only."),
+      h("fieldset", { class: "theme-choice" }, h("legend", { class: "sr-only" }, "Theme"),
         THEMES.map(([key, label]) => h("label", {},
-          h("input", { type: "radio", name: "axis-theme", value: key, checked: key === now, onchange: () => setTheme(key) }), label))));
-    pop.hidden = false; btn.setAttribute("aria-expanded", "true");
-    document.addEventListener("mousedown", onOutside, true);
-    document.addEventListener("keydown", onKey, true);
-    const sel = pop.querySelector("input:checked"); if (sel) sel.focus();
+          h("input", { type: "radio", name: "axis-theme", value: key, checked: key === now, onchange: () => setTheme(key) }), label)))));
+  } else {
+    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Example agents"),
+      h("p", { class: "hint" }, "Makes MainAgent, an executive assistant that splits a request into tasks, and the three agents it calls: WebSearchSubAgent, CodeWriterSubAgent and DocumentEditorSubAgent. "
+        + "It also installs Rust and WordCraft from the Art Craft page, which these agents use. An agent that already has one of these names is left as it is."),
+      h("div", { class: "row" }, h("button", { class: "btn primary", disabled: S.defaultsBusy, onclick: generateDefaultAgents },
+        S.defaultsBusy ? "Generating\u2026" : "Generate default agents")),
+      S.defaultsMsg ? h("p", { class: "hint", style: "margin-top:10px", role: "status" }, S.defaultsMsg) : null));
   }
-  function close() {
-    pop.hidden = true; btn.setAttribute("aria-expanded", "false");
-    document.removeEventListener("mousedown", onOutside, true);
-    document.removeEventListener("keydown", onKey, true);
-  }
-  const wrap = h("div", { style: "position:relative" }, btn, pop);
-  return wrap;
+  fill($("main"), bar, h("div", { class: "models-split" }, tabs, h("div", { class: "editor", id: "settings-scroll" }, h("div", { class: "form" }, body))));
 }
 new MutationObserver(() => {
   const bar = $("main").querySelector(":scope > .bar");
@@ -1059,6 +1091,7 @@ function renderMain() {
   if (S.view.kind === "terminal") return renderTerminal();
   if (S.view.kind === "workspace") return renderWorkspace();
   if (S.view.kind === "models") return renderModels();
+  if (S.view.kind === "settings") return renderSettings();
   if (S.view.kind === "history") return renderHistory();
   if (S.view.kind === "images") return renderImages();
   if (S.view.kind === "ocr") return renderOcr();
@@ -2760,7 +2793,11 @@ function renderAgents() {
     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
       h("h3", {}, "No agents yet"),
       h("p", {}, "An agent has its own instructions, skills and folder. Make one to give a model a job: an editor, a researcher, a coder."),
-      h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
+      h("div", { class: "row", style: "justify-content:center" },
+        h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"),
+        h("button", { class: "btn", disabled: S.defaultsBusy, title: "Make four agents that work together, and install Rust and WordCraft for them", onclick: generateDefaultAgents },
+          S.defaultsBusy ? "Generating\u2026" : "Generate example agents")),
+      S.defaultsMsg ? h("p", { class: "hint", style: "margin-top:12px", role: "status" }, S.defaultsMsg) : null)));
     return;
   }
   const rows = S.agents.map((a) => {
@@ -4701,6 +4738,26 @@ async function artAction(path, app, done) {
   await loadArt();
   renderNav(); renderArt();
 }
+// Everything installed that has a newer version, and is not already being updated.
+function artPending(a) {
+  const busy = new Set(runningJobs(a).map((j) => j.target));
+  const ids = [];
+  if (a.rust && a.rust.installed && a.rust.check && a.rust.check.update) ids.push("rust");
+  for (const x of a.apps) if (x.installed && x.check && x.check.update) ids.push(x.id);
+  return ids.filter((id) => !busy.has(id));
+}
+async function artUpdateAll() {
+  const ids = artPending(S.art);
+  S.artError = "";
+  const failed = [];
+  for (const id of ids) {
+    try { await api("/api/artcraft/update", { method: "POST", body: { app: id } }); }
+    catch (e) { failed.push(`${id === "rust" ? "Rust" : ((S.art.apps.find((x) => x.id === id) || {}).name || id)}: ${e.message}`); }
+  }
+  if (failed.length) S.artError = failed.join("\n");
+  await loadArt();
+  renderNav(); renderArt();
+}
 async function checkArt() {
   if (S.artChecking) return;
   S.artChecking = true; S.artChecked = true;
@@ -4751,6 +4808,8 @@ function renderArt() {
   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Art Craft"),
     h("button", { class: "btn small", disabled: S.artChecking, onclick: checkArt }, S.artChecking ? "Checking\u2026" : "Check for updates"));
   const a = S.art;
+  const pending = a && a.apps ? artPending(a) : [];
+  if (pending.length > 1) bar.append(h("button", { class: "btn small primary", title: "Update every app that has a newer version", onclick: artUpdateAll }, `Update all (${pending.length})`));
   if (!a) {
     loadArt().then(() => { if (S.view.kind === "art") renderArt(); });
     return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
@@ -5346,6 +5405,8 @@ window.addEventListener("beforeunload", (e) => {
   const tab = recall("axis.modelsTab", "chat");
   if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
   if (recall("axis.ocrTab", "read") === "models") S.ocrTab = "models";
+  const stab = recall("axis.settingsTab", "appearance");
+  if (SETTINGS_TABS.some(([k]) => k === stab)) S.settingsTab = stab;
   const attached = recall("axis.attachments", {});
   if (attached && typeof attached === "object" && !Array.isArray(attached))
     for (const [k, v] of Object.entries(attached)) if (Array.isArray(v)) S.attachments[k] = v.filter((a) => a && typeof a.path === "string").slice(0, MAX_ATTACH);

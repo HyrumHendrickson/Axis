@@ -14,7 +14,7 @@ A tour of every page in Axis. Installation is covered in [installation.md](insta
 
 ## Agents
 
-Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab.
+Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab. When you have no agents yet, the page also offers **Generate example agents** (see [Settings](#settings)).
 
 | Field | Purpose |
 |-------|---------|
@@ -229,6 +229,7 @@ Open **Tools** in the sidebar, then **Art Craft**, to install and open the Craft
 
 - **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
 - **Open** starts the app. It keeps running if you quit Axis.
+- **Update all** appears at the top of the page when two or more installed apps (counting Rust) have a newer version. It starts every update at once; each card shows its own progress.
 - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, Axis downloads Microsoft's C++ Build Tools when a Rust build needs the MSVC linker.
 - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
 - When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
@@ -310,7 +311,11 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
 
 ## Settings
 
-**Settings**, at the top right of every page next to **Quit Axis**, chooses the appearance: **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
+**Settings**, at the top right of every page next to **Quit Axis**, opens the Settings page. It has two tabs.
+
+**Appearance.** **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
+
+**Agents.** **Generate default agents** makes four agents that work together: **MainAgent**, an executive assistant that splits a request into small tasks and calls the others, and **WebSearchSubAgent**, **CodeWriterSubAgent** and **DocumentEditorSubAgent**, which MainAgent may call (each has a note on when to call it). MainAgent also has **Share files**; the others have the skills their jobs need, such as Web search, Run Python or WordCraft. The button also starts installing **Rust** and **WordCraft** on the Art Craft page, unless they are already installed; progress is shown there. An agent that already has one of these names is left exactly as it is. The same button, named **Generate example agents**, is on the Agents page while you have no agents; once you have agents, it is only here.
 
 ## CAS
 

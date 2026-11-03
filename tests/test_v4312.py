@@ -79,8 +79,8 @@ class SharingBase(Base):
 class TestRelease(unittest.TestCase):
     def test_version_and_changelog(self):
         import axis
-        self.assertEqual(axis.__version__, "4.3.12")
-        self.assertEqual((ROOT / "axis" / "VERSION").read_text(encoding="utf-8").strip(), "4.3.12")
+        self.assertGreaterEqual(tuple(int(x) for x in axis.__version__.split(".")), (4, 3, 12))
+        self.assertEqual((ROOT / "axis" / "VERSION").read_text(encoding="utf-8").strip(), axis.__version__)
         self.assertIn("## [4.3.12]", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
 
     def test_routes_are_documented(self):

@@ -4,6 +4,15 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [4.3.13] - 2026-11-03
+
+### Added
+- **Settings page.** **Settings** now opens a page instead of a small menu. It has two tabs: **Appearance** (System default, Light or Dark) and **Agents**.
+- **Generate default agents.** On the **Agents** tab of Settings, one button makes MainAgent (an executive assistant that splits a request into tasks and calls other agents), WebSearchSubAgent, CodeWriterSubAgent and DocumentEditorSubAgent, with their skills and the notes MainAgent uses to decide whom to call. It also starts installing Rust and WordCraft, unless they are installed. An agent with the same name is never replaced.
+- **Generate example agents.** The Agents page shows this button while there are no agents. Once there are agents it is only in Settings.
+- **Update all.** The Art Craft page shows **Update all** when two or more installed items (the apps and Rust) have a newer version.
+- API: `POST /api/agents/defaults`.
+
 ## [4.3.12] - 2026-11-01
 
 ### Added

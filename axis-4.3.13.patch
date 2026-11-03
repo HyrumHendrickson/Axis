@@ -1,0 +1,557 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1a37440..14f538f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,15 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
+ 
+ ## [Unreleased]
+ 
++## [4.3.13] - 2026-11-03
++
++### Added
++- **Settings page.** **Settings** now opens a page instead of a small menu. It has two tabs: **Appearance** (System default, Light or Dark) and **Agents**.
++- **Generate default agents.** On the **Agents** tab of Settings, one button makes MainAgent (an executive assistant that splits a request into tasks and calls other agents), WebSearchSubAgent, CodeWriterSubAgent and DocumentEditorSubAgent, with their skills and the notes MainAgent uses to decide whom to call. It also starts installing Rust and WordCraft, unless they are installed. An agent with the same name is never replaced.
++- **Generate example agents.** The Agents page shows this button while there are no agents. Once there are agents it is only in Settings.
++- **Update all.** The Art Craft page shows **Update all** when two or more installed items (the apps and Rust) have a newer version.
++- API: `POST /api/agents/defaults`.
++
+ ## [4.3.12] - 2026-11-01
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index fd75912..bb17ce1 100644
+--- a/README.md
++++ b/README.md
+@@ -44,7 +44,7 @@ Axis runs a small web app on your computer and opens it in a window of its own.
+ - **Terminal** is a shell on your computer, started in any agent's folder, in its own tab or in the Workspace. You type directly in it, like an ordinary terminal. An agent of your choice can see its output and help.
+ - **Art Craft** tab installs the portable Craft apps (PhotoCraft, WordCraft and eleven more) and a portable Rust in one click each, then opens them.
+ - **Models** tab installs, starts, stops, and deletes chat and image models, and shows memory use, context size, and capabilities for each. Its sections (**Chat models**, **Image models**, **Engine settings**, **Connect to a host**, **Host models**) appear under **Models** in the sidebar while the page is open. **Host models** lends the models that are on to other computers running Axis; **Connect to a host** uses another computer's models while your agents, skills and files stay on yours.
+-- **Settings** (top right) switches between light, dark, and your system's appearance.
++- **Settings** (top right) opens a page with an **Appearance** tab (light, dark, or your system's look) and an **Agents** tab that can generate a set of example agents.
+ 
+ Axis manages models itself. Type a model name such as `llama3.1:8b` or `z-image-turbo` on the **Models** page and click **Install**; every installed model then has **Start**, **Stop**, and **Delete** buttons. Axis installs llama.cpp and stable-diffusion.cpp for you the first time it starts, so nothing else is needed. Ollama is optional; Axis uses it when it is installed.
+ 
+diff --git a/axis/VERSION b/axis/VERSION
+index e85d0f4..dc23cec 100644
+--- a/axis/VERSION
++++ b/axis/VERSION
+@@ -1 +1 @@
+-4.3.12
++4.3.13
+diff --git a/axis/defaults.py b/axis/defaults.py
+new file mode 100644
+index 0000000..aee13d2
+--- /dev/null
++++ b/axis/defaults.py
+@@ -0,0 +1,84 @@
++"""The example agents, and the apps they need.
++
++**Generate default agents** (Settings, or the Agents page when there are no agents yet) makes four agents that
++work together: MainAgent splits a request into tasks and calls the other three, WebSearchSubAgent, CodeWriterSubAgent
++and DocumentEditorSubAgent. It also starts installing the two Art Craft items those agents use, Rust and WordCraft,
++unless they are already installed.
++
++An agent that already has one of these names is left exactly as it is: nothing the user made is replaced.
++"""
++
++from __future__ import annotations
++
++from typing import Any, Dict, List
++
++from . import agents, artcraft, jobs
++
++MAIN = "MainAgent"
++APPS = (("rust", "Rust"), ("wordcraft", "WordCraft"))   # installed on the Art Craft page
++
++DEFAULT_AGENTS: List[Dict[str, Any]] = [
++    {
++        "name": MAIN,
++        "system_prompt": "You are an executive assistant who will answer requests by splitting them into small tasks and "
++        "calling another agent to do each task. Make sure each agent saves their work in a file of some kind so you can "
++        "share the file path with the other agents who need to use that work.",
++        "skills": ["share-file", "call-agent"],
++        "can_call": [
++            {"name": "WebSearchSubAgent", "description": "Call WebSearchSubAgent whenever you need to get information from the web."},
++            {"name": "CodeWriterSubAgent", "description": "Call CodeWriterSubAgent whenever you need to have code written or a figure produced."},
++            {"name": "DocumentEditorSubAgent", "description": "Call DocumentEditorSubAgent whenever you need to have a professional document or report created."},
++        ],
++    },
++    {
++        "name": "WebSearchSubAgent",
++        "system_prompt": "You are an assistant who will complete web search tasks for the executive assistant, make sure to "
++        "save all the required information in a text file and to return the file path.",
++        "skills": ["web-search", "wikipedia", "run-terminal"],
++    },
++    {
++        "name": "CodeWriterSubAgent",
++        "system_prompt": "You are an assistant who will complete code writing tasks for the executive assistant, make sure "
++        "to return the file path of all files you create.",
++        "skills": ["run-python", "run-rust", "run-terminal"],
++    },
++    {
++        "name": "DocumentEditorSubAgent",
++        "system_prompt": "You are an assistant who will complete document creation tasks for the executive assistant, make "
++        "sure to return the file path to all documents you create.",
++        "skills": ["run-terminal", "wordcraft"],
++    },
++]
++
++
++def _start_installs() -> List[Dict[str, str]]:
++    """Start the install of each app that is missing. One that cannot start is reported, never raised."""
++    state = artcraft.status()
++    have = {a["id"]: a["installed"] for a in state["apps"]}
++    have["rust"] = state["rust"]["installed"]
++    results: List[Dict[str, str]] = []
++    for app_id, label in APPS:
++        if have.get(app_id):
++            results.append({"app": app_id, "name": label, "state": "installed"})
++            continue
++        try:
++            artcraft.install({"app": app_id})
++            results.append({"app": app_id, "name": label, "state": "started"})
++        except jobs.JobError:
++            results.append({"app": app_id, "name": label, "state": "started"})   # an install is already running
++        except artcraft.ArtCraftError as exc:
++            results.append({"app": app_id, "name": label, "state": "unavailable", "message": str(exc)})
++    return results
++
++
++def generate() -> Dict[str, Any]:
++    """Make the example agents that do not exist yet, and start installing Rust and WordCraft."""
++    created: List[str] = []
++    skipped: List[str] = []
++    for spec in DEFAULT_AGENTS:
++        if (agents.agents_root() / spec["name"]).exists():
++            skipped.append(spec["name"])
++            continue
++        agents.create(spec)
++        created.append(spec["name"])
++    return {"created": created, "skipped": skipped, "installs": _start_installs()}
+diff --git a/axis/server.py b/axis/server.py
+index cbb12e0..09d4030 100644
+--- a/axis/server.py
++++ b/axis/server.py
+@@ -13,6 +13,7 @@ Routes:
+   GET    /api/models                        details for each model (memory, context, size)
+   GET    /api/agents                        list agents
+   POST   /api/agents                        create an agent
++  POST   /api/agents/defaults               make the example agents that do not exist yet; start installing Rust and WordCraft
+   GET    /api/agents/<name>                 one agent
+   PUT    /api/agents/<name>                 update (or rename) an agent
+   DELETE /api/agents/<name>                 delete an agent (shared files remain)
+@@ -136,7 +137,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+ from typing import Any, Dict, List, Optional, Union
+ 
+-from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, instances, jobs, latex, manager, netshare, ocr, procs, runner, skills, subagents, terminal, tools, updates
++from . import __version__, agents, artcraft, backend, cas, catalog, chats, defaults, engines, hub, images, instances, jobs, latex, manager, netshare, ocr, procs, runner, skills, subagents, terminal, tools, updates
+ from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
+ 
+ WEB_DIR = Path(__file__).resolve().parent / "web"
+@@ -984,6 +985,8 @@ class Handler(BaseHTTPRequestHandler):
+                 return self._json(200, [a.to_dict() for a in agents.list_all()])
+             if n == 2 and method == "POST":
+                 return self._json(201, agents.create(self._body()).to_dict())
++            if parts[2:] == ["defaults"] and method == "POST":
++                return self._json(201, defaults.generate())
+             if n == 3:
+                 if method == "GET":
+                     return self._json(200, agents.load(parts[2]).to_dict())
+diff --git a/axis/web/index.html b/axis/web/index.html
+index c8d6d2f..e506e84 100644
+--- a/axis/web/index.html
++++ b/axis/web/index.html
+@@ -109,12 +109,10 @@ select { border: 1px solid var(--line); background: var(--surface); border-radiu
+ .bar.has-quit { position: relative; padding-right: 210px; }
+ .bar-corner { position: absolute; top: 13px; right: 24px; display: flex; gap: 8px; }
+ .bar .quit-btn:hover { color: var(--bad); border-color: var(--bad); }
+-.settings-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: 240px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 14px; }
+-.settings-pop h3 { margin: 0 0 8px; font: 600 13px/1.2 var(--sans); color: var(--muted); }
+-.settings-pop fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
++.theme-choice { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
++.theme-choice label { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink); font-size: 14px; }
++.theme-choice input { accent-color: var(--accent); }
+ .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+-.settings-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+-.settings-pop input { accent-color: var(--accent); }
+ .note { padding: 8px 24px; font-size: 13px; color: var(--warn); background: var(--surface); border-bottom: 1px solid var(--line); }
+ 
+ .thread { flex: 1; overflow-y: auto; padding: 24px; }
+@@ -652,6 +650,9 @@ const S = {
+   ocrJob: null,                 // the picture being read (kept here so it survives switching pages)
+   ocrResult: null,
+   ocrError: null,
++  settingsTab: "appearance",     // the tab open on the Settings page
++  defaultsBusy: false,          // Generate default agents is running
++  defaultsMsg: "",              // what the last Generate default agents did, or why it failed
+   art: null,                    // last /api/artcraft result: the Craft apps, Rust, and their install jobs
+   artError: "",                 // the last error from an Art Craft button
+   artChecked: false,            // update check done since this page opened
+@@ -983,29 +984,60 @@ function applyTheme(t) {
+ }
+ function setTheme(t) { store("axis.theme", t); applyTheme(t); }
+ function settingsButton() {
+-  const pop = h("div", { class: "settings-pop", role: "dialog", "aria-label": "Settings", hidden: true });
+-  const btn = h("button", { class: "btn small", "aria-haspopup": "dialog", "aria-expanded": "false", title: "Appearance and other settings",
+-    onclick: () => (pop.hidden ? open() : close()) }, "Settings");
+-  const onOutside = (e) => { if (!wrap.contains(e.target)) close(); };
+-  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); btn.focus(); } };
+-  function open() {
++  return h("button", { class: "btn small", title: "Appearance and other settings", "aria-current": S.view.kind === "settings" ? "page" : "false",
++    onclick: () => go({ kind: "settings" }) }, "Settings");
++}
++const SETTINGS_TABS = [["appearance", "Appearance"], ["agents", "Agents"]];
++function openSettingsTab(key) {
++  S.settingsTab = key; store("axis.settingsTab", key);
++  $("app").classList.remove("menu-open");
++  renderSettings();
++}
++// Makes the example agents and starts installing Rust and WordCraft (POST /api/agents/defaults).
++async function generateDefaultAgents() {
++  if (S.defaultsBusy) return;
++  S.defaultsBusy = true; S.defaultsMsg = "";
++  const redraw = () => { if (S.view.kind === "settings") renderSettings(); else if (S.view.kind === "agents") renderAgents(); };
++  redraw();
++  try {
++    const r = await api("/api/agents/defaults", { method: "POST", body: {} });
++    const parts = [];
++    if (r.created.length) parts.push(`Made ${r.created.join(", ")}.`);
++    if (r.skipped.length) parts.push(`Kept the agents you already have: ${r.skipped.join(", ")}.`);
++    const started = r.installs.filter((x) => x.state === "started").map((x) => x.name);
++    if (started.length) parts.push(`Installing ${started.join(" and ")}. Progress is on the Art Craft page.`);
++    for (const x of r.installs) if (x.state === "unavailable") parts.push(`${x.name} was not installed: ${x.message}`);
++    S.defaultsMsg = parts.join(" ");
++    toast(r.created.length ? "Example agents made" : "The example agents already exist");
++    await loadAgents();
++    loadArt().then(() => { renderNav(); });
++  } catch (e) { S.defaultsMsg = e.message; }
++  S.defaultsBusy = false;
++  redraw();
++}
++function renderSettings() {
++  const tab = SETTINGS_TABS.some(([k]) => k === S.settingsTab) ? S.settingsTab : "appearance";
++  const title = SETTINGS_TABS.find(([k]) => k === tab)[1];
++  const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Settings \u00b7 " + title));
++  const tabs = h("nav", { class: "models-tabs", "aria-label": "Settings sections" }, SETTINGS_TABS.map(([key, label]) =>
++    h("button", { class: "models-tab", "aria-current": tab === key ? "true" : "false", onclick: () => openSettingsTab(key) }, label)));
++  const body = [];
++  if (tab === "appearance") {
+     const now = currentTheme();
+-    fill(pop, h("h3", {}, "Appearance"),
+-      h("fieldset", {}, h("legend", { class: "sr-only" }, "Theme"),
++    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Theme"),
++      h("p", { class: "hint" }, "Light or dark colours. This is kept in this browser only."),
++      h("fieldset", { class: "theme-choice" }, h("legend", { class: "sr-only" }, "Theme"),
+         THEMES.map(([key, label]) => h("label", {},
+-          h("input", { type: "radio", name: "axis-theme", value: key, checked: key === now, onchange: () => setTheme(key) }), label))));
+-    pop.hidden = false; btn.setAttribute("aria-expanded", "true");
+-    document.addEventListener("mousedown", onOutside, true);
+-    document.addEventListener("keydown", onKey, true);
+-    const sel = pop.querySelector("input:checked"); if (sel) sel.focus();
+-  }
+-  function close() {
+-    pop.hidden = true; btn.setAttribute("aria-expanded", "false");
+-    document.removeEventListener("mousedown", onOutside, true);
+-    document.removeEventListener("keydown", onKey, true);
++          h("input", { type: "radio", name: "axis-theme", value: key, checked: key === now, onchange: () => setTheme(key) }), label)))));
++  } else {
++    body.push(h("div", { class: "skill-group" }, h("h3", {}, "Example agents"),
++      h("p", { class: "hint" }, "Makes MainAgent, an executive assistant that splits a request into tasks, and the three agents it calls: WebSearchSubAgent, CodeWriterSubAgent and DocumentEditorSubAgent. "
++        + "It also installs Rust and WordCraft from the Art Craft page, which these agents use. An agent that already has one of these names is left as it is."),
++      h("div", { class: "row" }, h("button", { class: "btn primary", disabled: S.defaultsBusy, onclick: generateDefaultAgents },
++        S.defaultsBusy ? "Generating\u2026" : "Generate default agents")),
++      S.defaultsMsg ? h("p", { class: "hint", style: "margin-top:10px", role: "status" }, S.defaultsMsg) : null));
+   }
+-  const wrap = h("div", { style: "position:relative" }, btn, pop);
+-  return wrap;
++  fill($("main"), bar, h("div", { class: "models-split" }, tabs, h("div", { class: "editor", id: "settings-scroll" }, h("div", { class: "form" }, body))));
+ }
+ new MutationObserver(() => {
+   const bar = $("main").querySelector(":scope > .bar");
+@@ -1059,6 +1091,7 @@ function renderMain() {
+   if (S.view.kind === "terminal") return renderTerminal();
+   if (S.view.kind === "workspace") return renderWorkspace();
+   if (S.view.kind === "models") return renderModels();
++  if (S.view.kind === "settings") return renderSettings();
+   if (S.view.kind === "history") return renderHistory();
+   if (S.view.kind === "images") return renderImages();
+   if (S.view.kind === "ocr") return renderOcr();
+@@ -2760,7 +2793,11 @@ function renderAgents() {
+     fill($("main"), bar, h("div", { class: "editor" }, h("div", { class: "empty" },
+       h("h3", {}, "No agents yet"),
+       h("p", {}, "An agent has its own instructions, skills and folder. Make one to give a model a job: an editor, a researcher, a coder."),
+-      h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"))));
++      h("div", { class: "row", style: "justify-content:center" },
++        h("button", { class: "btn primary", onclick: () => go({ kind: "edit", agent: null }) }, "New agent"),
++        h("button", { class: "btn", disabled: S.defaultsBusy, title: "Make four agents that work together, and install Rust and WordCraft for them", onclick: generateDefaultAgents },
++          S.defaultsBusy ? "Generating\u2026" : "Generate example agents")),
++      S.defaultsMsg ? h("p", { class: "hint", style: "margin-top:12px", role: "status" }, S.defaultsMsg) : null)));
+     return;
+   }
+   const rows = S.agents.map((a) => {
+@@ -4701,6 +4738,26 @@ async function artAction(path, app, done) {
+   await loadArt();
+   renderNav(); renderArt();
+ }
++// Everything installed that has a newer version, and is not already being updated.
++function artPending(a) {
++  const busy = new Set(runningJobs(a).map((j) => j.target));
++  const ids = [];
++  if (a.rust && a.rust.installed && a.rust.check && a.rust.check.update) ids.push("rust");
++  for (const x of a.apps) if (x.installed && x.check && x.check.update) ids.push(x.id);
++  return ids.filter((id) => !busy.has(id));
++}
++async function artUpdateAll() {
++  const ids = artPending(S.art);
++  S.artError = "";
++  const failed = [];
++  for (const id of ids) {
++    try { await api("/api/artcraft/update", { method: "POST", body: { app: id } }); }
++    catch (e) { failed.push(`${id === "rust" ? "Rust" : ((S.art.apps.find((x) => x.id === id) || {}).name || id)}: ${e.message}`); }
++  }
++  if (failed.length) S.artError = failed.join("\n");
++  await loadArt();
++  renderNav(); renderArt();
++}
+ async function checkArt() {
+   if (S.artChecking) return;
+   S.artChecking = true; S.artChecked = true;
+@@ -4751,6 +4808,8 @@ function renderArt() {
+   const bar = h("div", { class: "bar" }, menuButton(), h("h2", {}, "Art Craft"),
+     h("button", { class: "btn small", disabled: S.artChecking, onclick: checkArt }, S.artChecking ? "Checking\u2026" : "Check for updates"));
+   const a = S.art;
++  const pending = a && a.apps ? artPending(a) : [];
++  if (pending.length > 1) bar.append(h("button", { class: "btn small primary", title: "Update every app that has a newer version", onclick: artUpdateAll }, `Update all (${pending.length})`));
+   if (!a) {
+     loadArt().then(() => { if (S.view.kind === "art") renderArt(); });
+     return fill($("main"), bar, h("div", { class: "editor" }, h("p", { class: "hint", style: "text-align:center" }, "Loading\u2026")));
+@@ -5346,6 +5405,8 @@ window.addEventListener("beforeunload", (e) => {
+   const tab = recall("axis.modelsTab", "chat");
+   if (MODEL_TABS.some(([k]) => k === tab)) S.modelsTab = tab;
+   if (recall("axis.ocrTab", "read") === "models") S.ocrTab = "models";
++  const stab = recall("axis.settingsTab", "appearance");
++  if (SETTINGS_TABS.some(([k]) => k === stab)) S.settingsTab = stab;
+   const attached = recall("axis.attachments", {});
+   if (attached && typeof attached === "object" && !Array.isArray(attached))
+     for (const [k, v] of Object.entries(attached)) if (Array.isArray(v)) S.attachments[k] = v.filter((a) => a && typeof a.path === "string").slice(0, MAX_ATTACH);
+diff --git a/docs/api.md b/docs/api.md
+index 361a3cf..a092349 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -41,6 +41,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
+ |--------|------|--------------|
+ | `GET` | `/api/agents` | list agents. Each has `name`, `system_prompt`, `model`, `config`, `skills`, `max_actions` (actions one reply may use, 1 to 100, default 10) and `can_call` (`[{name, description}]`: the agents it may call with the Call agents skill, and your note on when to call each) |
+ | `POST` | `/api/agents` | create an agent (the same fields) |
++| `POST` | `/api/agents/defaults` | make the example agents (MainAgent, WebSearchSubAgent, CodeWriterSubAgent, DocumentEditorSubAgent) that do not exist yet, and start installing Rust and WordCraft if missing. Existing agents are never changed. Answers `201` with `created` and `skipped` (agent names) and `installs` (`{app, name, state: started \| installed \| unavailable, message?}`) |
+ | `GET` | `/api/agents/<name>` | one agent |
+ | `PUT` | `/api/agents/<name>` | update (or rename) an agent |
+ | `DELETE` | `/api/agents/<name>` | delete an agent and its folder |
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 421b541..cb6124b 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -19,6 +19,7 @@ This page explains how Axis is put together, so you can find the right file befo
+   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
+   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
+   |     +-- subagents.py                             (one agent calling another)
++  |     +-- defaults.py                              (the example agents)
+   |     +-- craft_skills.py                          (one skill for each Craft app)      |
+   |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
+   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
+diff --git a/docs/user-guide.md b/docs/user-guide.md
+index b4b9fd9..c88069d 100644
+--- a/docs/user-guide.md
++++ b/docs/user-guide.md
+@@ -14,7 +14,7 @@ A tour of every page in Axis. Installation is covered in [installation.md](insta
+ 
+ ## Agents
+ 
+-Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab.
++Open **Agents** in the sidebar and click **New agent**. The Agents page lists every agent with **Chat**, **Edit**, and **Past chats**. The files agents work with are in the **Workspace** tab. When you have no agents yet, the page also offers **Generate example agents** (see [Settings](#settings)).
+ 
+ | Field | Purpose |
+ |-------|---------|
+@@ -229,6 +229,7 @@ Open **Tools** in the sidebar, then **Art Craft**, to install and open the Craft
+ 
+ - **Install** on an app downloads its portable build from the app's latest GitHub release, checks it against the checksum the release publishes, and unpacks it into `Axis/engines/artcraft`. Nothing is installed on your computer and no administrator rights are needed. The button shows progress and has **Cancel**. When it finishes, the button becomes **Open**.
+ - **Open** starts the app. It keeps running if you quit Axis.
++- **Update all** appears at the top of the page when two or more installed apps (counting Rust) have a newer version. It starts every update at once; each card shows its own progress.
+ - **Install Rust** installs a portable Rust (with rustup) into `Axis/engines/rust`. Axis never changes your PATH. An app opened from this page finds this Rust on its PATH. The ready-made apps do not need Rust to run. On Windows, Axis downloads Microsoft's C++ Build Tools when a Rust build needs the MSVC linker.
+ - The portable build is the portable zip on Windows, the release tarball on Linux, and the app copied out of the release disk image on macOS (never into Applications). Where each app keeps its settings is up to the app.
+ - When the tab opens, Axis checks GitHub (and rustup, for Rust) once for newer versions. A card then says **Update available** and shows **Update to vX.Y.Z**; otherwise it says up to date. **Check for updates** checks again. An update installs the new version beside the old one, copies across any settings folder kept beside the old program, and removes the old version only after the new one is ready. Rust is updated with `rustup update stable`.
+@@ -310,7 +311,11 @@ A `llama-server` or other OpenAI-compatible server you started yourself is liste
+ 
+ ## Settings
+ 
+-**Settings**, at the top right of every page next to **Quit Axis**, chooses the appearance: **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
++**Settings**, at the top right of every page next to **Quit Axis**, opens the Settings page. It has two tabs.
++
++**Appearance.** **System default** follows your computer's light or dark mode and changes with it, while **Light** and **Dark** keep that look regardless. The choice is remembered in this browser.
++
++**Agents.** **Generate default agents** makes four agents that work together: **MainAgent**, an executive assistant that splits a request into small tasks and calls the others, and **WebSearchSubAgent**, **CodeWriterSubAgent** and **DocumentEditorSubAgent**, which MainAgent may call (each has a note on when to call it). MainAgent also has **Share files**; the others have the skills their jobs need, such as Web search, Run Python or WordCraft. The button also starts installing **Rust** and **WordCraft** on the Art Craft page, unless they are already installed; progress is shown there. An agent that already has one of these names is left exactly as it is. The same button, named **Generate example agents**, is on the Agents page while you have no agents; once you have agents, it is only here.
+ 
+ ## CAS
+ 
+diff --git a/tests/test_v4312.py b/tests/test_v4312.py
+index cdb3a5f..d7996e9 100644
+--- a/tests/test_v4312.py
++++ b/tests/test_v4312.py
+@@ -79,8 +79,8 @@ class SharingBase(Base):
+ class TestRelease(unittest.TestCase):
+     def test_version_and_changelog(self):
+         import axis
+-        self.assertEqual(axis.__version__, "4.3.12")
+-        self.assertEqual((ROOT / "axis" / "VERSION").read_text(encoding="utf-8").strip(), "4.3.12")
++        self.assertGreaterEqual(tuple(int(x) for x in axis.__version__.split(".")), (4, 3, 12))
++        self.assertEqual((ROOT / "axis" / "VERSION").read_text(encoding="utf-8").strip(), axis.__version__)
+         self.assertIn("## [4.3.12]", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+ 
+     def test_routes_are_documented(self):
+diff --git a/tests/test_v4313.py b/tests/test_v4313.py
+new file mode 100644
+index 0000000..515bbd7
+--- /dev/null
++++ b/tests/test_v4313.py
+@@ -0,0 +1,141 @@
++"""Tests for Axis 4.3.13: the Settings page, Generate default agents, and Update all on the Art Craft page.
++
++The installs are replaced by a fake, so nothing is downloaded. The page has no browser tests; its new parts are
++checked as text, and its script is parsed by tests in the other files.
++"""
++
++from __future__ import annotations
++
++import json
++import sys
++import unittest
++from pathlib import Path
++from unittest import mock
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++
++import axis
++from axis import agents, artcraft, defaults, jobs, skills
++from test_axis import Base, OllamaHandler, request
++
++ROOT = Path(__file__).resolve().parent.parent
++PAGE = (ROOT / "axis" / "web" / "index.html").read_text(encoding="utf-8")
++NAMES = ["MainAgent", "WebSearchSubAgent", "CodeWriterSubAgent", "DocumentEditorSubAgent"]
++
++
++def status(rust=False, wordcraft=False):
++    return {"apps": [{"id": "wordcraft", "installed": wordcraft}], "rust": {"installed": rust}}
++
++
++class TestVersion(unittest.TestCase):
++    def test_version(self):
++        self.assertEqual(axis.__version__, "4.3.13")
++        self.assertEqual((ROOT / "axis" / "VERSION").read_text(encoding="utf-8").strip(), "4.3.13")
++        self.assertIn("## [4.3.13]", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
++        self.assertIn("/api/agents/defaults", (ROOT / "docs" / "api.md").read_text(encoding="utf-8"))
++        self.assertIn("/api/agents/defaults", (ROOT / "axis" / "server.py").read_text(encoding="utf-8"))
++
++
++class TestDefaultAgents(Base):
++    def generate(self, st=None, install=None):
++        install = install or mock.Mock(return_value={"job": {}})
++        with mock.patch.object(artcraft, "status", return_value=st or status()), mock.patch.object(artcraft, "install", install):
++            return defaults.generate(), install
++
++    def test_makes_the_four_agents(self):
++        result, _ = self.generate()
++        self.assertEqual(result["created"], NAMES)
++        self.assertEqual(result["skipped"], [])
++        self.assertEqual(sorted(a.name for a in agents.list_all()), sorted(NAMES))
++
++    def test_skills_and_called_agents(self):
++        self.generate()
++        main = agents.load("MainAgent")
++        self.assertEqual(sorted(main.skills), ["call-agent", "share-file"])
++        self.assertEqual([c["name"] for c in main.can_call], NAMES[1:])
++        self.assertIn("web", main.can_call[0]["description"])
++        self.assertIn("executive assistant", main.system_prompt)
++        self.assertEqual(sorted(agents.load("WebSearchSubAgent").skills), ["run-terminal", "web-search", "wikipedia"])
++        self.assertEqual(sorted(agents.load("CodeWriterSubAgent").skills), ["run-python", "run-rust", "run-terminal"])
++        self.assertEqual(sorted(agents.load("DocumentEditorSubAgent").skills), ["run-terminal", "wordcraft"])
++
++    def test_every_skill_exists(self):
++        for spec in defaults.DEFAULT_AGENTS:
++            for skill_id in spec["skills"]:
++                self.assertTrue(skills.exists(skill_id), skill_id)
++
++    def test_installs_rust_and_wordcraft(self):
++        result, install = self.generate()
++        self.assertEqual([c.args[0] for c in install.call_args_list], [{"app": "rust"}, {"app": "wordcraft"}])
++        self.assertEqual([i["state"] for i in result["installs"]], ["started", "started"])
++
++    def test_installed_apps_are_not_installed_again(self):
++        result, install = self.generate(status(rust=True, wordcraft=True))
++        install.assert_not_called()
++        self.assertEqual([i["state"] for i in result["installs"]], ["installed", "installed"])
++
++    def test_only_the_missing_app_is_installed(self):
++        result, install = self.generate(status(rust=True))
++        self.assertEqual([c.args[0] for c in install.call_args_list], [{"app": "wordcraft"}])
++
++    def test_an_install_already_running_is_not_an_error(self):
++        result, _ = self.generate(install=mock.Mock(side_effect=jobs.JobError("Installing Rust is still in progress.")))
++        self.assertEqual([i["state"] for i in result["installs"]], ["started", "started"])
++
++    def test_an_install_that_cannot_start_is_reported_and_the_agents_are_still_made(self):
++        result, _ = self.generate(install=mock.Mock(side_effect=artcraft.ArtCraftError("No build for this computer.")))
++        self.assertEqual(result["created"], NAMES)
++        self.assertEqual([i["state"] for i in result["installs"]], ["unavailable", "unavailable"])
++        self.assertIn("No build", result["installs"][0]["message"])
++
++    def test_existing_agents_are_never_replaced(self):
++        agents.create({"name": "MainAgent", "system_prompt": "Mine."})
++        result, _ = self.generate()
++        self.assertEqual(result["skipped"], ["MainAgent"])
++        self.assertEqual(result["created"], NAMES[1:])
++        self.assertEqual(agents.load("MainAgent").system_prompt, "Mine.")
++
++    def test_a_second_run_makes_nothing(self):
++        self.generate()
++        result, _ = self.generate()
++        self.assertEqual(result["created"], [])
++        self.assertEqual(result["skipped"], NAMES)
++
++    def test_route(self):
++        base = self.axis_server(self.model_server(OllamaHandler, ["m"]))
++        with mock.patch.object(artcraft, "status", return_value=status()), \
++                mock.patch.object(artcraft, "install", return_value={"job": {}}):
++            code, text = request(base + "/api/agents/defaults", "POST", {})
++        self.assertEqual(code, 201)
++        self.assertEqual(json.loads(text)["created"], NAMES)
++        code, text = request(base + "/api/agents")
++        self.assertEqual(sorted(a["name"] for a in json.loads(text)), sorted(NAMES))
++        self.assertEqual(request(base + "/api/agents/MainAgent")[0], 200)
++
++
++class TestPage(unittest.TestCase):
++    def test_settings_is_a_page_with_two_tabs(self):
++        self.assertIn("function renderSettings()", PAGE)
++        self.assertIn('[["appearance", "Appearance"], ["agents", "Agents"]]', PAGE)
++        self.assertIn('go({ kind: "settings" })', PAGE)
++        self.assertIn('if (S.view.kind === "settings") return renderSettings();', PAGE)
++        self.assertNotIn("settings-pop", PAGE)
++
++    def test_generate_default_agents_button(self):
++        self.assertIn('"Generate default agents"', PAGE)
++        self.assertIn('"/api/agents/defaults"', PAGE)
++
++    def test_example_agents_button_only_when_there_are_no_agents(self):
++        agents_page = PAGE[PAGE.index("function renderAgents()"):PAGE.index("const rows = S.agents.map")]
++        self.assertIn('"Generate example agents"', agents_page)
++        self.assertEqual(PAGE.count('"Generate example agents"'), 1)
++
++    def test_update_all(self):
++        self.assertIn("function artPending(a)", PAGE)
++        self.assertIn("pending.length > 1", PAGE)
++        self.assertIn("`Update all (${pending.length})`", PAGE)
++        self.assertIn('"/api/artcraft/update"', PAGE)
++
++
++if __name__ == "__main__":
++    unittest.main()

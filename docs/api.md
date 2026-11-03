@@ -41,6 +41,7 @@ The page talks to Axis through a small JSON API served on `127.0.0.1`. It exists
 |--------|------|--------------|
 | `GET` | `/api/agents` | list agents. Each has `name`, `system_prompt`, `model`, `config`, `skills`, `max_actions` (actions one reply may use, 1 to 100, default 10) and `can_call` (`[{name, description}]`: the agents it may call with the Call agents skill, and your note on when to call each) |
 | `POST` | `/api/agents` | create an agent (the same fields) |
+| `POST` | `/api/agents/defaults` | make the example agents (MainAgent, WebSearchSubAgent, CodeWriterSubAgent, DocumentEditorSubAgent) that do not exist yet, and start installing Rust and WordCraft if missing. Existing agents are never changed. Answers `201` with `created` and `skipped` (agent names) and `installs` (`{app, name, state: started \| installed \| unavailable, message?}`) |
 | `GET` | `/api/agents/<name>` | one agent |
 | `PUT` | `/api/agents/<name>` | update (or rename) an agent |
 | `DELETE` | `/api/agents/<name>` | delete an agent and its folder |

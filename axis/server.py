@@ -13,6 +13,7 @@ Routes:
   GET    /api/models                        details for each model (memory, context, size)
   GET    /api/agents                        list agents
   POST   /api/agents                        create an agent
+  POST   /api/agents/defaults               make the example agents that do not exist yet; start installing Rust and WordCraft
   GET    /api/agents/<name>                 one agent
   PUT    /api/agents/<name>                 update (or rename) an agent
   DELETE /api/agents/<name>                 delete an agent (shared files remain)
@@ -136,7 +137,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import __version__, agents, artcraft, backend, cas, catalog, chats, engines, hub, images, instances, jobs, latex, manager, netshare, ocr, procs, runner, skills, subagents, terminal, tools, updates
+from . import __version__, agents, artcraft, backend, cas, catalog, chats, defaults, engines, hub, images, instances, jobs, latex, manager, netshare, ocr, procs, runner, skills, subagents, terminal, tools, updates
 from .paths import FolderError, check_work_folder, images_folder, remove_tree, set_workspace_root, workspace_root, workspace_setting
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -984,6 +985,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, [a.to_dict() for a in agents.list_all()])
             if n == 2 and method == "POST":
                 return self._json(201, agents.create(self._body()).to_dict())
+            if parts[2:] == ["defaults"] and method == "POST":
+                return self._json(201, defaults.generate())
             if n == 3:
                 if method == "GET":
                     return self._json(200, agents.load(parts[2]).to_dict())

@@ -19,6 +19,7 @@ This page explains how Axis is put together, so you can find the right file befo
   |     |                   +--> tools.py, web_tools.py  (agent actions)                 |
   |     +-- agents.py, skills.py, chats.py           (JSON files under ~/Axis)           |
   |     +-- subagents.py                             (one agent calling another)
+  |     +-- defaults.py                              (the example agents)
   |     +-- craft_skills.py                          (one skill for each Craft app)      |
   |     +-- tool_skills.py                           (CAS, Images and OCR skills)        |
   |     +-- images.py ---------------------------------> sd-server / sd-cli              |
