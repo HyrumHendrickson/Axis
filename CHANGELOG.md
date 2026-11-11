@@ -4,6 +4,9 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Fixed
+- **A flaky test.** The test that checks only a host's image models make pictures ready could fail when the connected side looked at its host again after the test had stopped faking that host's models. The test now keeps the fake in place until it is done. Nothing changes in Axis itself.
+
 ## [4.3.13] - 2026-11-03
 
 ### Added

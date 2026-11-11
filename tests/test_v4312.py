@@ -654,12 +654,14 @@ class TestPictureSharing(SharingBase):
         # A host that has an image model on, seen by a computer with none of its own.
         self.engine.stop()
         hosted = [{"id": "far", "name": "Far", "description": "", "width": 512, "height": 512, "steps": 8, "cfg_scale": 2.0, "sampler": ""}]
+        # The host keeps running, and the connected side asks it again every few seconds, so the stand-in must stay
+        # in place for the whole test: if it ended after connecting, the next look would find the real (empty) list.
         with mock.patch.object(netshare, "image_models", lambda: hosted):
             port = self.host(self.model_server(OllamaHandler, []))
             tag = self.connect(port)
-        self.assertTrue(images.status()["ready"])
-        self.assertEqual(images.status()["models"], [])
-        self.assertEqual(netshare.find_remote_image(None)["id"], f"net:{tag}/far")   # no local model: the remote one is the default
+            self.assertTrue(images.status()["ready"])
+            self.assertEqual(images.status()["models"], [])
+            self.assertEqual(netshare.find_remote_image(None)["id"], f"net:{tag}/far")   # no local model: the remote one is the default
         self.engine.start()
 
 
