@@ -48,13 +48,22 @@ def events(text):
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
-def wait_for(test, check, seconds=8.0, what="the condition"):
+def wait_for(test, check, seconds=20.0, what="the condition"):
     end = time.time() + seconds
     while time.time() < end:
         if check():
             return
         time.sleep(0.05)
+    if check():   # one last look: a slow check (a busy runner) must not hide a condition that is now true
+        return
     test.fail(f"timed out waiting for {what}")
+
+
+def chats_running():
+    """Chats the host is running now. Reads the host's own counters: host_status() also asks the engine and the
+    image models what they have loaded, which is slow on a busy runner and says nothing about the count."""
+    host = netshare._HOST
+    return host.status()["active_chats"] if host is not None else 0
 
 
 class SharingBase(Base):
@@ -327,6 +336,7 @@ class TestChatSharing(SharingBase):
 
     def test_too_many_chats_are_told_to_wait(self):
         hold = threading.Event()
+        self.addCleanup(hold.set)   # a failed check must not leave the fake engine waiting out its full delay
 
         class Slow(OllamaHandler):
             def do_POST(self):
@@ -337,7 +347,7 @@ class TestChatSharing(SharingBase):
             port = self.host(self.model_server(Slow, ["llama3.2:3b"]))
         first = threading.Thread(target=share, args=(port, "/share/v1/chat", {"model": "llama3.2:3b", "messages": [{"role": "user", "content": "a"}]}))
         first.start()
-        wait_for(self, lambda: netshare.host_status()["active_chats"] == 1, what="the first chat to start")
+        wait_for(self, lambda: chats_running() == 1, what="the first chat to start")
         code, text = share(port, "/share/v1/chat", {"model": "llama3.2:3b", "messages": [{"role": "user", "content": "b"}]})
         self.assertEqual(code, 503)
         self.assertIn("Try again", json.loads(text)["error"])
@@ -348,6 +358,7 @@ class TestChatSharing(SharingBase):
 
     def test_stopping_closes_the_chats_in_progress(self):
         hold = threading.Event()
+        self.addCleanup(hold.set)   # a failed check must not leave the fake engine waiting out its full delay
 
         class Slow(OllamaHandler):
             def do_POST(self):
@@ -359,7 +370,7 @@ class TestChatSharing(SharingBase):
         visitor = threading.Thread(target=lambda: out.update(zip(("code", "text"), share(
             port, "/share/v1/chat", {"model": "llama3.2:3b", "messages": [{"role": "user", "content": "a"}]}))))
         visitor.start()
-        wait_for(self, lambda: netshare.host_status()["active_chats"] == 1, what="the chat to start")
+        wait_for(self, lambda: chats_running() == 1, what="the chat to start")
         netshare.stop_hosting()
         hold.set()
         visitor.join(20)

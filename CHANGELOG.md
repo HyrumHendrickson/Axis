@@ -5,6 +5,7 @@ All notable changes to Axis are listed here. The format follows [Keep a Changelo
 ## [Unreleased]
 
 ### Fixed
+- **Test runs.** The oldest-Python test run (3.9) now uses Ubuntu 24.04, because `ubuntu-latest` is now Ubuntu 26.04, which has no Python 3.9. Two sharing tests that wait for a chat to start now read the host's own counters instead of asking its engine every few milliseconds, wait longer on a slow machine, and always release their fake engine when they end, so a failure can no longer leave the run hanging. Nothing changes in Axis itself.
 - **A flaky test.** The test that checks only a host's image models make pictures ready could fail when the connected side looked at its host again after the test had stopped faking that host's models. The test now keeps the fake in place until it is done. Nothing changes in Axis itself.
 
 ## [4.3.13] - 2026-11-03
