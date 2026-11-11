@@ -172,8 +172,13 @@ def image_models() -> List[Dict[str, Any]]:
     return out
 
 
-def addresses() -> List[str]:
-    """This computer's network addresses (never the loopback one), the ones other computers can try."""
+_ADDR_TTL = 30.0          # seconds a found list of addresses is reused
+_ADDR_LOOKUP_WAIT = 1.0   # seconds to wait for the hostname lookup
+_ADDR_CACHE: Dict[str, Any] = {"at": 0.0, "found": []}
+_ADDR_LOCK = threading.Lock()
+
+
+def _lookup_addresses() -> List[str]:
     found: List[str] = []
 
     def add(ip: str) -> None:
@@ -186,11 +191,35 @@ def addresses() -> List[str]:
             add(s.getsockname()[0])
     except OSError:
         pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            add(str(info[4][0]))
-    except OSError:
-        pass
+
+    # Resolving this computer's own name can stall for many seconds on macOS (mDNS), so it gets a time limit.
+    names: List[str] = []
+
+    def by_name() -> None:
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                names.append(str(info[4][0]))
+        except OSError:
+            pass
+
+    worker = threading.Thread(target=by_name, daemon=True, name="axis-addresses")
+    worker.start()
+    worker.join(_ADDR_LOOKUP_WAIT)
+    for ip in list(names):
+        add(ip)
+    return found
+
+
+def addresses() -> List[str]:
+    """This computer's network addresses (never the loopback one), the ones other computers can try. The list is
+    reused for a short time: the status is asked for often and the lookup can be slow."""
+    now = time.monotonic()
+    with _ADDR_LOCK:
+        if _ADDR_CACHE["at"] and now - _ADDR_CACHE["at"] < _ADDR_TTL:
+            return list(_ADDR_CACHE["found"])
+    found = _lookup_addresses()
+    with _ADDR_LOCK:
+        _ADDR_CACHE.update(at=time.monotonic(), found=list(found))
     return found
 
 
